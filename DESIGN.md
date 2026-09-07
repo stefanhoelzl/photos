@@ -649,6 +649,22 @@ confirmed, which de-risks milestone A considerably:
 | **`If-Match` on PUT** | **HONOURED — 412 on stale ETag** |
 | NFC key with umlauts, PUT/GET/LIST | **round-trips correctly** |
 | Directory markers in LIST | **present, must be filtered** |
+| Header-auth PUT with `UNSIGNED-PAYLOAD` | **not yet probed** — the client signs real payloads until it is |
+
+Verified during milestone A, on Linux with the Static Linux SDK:
+
+| check | result |
+|---|---|
+| swift-crypto, FoundationXML, FoundationNetworking under musl | **all link statically**, 63 MB stripped |
+| static ELF makes real HTTPS requests | **works** — no dynamic linker |
+| SigV4 signer vs. AWS vector suite (38 cases, both auth modes) | **green at every stage** |
+
+> **A hazard found while building A.** swift-corelibs-foundation's `XMLParser`
+> returns `true` for a *truncated* document, merely setting `parserError`, and
+> succeeds outright on an empty one. Since LIST is the whole sync mechanism and a
+> missing key means "album deleted", a connection dropped mid-LIST would otherwise
+> parse as zero objects and drop the entire catalog. The parser therefore requires
+> a `<ListBucketResult>` element that was both opened and closed.
 
 **Egress is billed only when traffic goes through the CDN.** Direct reads from the storage
 API are free — confirmed by the account owner. This fully validates §2's decision to skip the
