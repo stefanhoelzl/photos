@@ -205,7 +205,7 @@ struct PresignTests {
 
 struct MultipartSizingTests {
 
-    @Test("small files keep the preferred part size")
+    @Test("an ordinary file keeps the preferred part size")
     func preferred() {
         let size = S3Client.partSize(forFileOf: 100 * 1024 * 1024, preferred: 16 * 1024 * 1024)
         #expect(size == 16 * 1024 * 1024)
@@ -216,6 +216,15 @@ struct MultipartSizingTests {
         // 1 TB at 16 MB parts would be 65 536 parts — beyond the limit.
         let huge: Int64 = 1024 * 1024 * 1024 * 1024
         let size = S3Client.partSize(forFileOf: huge, preferred: 16 * 1024 * 1024)
-        #expect(huge / size <= 10_000)
+        #expect(huge / size <= S3Client.maximumPartCount)
+    }
+
+    /// S3 rejects a short part only at CompleteMultipartUpload — after the entire
+    /// file has been uploaded. Clamping means a caller cannot configure that.
+    @Test("a part size below S3's 5 MB minimum is raised, not passed through",
+          arguments: [Int64(1024), Int64(512 * 1024), Int64(4 * 1024 * 1024)])
+    func clampsToMinimum(preferred: Int64) {
+        let size = S3Client.partSize(forFileOf: 100 * 1024 * 1024, preferred: preferred)
+        #expect(size == S3Client.minimumPartSize)
     }
 }

@@ -52,12 +52,20 @@ extension S3Client {
         }
     }
 
-    /// bunny.net caps an upload at 10 000 parts, so the part size has to grow for
-    /// very large files rather than the upload simply failing near the end.
+    /// S3 requires every part except the last to be at least 5 MB.
+    public static let minimumPartSize: Int64 = 5 * 1024 * 1024
+    /// bunny.net caps an upload at 10 000 parts.
+    public static let maximumPartCount: Int64 = 10_000
+
+    /// Chooses a part size that satisfies both limits.
+    ///
+    /// Both failures are late and expensive: a part under 5 MB is rejected at
+    /// CompleteMultipartUpload, *after* the whole file has been transferred, and
+    /// exceeding the part cap fails near the end of a very large upload. Clamping
+    /// here means a caller cannot configure either mistake.
     static func partSize(forFileOf size: Int64, preferred: Int64) -> Int64 {
-        let maxParts: Int64 = 10_000
-        let minimum = (size + maxParts - 1) / maxParts
-        return max(preferred, minimum)
+        let toFitPartCount = (size + maximumPartCount - 1) / maximumPartCount
+        return max(preferred, minimumPartSize, toFitPartCount)
     }
 
     func createMultipartUpload(_ key: String, contentType: String?) async throws -> String {
