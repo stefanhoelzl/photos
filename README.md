@@ -62,9 +62,7 @@ no dynamic linker and makes real HTTPS requests. 63 MB stripped.
 - **bunny.net-specific behaviour** is taken from §10's verification table, which was
   established against the live zone. There are no live tests.
 
-### Still open
-
-`S3Client.payloadSigning` defaults to `.signed`, which every S3 implementation
-accepts. `.unsigned` would save a full read pass over every uploaded byte, but only
-if bunny.net accepts `UNSIGNED-PAYLOAD` on header-authenticated PUTs — which one
-manual probe against the real zone has yet to settle.
+`S3Client.payloadSigning` defaults to `.unsigned`: a one-off probe against the live
+zone confirmed bunny.net accepts `UNSIGNED-PAYLOAD` on header-authenticated PUTs, so
+file uploads skip a full read pass over every byte. In-memory bodies are still hashed
+for real — they are small. `.signed` remains available.

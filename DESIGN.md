@@ -649,7 +649,7 @@ confirmed, which de-risks milestone A considerably:
 | **`If-Match` on PUT** | **HONOURED — 412 on stale ETag** |
 | NFC key with umlauts, PUT/GET/LIST | **round-trips correctly** |
 | Directory markers in LIST | **present, must be filtered** |
-| Header-auth PUT with `UNSIGNED-PAYLOAD` | **not yet probed** — the client signs real payloads until it is |
+| Header-auth PUT with `UNSIGNED-PAYLOAD` | **accepted** — so file uploads skip the hashing pass |
 
 Verified during milestone A, on Linux with the Static Linux SDK:
 

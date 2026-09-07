@@ -47,6 +47,69 @@ struct S3ClientKeyTests {
     }
 }
 
+struct PayloadSigningTests {
+
+    func temporaryFile(_ bytes: Int) throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data(repeating: 0x41, count: bytes).write(to: url)
+        return url
+    }
+
+    /// Confirmed against the live zone: bunny.net accepts UNSIGNED-PAYLOAD on
+    /// header-authenticated PUTs, which is what lets a 120 GB import skip a second
+    /// pass over every byte.
+    @Test("a file body is uploaded with UNSIGNED-PAYLOAD by default")
+    func fileBodiesAreUnsignedByDefault() async throws {
+        let file = try temporaryFile(1024)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let stub = StubTransport([HTTPResponse(status: 200, headers: ["etag": "\"e\""])])
+        let client = S3Client(storage: TestFixtures.storage,
+                              secretAccessKey: TestFixtures.secret,
+                              transport: stub, retry: .none)
+        _ = try await client.put("originals/big.mp4", body: .file(file))
+
+        let sent = try #require(stub.requests.first)
+        #expect(sent.header("x-amz-content-sha256") == SigV4Signer.unsignedPayload)
+    }
+
+    @Test("an in-memory body is always hashed for real — it is small")
+    func dataBodiesAreAlwaysHashed() async throws {
+        let payload = Data("shard".utf8)
+        let stub = StubTransport([HTTPResponse(status: 200, headers: ["etag": "\"e\""])])
+        let client = S3Client(storage: TestFixtures.storage,
+                              secretAccessKey: TestFixtures.secret,
+                              transport: stub, retry: .none)
+        _ = try await client.put("meta/a.db", body: .data(payload))
+
+        let sent = try #require(stub.requests.first)
+        #expect(sent.header("x-amz-content-sha256") == SigV4Signer.sha256Hex(payload))
+    }
+
+    @Test(".signed hashes the file, for a service that rejects UNSIGNED-PAYLOAD")
+    func signedModeHashesTheFile() async throws {
+        let file = try temporaryFile(4096)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let stub = StubTransport([HTTPResponse(status: 200, headers: ["etag": "\"e\""])])
+        let client = TestFixtures.client(stub, payloadSigning: .signed)
+        _ = try await client.put("originals/big.mp4", body: .file(file))
+
+        let sent = try #require(stub.requests.first)
+        let expected = try SigV4Signer.sha256Hex(fileAt: file)
+        #expect(sent.header("x-amz-content-sha256") == expected)
+        #expect(sent.header("x-amz-content-sha256") != SigV4Signer.unsignedPayload)
+    }
+
+    @Test("hashing a file in chunks matches hashing it in one go")
+    func chunkedFileHashMatches() throws {
+        let file = try temporaryFile(3 * 1024 * 1024 + 17)   // spans several chunks
+        defer { try? FileManager.default.removeItem(at: file) }
+        let whole = SigV4Signer.sha256Hex(try Data(contentsOf: file))
+        #expect(try SigV4Signer.sha256Hex(fileAt: file) == whole)
+    }
+}
+
 struct S3ClientStatusTests {
 
     @Test("404 on HEAD is nil, not an error")

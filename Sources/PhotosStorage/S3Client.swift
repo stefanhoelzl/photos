@@ -27,7 +27,7 @@ public struct S3Client: Sendable {
         secretAccessKey: String,
         transport: (any HTTPTransport)? = nil,
         retry: RetryPolicy = .default,
-        payloadSigning: PayloadSigning = .signed,
+        payloadSigning: PayloadSigning = .unsigned,
         multipartThreshold: Int64 = 64 * 1024 * 1024,
         multipartPartSize: Int64 = 16 * 1024 * 1024
     ) {
@@ -49,10 +49,13 @@ public struct S3Client: Sendable {
 
     /// How the `x-amz-content-sha256` header is filled for file bodies.
     ///
-    /// `.unsigned` avoids a full read pass over every uploaded byte, but it is only
-    /// usable if bunny.net accepts `UNSIGNED-PAYLOAD` on header-authenticated PUTs —
-    /// which a one-off manual probe settles. `.signed` is the choice that needs no
-    /// verification, so it is the default.
+    /// **Verified against the live zone: bunny.net accepts `UNSIGNED-PAYLOAD` on
+    /// header-authenticated PUTs**, so that is the default — it saves a full read
+    /// pass over every uploaded byte, which across ~34 000 objects is a second pass
+    /// over 120 GB competing with the encoders.
+    ///
+    /// In-memory bodies are always hashed for real; they are small, and the pass
+    /// costs nothing. `.signed` remains available for a service that rejects it.
     public enum PayloadSigning: Sendable {
         case signed
         case unsigned
