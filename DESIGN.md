@@ -139,97 +139,158 @@ Consequence: no edge caching, so on-device caching matters.
 
 ### Keys
 
+The zone holds exactly two prefixes. Every key is a UUID.
+
 ```
-meta/<album>.db                     per-album metadata shard
-thumbs/<album>.db                   per-album 256px thumbnails
-originals/<album>/<filename>        the photo/video as uploaded
-preview/<album>/<filename>.heic     2048px preview
-video/<album>/<filename>.mp4        1080p H.264 transcode
+meta/<album-uuid>.db         per-album catalog shard
+blob/<object-uuid>           every original, derivative and thumbnail pack
 ```
 
-`<album>` is the folder path relative to `$LIBRARY_ROOT`, so keys mirror the library and
-re-running ingest is obviously idempotent. Nested albums keep their `/` —
-e.g. `meta/Trips/Iceland.db`.
+There is no path in any key, no extension on any blob, and nothing in the zone names a photo,
+an album or a folder. A shard says what its objects are; the objects say nothing about
+themselves.
 
-**Keys are NFC-normalised raw UTF-8.** Every writer normalises before building a key
-(`unicodedata.normalize('NFC', s)` / `precomposedStringWithCanonicalMapping`); percent-encoding
-happens only at the HTTP layer. This matters because Linux stores whatever bytes it was given
-while iOS emits NFD, and any name with a diacritic (`Grün`, `café`) is a *different key* in
-NFC than in NFD.
+**Why UUIDs and not paths.** Keys mirroring the library reads well and makes ingest obviously
+idempotent, but it welds three unrelated things together: where a file sits on disk, what
+identifies it forever, and what has to be copied when either changes. Renaming an album then
+means copying every object under it — 1,755 photos for `Neuseeland` — and album names have to
+stay globally unique because they *are* the namespace. With UUID keys, a rename or a re-parent
+is a metadata write; nothing moves.
 
-> Keys may contain Private Use Area characters or codepage mojibake if the source
-> library is unclean. Ingest does **not** sanitise: it is the library owner's job to
-> repair names on disk, so keys and folder names stay identical (see `INGEST.md`).
+**Why not content-addressed.** Hashing the content would give the same stability plus dedup,
+and it was rejected on one concrete ground: **on iOS a hash forces reading the whole asset
+before the first byte can be uploaded**, which is exactly what §8's background upload exists to
+avoid. It is the same reasoning that made `UNSIGNED-PAYLOAD` the default in §10 — the platform
+punishes an extra full pass over every file. Skipping dedup also removes the cost that comes
+with it: with one referent per blob, **deleting an album is deleting the objects its shard
+lists** — bounded, no reference counting, no garbage collector in the normal path.
 
-**`ListObjectsV2` must pass `encoding-type=url`.** LIST responses are XML, and C1 control
-characters are illegal or discouraged in XML. Since LIST is the entire sync mechanism, a single
-such key could corrupt the parse. Verified: an NFC key with umlauts round-trips through
-PUT/GET/LIST correctly.
+**Blobs are immutable.** A blob's content never changes once written. Re-encoding a derivative
+mints a *new* UUID, points the shard at it, and deletes the old object. This is what makes
+§6's cache correct for free: the cache keeps browsed content indefinitely and evicts nothing,
+so a key whose content could change would need revalidating on every hit. Instead, a changed
+`preview_id` in the shard *is* the invalidation signal.
 
-**bunny.net creates implicit directory-marker objects, and LIST returns them.** Writing
-`meta/Trips/Iceland.db` also produces a zero-byte key `meta/Trips/`. Verified: it
-appears in a no-delimiter LIST with `Size 0`, and `HEAD` on it returns 200 with **no
-Content-Length and no ETag**. **The sync diff must skip keys ending in `/`** — otherwise
-`Trips/` is treated as a shard and the diff breaks. (With `delimiter=/` they arrive as
-`CommonPrefixes` instead, but we do not use a delimiter.)
+**What UUID keys buy beyond renames.** Every key becomes flat ASCII, which removes three
+hazards at once:
+
+- bunny.net's implicit **directory markers** can no longer nest. Writing `meta/<uuid>.db`
+  still produces the single zero-byte key `meta/`, which a prefix LIST returns with `Size 0`
+  and no ETag, so **the diff still skips keys ending in `/`** — but there is exactly one such
+  key per prefix now, rather than one per folder level, and none that could be mistaken for a
+  shard.
+- **NFC normalisation** stops being a wire concern. It still governs text *stored in* the
+  catalog and the matching of a local folder to its shard, but no key can ever differ by
+  composition.
+- Keys can no longer carry **Private Use Area characters or codepage mojibake** from an
+  unclean library, so `encoding-type=url` on LIST protects the ~292 `meta/` keys rather than
+  ~34,000.
+
+Costs, stated plainly: **the zone is no longer legible.** `blob/9f2c1ab7-…` tells you nothing
+without the catalog, and diagnosing storage means reading a shard first. And two devices that
+independently create an album called `Sommer` no longer collide on one key, so §2's write
+guard does not apply to album *creation* — see below.
 
 ### Album identity and hierarchy
 
-- Album key = folder path. Renaming an album means copying its objects; names must stay unique.
-- Albums form a **real hierarchy** with an optional parent.
+- **Album identity is its UUID**, minted once when the album is first ingested. Renaming,
+  re-parenting and moving photos between albums are all metadata writes.
+- `album_info.source_path` records the folder the album came from; the CLI uses it to
+  reconnect a local directory to its shard. It is a hint, not an identity.
+- Albums form a **real hierarchy**: `parent` holds the parent album's UUID, or NULL at the
+  root. A `parent` that resolves to no shard is not an error — the album surfaces at top
+  level and the sync reports it, so no album can become unreachable because one object failed
+  to arrive.
 - **An album has sub-albums XOR photos, never both. Ingest rejects a mixed folder by name.**
   This makes the data model and the album screen each lose a branch.
+- Album names need not be unique. Two shards claiming the same name under the same parent are
+  **both shown, never merged**, and named in the sync report. Merging is a destructive guess
+  about intent, and this system does not resolve conflicts.
 
 ### Write-conflict model
 
-- **One metadata shard per album, single owner.** `meta/<album>.db` is rewritten wholesale by
+- **One shard per album, single owner.** `meta/<album-uuid>.db` is rewritten wholesale by
   whichever device writes it. Merge is concatenation; delete is a rewrite of that one shard.
 - Accepted risk: simultaneous writes to one album from both devices are last-writer-wins.
-  Safe in practice because every device holds the full merged metadata and can therefore rewrite
-  any shard correctly, and one person with two devices does not write concurrently.
+  Safe in practice because every device holds the full merged metadata and can therefore
+  rewrite any shard correctly, and one person with two devices does not write concurrently.
   **`If-Match` on PUT is honoured — verified against the live zone**: a PUT with a stale ETag
   returns **412**, a PUT with the current ETag succeeds. So the single-owner rule is *guarded*,
   not merely unlikely to break: every shard rewrite carries `If-Match: <etag last read>` and a
   412 means "someone else wrote it — re-read and retry".
+- The guard covers *modification*, not *creation*: a brand-new album has no prior ETag to
+  match against, which is why duplicate albums are surfaced rather than prevented.
 
 ---
 
 ## 3. Catalog
 
-### Per-album shard — `meta/<album>.db`
+### Per-album shard — `meta/<album-uuid>.db`
 
 ```sql
 PRAGMA page_size = 4096;
 
 CREATE TABLE album_info (
-  key   TEXT PRIMARY KEY,
-  value                       -- name, source_path, parent, lat, lon, loc_source,
-);                            -- cover_photo_id, schema_version, added_at
+  id             INTEGER PRIMARY KEY CHECK (id = 1),
+  album_id       TEXT NOT NULL,      -- this album's uuid; equals its key
+  name           TEXT NOT NULL,
+  parent         TEXT,               -- parent album's uuid, NULL at the root
+  source_path    TEXT,               -- folder this came from; a hint, not identity
+  cover_photo_id TEXT,               -- overrides the default cover
+  thumbs_id      TEXT,               -- blob holding this album's packed thumbnails
+  added_at       INTEGER NOT NULL,
+  schema_version INTEGER NOT NULL
+);
 
 CREATE TABLE photo (
-  id           TEXT PRIMARY KEY,   -- stable, derived from filename
-  filename     TEXT NOT NULL,
-  ext          TEXT NOT NULL,
-  taken_at     INTEGER,            -- epoch seconds; NULL when no EXIF date
-  lat          REAL,
-  lon          REAL,
-  width        INTEGER,
-  height       INTEGER,
-  bytes        INTEGER,
-  media_type   INTEGER NOT NULL,   -- 0 photo · 1 video · 2 live photo
-  live_video   TEXT,               -- paired MOV filename, when media_type = 2
-  orientation  INTEGER,
-  sort_key     INTEGER NOT NULL,
-  etag         TEXT
+  id            TEXT PRIMARY KEY,    -- row identity; survives re-encoding
+  filename      TEXT NOT NULL,       -- NFC, with extension, exactly as on disk
+  taken_at      INTEGER,             -- epoch seconds; NULL when no EXIF date
+  lat           REAL,
+  lon           REAL,
+  width         INTEGER,             -- display dimensions, already rotated
+  height        INTEGER,
+  bytes         INTEGER,
+  media_type    INTEGER NOT NULL,    -- 0 photo · 1 video · 2 live photo
+  original_id   TEXT,                -- blob: the original as uploaded
+  live_video_id TEXT,                -- blob: paired MOV, when media_type = 2
+  preview_id    TEXT,                -- blob: 2048px HEIC
+  video_id      TEXT                 -- blob: 1080p H.264 transcode
 );
 CREATE INDEX ix_photo_taken ON photo(taken_at);
 ```
+
+**A typed single row, not a key/value bag.** `album_info` holds real columns with real types,
+so the schema documents itself and a mistyped field fails when the statement is prepared
+rather than reading back NULL. The price is that adding a field is a migration, which
+`schema_version` handles.
+
+**Roles live in the schema, not in prefixes.** A photo row states exactly which objects it
+owns through four nullable id columns, rather than the reader inferring them from
+`media_type` and a naming convention. A still photo has `original_id` and `preview_id`; a
+Live Photo adds `live_video_id`; a video has `video_id` and a `preview_id` poster but no
+`original_id`, since §5 keeps video originals on the laptop; a developed CR2 has an
+`original_id` pointing at the JPEG, not the RAW.
+
+**`photo.id` is its own UUID**, separate from every object id. It is what `cover_photo_id`
+points at and what the thumbnail pack keys by, so it has to survive a derivative being
+re-encoded — which mints a new `preview_id` but leaves the photo the same photo.
+
+**No `ext`, no `orientation`, no `sort_key`.** Each was removable once something else carried
+its meaning. `filename` holds the extension, so `ext` only duplicated its tail and would have
+needed reassembly rules for extensionless names, `IMG.2013.07.jpg` and `.JPG` case.
+`width`/`height` are stored **already rotated**, so `orientation` had no consumer: C bakes
+orientation into thumbs and previews, and iOS applies the EXIF tag itself when decoding an
+original. `sort_key` is replaced by an expression index — see *Dates, locations, sorting*.
 
 **Measured sizes** (metadata only): 2 photos → 24 KB · 104 photos → **32 KB** ·
 500 → 88 KB · 1,755 → 232 KB · 4,759 → 576 KB. A full first sync is therefore roughly
 **one small request per album** — see `INGEST.md` for this library's total.
 
-### Per-album thumbnails — `thumbs/<album>.db`
+### Per-album thumbnails — a packed blob
+
+Thumbnails are a single SQLite file per album, stored as an ordinary immutable blob and
+referenced from the shard by `album_info.thumbs_id`:
 
 ```sql
 CREATE TABLE thumb (
@@ -239,8 +300,19 @@ CREATE TABLE thumb (
 ```
 
 At ~9 KB per thumbnail a 100-photo album is ~0.9 MB and a 1,750-photo album ~15 MB, so **one
-request opens an album's entire grid, offline**. Shard the thumb DB only if an album exceeds a
-few thousand photos.
+request opens an album's entire grid, offline**. Shard the pack only if an album exceeds a few
+thousand photos.
+
+**Why a pack rather than a blob per thumbnail.** One blob each would be uniform with
+everything else and would make adding a photo a 9 KB write instead of a 15 MB repack. It
+would also cost 1,755 round trips to open `Neuseeland` — roughly 12 s cold against one 15 MB
+GET at ~2 s. bunny.net charges no per-request fee, so this is latency, not money; but §6's
+promise is that a grid opens in one request, offline, and that promise is what the pack buys.
+
+**Why the pack is referenced rather than living under its own prefix.** Because the reference
+*is* the change signal. A `thumbs/` prefix would need either a second LIST every sync or an
+ordering rule between two writes; a `thumbs_id` that changed means the meta shard changed,
+which §4's single LIST already sees. The cost is repacking a whole album to add one photo.
 
 ### Merged local database (on device)
 
@@ -248,56 +320,92 @@ Rebuilt from the shards; never uploaded.
 
 ```sql
 CREATE TABLE album (
-  path          TEXT PRIMARY KEY,  -- 'Trips/Iceland'
+  album_id      TEXT PRIMARY KEY,
   name          TEXT NOT NULL,
   name_folded   TEXT NOT NULL,     -- lowercased, diacritics stripped (ö→o, ü→u, ß→ss)
-  parent        TEXT REFERENCES album(path),
+  parent        TEXT REFERENCES album(album_id),
   photo_count   INTEGER NOT NULL,
   date_min      INTEGER,
   date_max      INTEGER,
-  lat           REAL,
+  lat           REAL,              -- computed at rebuild, not stored in the shard
   lon           REAL,
-  loc_source    TEXT,              -- 'gps' | 'named' | 'inherited'
   cover_photo_id TEXT,
-  shard_etag    TEXT NOT NULL
+  thumbs_id     TEXT
 );
 CREATE INDEX ix_album_parent ON album(parent);
 CREATE INDEX ix_album_folded ON album(name_folded);
 
 CREATE TABLE photo (
-  id, album_path TEXT NOT NULL REFERENCES album(path),
-  filename, ext, taken_at, lat, lon, width, height, bytes,
-  media_type, live_video, orientation, sort_key, etag,
-  PRIMARY KEY (album_path, id)
+  id, album_id TEXT NOT NULL REFERENCES album(album_id),
+  filename, taken_at, lat, lon, width, height, bytes,
+  media_type, original_id, live_video_id, preview_id, video_id,
+  PRIMARY KEY (album_id, id)
 );
-CREATE INDEX ix_photo_album ON photo(album_path, sort_key);
+CREATE INDEX ix_photo_album ON photo(album_id, taken_at IS NULL, taken_at, filename);
 CREATE INDEX ix_photo_taken ON photo(taken_at);
 CREATE INDEX ix_photo_geo   ON photo(lat, lon) WHERE lat IS NOT NULL;
 ```
 
-A prototype with 337 albums and 34,607 photo rows plus these indexes was **4.53 MB**
-(2.52 MB gzipped), so even a large library is small enough to hold entirely and query locally.
+**Measured at this library's scale** — 337 albums, 34,607 photo rows, all indexes present:
+**13.1 MB**, rebuilt in **0.39 s**. An earlier path-keyed prototype of the same shape was
+4.53 MB; the difference is UUID keys, which add six 36-character identifier columns to every
+photo row — about 8 MB across 34,607 of them. That is the price of §2's addressing, paid
+here, and the conclusion is unchanged: a large library is still small enough to hold entirely
+and query locally.
+
+> Storing those identifiers as 16-byte blobs rather than 36-character text would recover
+> roughly a third of the file. Not done: 13 MB is not a problem on either platform, and
+> readable ids in `sqlite3` are worth more than the megabytes while the system is young.
 
 **Why a merged DB rather than attaching the shards:** SQLite's `SQLITE_MAX_ATTACHED` defaults to
 10 and cannot exceed 125, so 288 shards cannot be attached. More fundamentally, ATTACH gives no
 shared index — the map and the date filter would scan 288 tables.
 
+**Access is one writer, many readers, in WAL mode.** The rebuild holds a single write
+transaction for 1–3 s (§4) while the album list may be on screen; WAL is what lets readers see
+the pre-transaction snapshot for its whole duration and switch at commit, rather than blocking.
+
 ### Dates, locations, sorting
 
 - **Dates come from EXIF `DateTimeOriginal` only.** No inference from album names, no file
   mtime. 99.5% of photos have one; the rest are undated and absent from date filters.
-- **Album location precedence:** GPS centroid of its tagged photos → its own entry in
-  `album-locations.tsv` → **nearest ancestor's location** → none, not on the map.
-  Setting a container that *is* a place therefore places all its descendants at once; a
-  container that is an *event* is left blank so nothing cascades from it.
-- **Sort within an album:** EXIF date, falling back to filename for undated photos.
+- **Locations come from EXIF GPS only.** An album's pin is the centroid of its own tagged
+  photos; a **container's is the centroid of all its descendants'**, since a container owns no
+  photos of its own. Both are computed during the rebuild, so nothing about location is stored
+  in a shard and no stored pin can drift from the photos beneath it. `lat IS NULL` is the whole
+  "not on the map" test.
+  > Albums whose photos carry no GPS are placed by a **one-time throwaway script that writes
+  > coordinates into the photo files themselves**, before ingest ever sees them. The ingest
+  > tool therefore has no location logic, no geocoder and no `album-locations.tsv` — and the
+  > coordinates outlive this project, because they live in the library.
+- **Sort within an album: oldest first** — EXIF date ascending, falling back to filename for
+  undated photos, which collect at the end. There is no stored sort column: the rule lives in
+  the query, and `ix_photo_album` is an expression index over the same rule so reads stay
+  index-ordered with no sort step.
+  ```sql
+  SELECT … FROM photo WHERE album_id = ? ORDER BY taken_at IS NULL, taken_at, filename;
+  ```
+  `filename` compares under BINARY collation — a UTF-8 byte compare — so the ordering is
+  identical on iOS and Linux without depending on either platform's collation tables.
 - **Album list default sort: date, newest first**, ascending/descending toggleable, or by name.
   Albums with no dated photos at all collect at one end.
 - **Search:** album names, substring, case- and diacritic-insensitive via `name_folded`.
   No fuzzy matching (too noisy on short names), no filename search.
-- **Cover photo:** first photo in sort order, overridable per album. A container's cover is
-  resolved by descending into children until a photo is found — *unless* one has been set
-  explicitly, so `cover_photo_id` is storable on containers too.
+- **Cover photo:** first photo in sort order — the album's earliest — overridable per album.
+  A container's cover is resolved by descending into children until a photo is found, *unless*
+  one has been set explicitly, so `cover_photo_id` is storable on containers too.
+
+### Schema versioning
+
+`schema_version` is a single integer. A reader reads any shard at or below the version it
+knows and **skips anything newer**, naming it in the sync report. A device always reads what
+it wrote, so a skip only ever affects whichever device is behind, and it is visible and
+self-correcting once that device updates.
+
+> **The CLI must treat a skipped shard as *unreadable*, not *absent*.** §7 reconciles the local
+> library against the bucket, and a skipped album that reads as "not there" would be re-uploaded
+> as a new one — with UUID keys there is no key collision to stop it, so the result is a silent
+> duplicate.
 
 ---
 
@@ -308,20 +416,48 @@ ETag and size of every shard, so that one request *is* the sync plan. There is n
 object and therefore no shared mutable state to conflict on.
 
 ```
-1. LIST meta/  (encoding-type=url, no delimiter → nested keys come back flat)
-   → discard keys ending in '/' (bunny.net directory markers, Size 0, no ETag)
-2. diff returned ETags against the local cache
+1. LIST meta/  (encoding-type=url)
+2. diff returned ETags against sync_state.db
      changed / new ETag  → download that shard
      key absent          → album deleted → drop its rows
-3. if anything changed: DROP and rebuild the merged DB by replaying all shards (~1–3 s)
+3. if anything changed: rebuild the merged DB by replaying all shards (~1–3 s)
 4. store the new ETags
 ```
+
+**One LIST covers thumbnails too**, because a thumbnail pack is an ordinary blob referenced by
+`album_info.thumbs_id` (§3): if the pack changed, the shard that points at it changed, and step
+2 already saw that. The same holds for every derivative — nothing in the zone can change
+without some shard's ETag moving.
 
 The merged DB is **rebuilt wholesale** rather than spliced incrementally. There is no partial
 update path, so stale rows are impossible by construction — which is also why there is no
 "rebuild index" button in the UI: nothing could ever need repairing by hand.
 
-Shards are kept on disk (~12 MB) as the source of truth for the rebuild.
+The rebuild happens **in place, inside one transaction** — `BEGIN IMMEDIATE`, delete, replay,
+`COMMIT` — rather than building a temp file and renaming over it. There is only ever one
+merged DB on disk, and SQLite's guarantee that readers see the old contents until commit is
+what makes the swap atomic. **WAL mode** is required, not optional: without it the 1–3 s write
+transaction blocks the album list that is on screen while it runs.
+
+### On-device layout
+
+```
+<cache>/
+  sync_state.db      album_id → etag, fetched_at
+  shards/<uuid>.db   the shards, ~12 MB — source of truth for a rebuild
+  merged.db          derived; deletable at any moment
+  blobs/             browse-to-cache (§6)
+```
+
+`sync_state.db` exists so that the merged DB stays purely derived. Putting the ETags inside
+`merged.db` would make losing it mean re-fetching all 288 shards; keeping them beside the
+shards means `merged.db` can be deleted and rebuilt with no network at all. Deleting
+`sync_state.db` on its own forces a full re-fetch, which is a free repair path.
+
+**Reported, not resolved.** A sync returns what it could not make sense of rather than guessing:
+albums whose `parent` resolved to nothing (surfaced at top level), shards too new to read
+(skipped), and duplicate names under one parent (both shown). Each is a condition the design
+deliberately does not auto-correct.
 
 ---
 
@@ -331,8 +467,8 @@ Two tiers only:
 
 | tier | typical size | where | purpose |
 |---|---|---|---|
-| **256px q75 JPEG** | ~9 KB | in `thumbs/<album>.db` | the grid |
-| **2048px HEIC** | ~370 KB | `preview/…` | fullscreen |
+| **256px q75 JPEG** | ~9 KB | packed per album, one blob | the grid |
+| **2048px HEIC** | ~370 KB | one blob per photo | fullscreen |
 
 Rejected: 320px and 512px thumbs (a 512px tier is 3.7× larger and breaks the
 one-request-per-album property); 1280px previews (visibly soft on a 3× display).
@@ -459,9 +595,17 @@ images — so this screen is the only route.
 ## 7. Ingest CLI
 
 **A shared Swift package** holds everything where a laptop/phone disagreement would corrupt the
-catalog: the shard schema, key construction and NFC normalisation, EXIF mapping, the S3 client
-and signer, and the LIST-diff sync algorithm. Encoders stay platform-native behind an
-`ImageBackend` protocol — **ImageIO/AVFoundation on iOS and macOS**, **libheif/ffmpeg on Linux**.
+catalog: the shard schema, NFC normalisation, the mapping from EXIF tags to catalog rows, the
+S3 client and signer, and the LIST-diff sync algorithm.
+
+Encoders stay platform-native behind an `ImageBackend` protocol — **ImageIO/AVFoundation on
+iOS and macOS**, **libheif/ffmpeg on Linux**. **`ImageBackend` also extracts raw EXIF tags**,
+since both platforms already have a library that reads them and neither would gain from a
+hand-written container parser. What the shared package owns is the *interpretation*:
+`"2013:07:04 18:22:11"` → epoch, `GPSLatitudeRef 'S'` → a negative latitude, rationals →
+degrees, orientation → swapped dimensions. That is where a disagreement would corrupt the
+catalog, and it is the same code on both platforms. The protocol itself is declared in the
+shared package, because a contract belongs with the other contracts.
 
 ### Distribution
 
@@ -492,12 +636,21 @@ request, so this is the one place that needs real test coverage.
 ### Behaviour
 
 - **Idempotency: LIST the bucket and compare against local files.** No local state file, so the
-  tool is self-correcting and survives losing laptop state. Costs a full LIST each run, and
-  in-place edits (same key, changed content) are not detected without hashing.
+  tool is self-correcting and survives losing laptop state. Costs a full LIST each run. Under
+  UUID keys the comparison runs through the shards: `source_path` reconnects a local folder to
+  its album, and filenames within it are matched against `photo` rows.
+- **Images are asserted never to change on disk**, and the assertion is checked. A file present
+  in both places is untouched; local-only is new; a row with no file is deleted. Ingest also
+  compares the shard's `bytes` against the directory entry — free, since the scan reads it
+  anyway — and **aborts the run on a mismatch** rather than re-ingesting. A changed file means
+  the library broke its contract, so nothing is written that run and `OnFailure=` surfaces it.
+  There is no mtime column, no hashing pass and no re-ingest path.
 - **Parallelism:** one worker per core for encoding. Measured **0.79 s/photo** for decode +
   2048px HEIC + 256px JPEG on a 16-thread laptop, i.e. ~40–60 min for ~34k photos, plus video.
 - **Deletion is laptop-only, explicit, dry-run first.** `--prune --dry-run` prints what it would
-  remove; `--confirm` acts. **The app never deletes.** `delete` exists on the shared S3 client
+  remove; `--confirm` acts. The same pass sweeps **unreferenced blobs** — objects whose shard
+  write never landed, e.g. a crash mid-upload — since it is already computing the full set of
+  referenced ids. One destructive command rather than two. **The app never deletes.** `delete` exists on the shared S3 client
   because the CLI needs it, but no iOS code path calls it — a convention, not a compiler-enforced
   boundary. With no versioning underneath, this is the single irreversible operation in the system.
 - **Pull is archive-only.** Phone-uploaded albums are copied into `$LIBRARY_ROOT`; the
@@ -610,9 +763,12 @@ Three foundations have **no dependency on one another** and can be built in para
 AWS4 signer + S3 client: GET with ranges, PUT, HEAD, LIST v2 with `encoding-type=url`,
 multipart. Verified by AWS SigV4 test vectors, then a round-trip against a local S3 server.
 
-**B · Catalog** *(no deps)*
-DDL, shard writer/reader, merged-DB rebuild, LIST-diff, NFC keys, EXIF mapping, hierarchy and
-cascade rules. Verified with synthetic fixtures, no network.
+**B · Catalog** *(needs A's `S3Client`; buildable against it the day A lands)*
+DDL, shard writer/reader, thumbnail packs, merged-DB rebuild, the LIST-diff sync loop, NFC
+normalisation, EXIF-tag mapping and hierarchy rules. Verified with synthetic fixtures and a
+stubbed transport, no network — plus a **measured full-scale rebuild**: 288 shards, 337
+albums, 34,607 rows, inside §4's 1–3 s budget, since that is the one number E inherits and
+cannot renegotiate.
 
 **C · Derivative pipeline** *(no deps)*
 Thumbs, previews, video transcode, CR2 develop, Live-Photo pairing, junk filtering.
@@ -622,7 +778,7 @@ sizes and counts (see `INGEST.md`) — any large deviation means the pipeline is
 **D · Ingest CLI** = A+B+C — first real data in the bucket.
 *Ingest one album end-to-end before the bulk import.*
 
-**E · iOS read-only app** = B+A — first point the project is useful. Can start on fixtures.
+**E · iOS read-only app** = B — first point the project is useful. Can start on fixtures.
 
 **F · Map** = B — parallel with E.
 
@@ -631,8 +787,8 @@ sizes and counts (see `INGEST.md`) — any large deviation means the pipeline is
 **H · Laptop pull + systemd** = D.
 
 ```
-A ∥ B ∥ C  →  D  →  (E ∥ F)  and  (G ∥ H)
-critical path: A → D → E
+A → B ;  C  →  D  →  (E ∥ F)  and  (G ∥ H)
+critical path: A → B → E
 ```
 
 ### Verified against the live zone
