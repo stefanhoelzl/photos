@@ -114,6 +114,8 @@ enum ListObjectsParser {
             var isTruncated = false
             var nextToken: String?
             var encodingType: String?
+            var sawRoot = false
+            var closedRoot = false
 
             var inContents = false
             var element = ""
@@ -140,6 +142,7 @@ enum ListObjectsParser {
                         qualifiedName: String?, attributes: [String: String]) {
                 element = e
                 buffer = ""
+                if e == "ListBucketResult" { sawRoot = true }
                 if e == "Contents" {
                     inContents = true
                     key = ""; size = 0; etag = nil; lastModified = nil
@@ -151,6 +154,7 @@ enum ListObjectsParser {
             func parser(_ p: XMLParser, didEndElement e: String, namespaceURI: String?,
                         qualifiedName: String?) {
                 defer { buffer = "" }
+                if e == "ListBucketResult" { closedRoot = true; return }
                 if e == "Contents" {
                     inContents = false
                     objects.append(S3Object(key: key, size: size,
@@ -184,9 +188,27 @@ enum ListObjectsParser {
         let delegate = Delegate()
         let parser = XMLParser(data: data)
         parser.delegate = delegate
-        guard parser.parse() else {
+        let parsed = parser.parse()
+
+        // `parse()` alone is not enough to trust. swift-corelibs-foundation returns
+        // **true** for a truncated document — `<ListBucket` and a root element that
+        // is never closed both "succeed", merely setting `parserError` — and an empty
+        // document succeeds outright.
+        //
+        // That is the §2 failure mode in its worst form: a connection dropped
+        // mid-LIST would parse as zero objects, and §4's diff reads a missing key as
+        // "album deleted". A truncated response would delete the whole catalog.
+        //
+        // So require three things: no parser error, a root element that was opened,
+        // and a root element that was closed.
+        if !parsed || parser.parserError != nil {
             let reason = parser.parserError.map { "\($0)" } ?? "unknown XML error"
             throw StorageError.malformedResponse("could not parse the LIST response: \(reason)")
+        }
+        guard delegate.sawRoot, delegate.closedRoot else {
+            throw StorageError.malformedResponse(
+                "LIST response was truncated — no complete <ListBucketResult> element"
+            )
         }
 
         // We always ask for encoding-type=url, so keys arrive percent-encoded and

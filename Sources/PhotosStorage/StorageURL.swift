@@ -68,10 +68,15 @@ public struct StorageURL: Hashable, Sendable {
     }
 
     /// `de-s3.storage.bunnycdn.com` → `de`; `storage.bunnycdn.com` → the default.
+    ///
+    /// Hostnames are case-insensitive, so the label is lowercased before the `-s3`
+    /// test. Without that, a URL typed as `DE-S3.…` would silently fall back to the
+    /// default region and every signature would fail with an unexplained 403.
     static func region(fromHost host: String) -> String {
-        guard let label = host.split(separator: ".").first else { return defaultRegion }
+        guard let first = host.split(separator: ".").first else { return defaultRegion }
+        let label = first.lowercased()
         guard label.hasSuffix("-s3") else { return defaultRegion }
         let region = label.dropLast(3)
-        return region.isEmpty ? defaultRegion : String(region).lowercased()
+        return region.isEmpty ? defaultRegion : String(region)
     }
 }
