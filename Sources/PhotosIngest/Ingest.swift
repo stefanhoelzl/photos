@@ -21,11 +21,12 @@ public actor Ingest {
     let classifier: MediaClassifier
     let pool = DerivePool()
     let uploadPermits: AsyncSemaphore
-    let progress: (@Sendable (String) -> Void)?
+    let emit: (@Sendable (IngestEvent) -> Void)?
+    let meter = ProgressMeter()
 
     public init(config: IngestConfig, s3: S3Client,
                 backend: (any ImageBackend)? = nil,
-                progress: (@Sendable (String) -> Void)? = nil) throws {
+                emit: (@Sendable (IngestEvent) -> Void)? = nil) throws {
         self.config = config
         self.s3 = s3
         self.catalog = try CatalogSync(s3: s3, cacheRoot: config.cacheRoot)
@@ -33,7 +34,7 @@ public actor Ingest {
         self.pipeline = Pipeline(workDirectory: config.workRoot, backend: backend)
         self.classifier = MediaClassifier(backend: backend)
         self.uploadPermits = AsyncSemaphore(limit: config.uploadJobs)
-        self.progress = progress
+        self.emit = emit
     }
 
     // MARK: - The run
@@ -86,11 +87,24 @@ public actor Ingest {
         // nothing but a week of $0.01/GB.
         guard refreshed.changed || plan.hasWork else { return report }
 
+        // Said before anything is uploaded, because the first album's line cannot appear
+        // until that album is derived *and* uploaded — minutes, on a link that manages
+        // 0.85 MB/s. A 39-hour run that says nothing for its first ten minutes is
+        // indistinguishable from one that has wedged.
+        let work = plan.albums.filter(\.needsWrite)
+        let files = work.reduce(0) { $0 + $1.uploads.count }
+        let bytes = work.reduce(Int64(0)) { total, album in
+            total + album.uploads.reduce(Int64(0)) { $0 + (Body.file($1).byteCount ?? 0) }
+        }
+        emit?(.planned(albums: work.count, files: files, bytes: bytes,
+                       deletions: plan.deletions.count, pulls: plan.pulls.count))
+        await meter.start(files: files, bytes: bytes)
+
         try FileManager.default.createDirectory(at: config.workRoot,
                                                 withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: config.workRoot) }
 
-        for album in plan.albums where album.needsWrite {
+        for album in work {
             await commit(album, etags: refreshed.etags, into: &report)
         }
         for deletion in plan.deletions {
@@ -226,7 +240,7 @@ public actor Ingest {
 
         outcome.duration = Date().timeIntervalSince(started)
         report.albums.append(outcome)
-        progress?(line(for: outcome))
+        emit?(.line(line(for: outcome)))
     }
 
     /// What a derived row will be called, so a name collision is caught before the CPU is
@@ -272,10 +286,18 @@ public actor Ingest {
             }
             for _ in 0..<min(config.jobs, items.count) { start() }
             while let result = await group.next() {
+                var uploaded: Int64 = 0
                 switch result {
-                case .success(let value): produced.append(value)
+                case .success(let value):
+                    produced.append(value)
+                    uploaded = value.uploadedBytes
                 case .failure(let error):
                     failures.append(.init(path: relative(error.url), message: error.message))
+                }
+                // Transient, and only where a person is watching: the journal gets the
+                // per-album lines and nothing else.
+                if let status = await meter.finished(bytes: uploaded, album: album.sourcePath) {
+                    emit?(.status(status))
                 }
                 start()
             }
@@ -414,7 +436,7 @@ public actor Ingest {
             try await catalog.deleteShard(deletion.shard.info.id)
             await deleteBlobs(deletion.shard.objectIDs)
             report.deletedAlbums.append((deletion.sourcePath, deletion.shard.photos.count))
-            progress?("- \(deletion.sourcePath)  \(deletion.shard.photos.count) photos deleted")
+            emit?(.line("- \(deletion.sourcePath)  \(deletion.shard.photos.count) photos deleted"))
         } catch {
             report.failures.append(.init(path: deletion.sourcePath, message: "\(error)"))
         }
@@ -472,7 +494,7 @@ public actor Ingest {
                 return
             }
             report.pulledAlbums.append((pull.sourcePath, files, bytes))
-            progress?("v \(pull.sourcePath)  \(files) files pulled")
+            emit?(.line("v \(pull.sourcePath)  \(files) files pulled"))
         } catch {
             report.failures.append(.init(path: pull.sourcePath, message: "\(error)"))
         }
@@ -543,4 +565,65 @@ public func formatBytes(_ bytes: Int64) -> String {
         return String(format: "%.1f %@", Double(bytes) / scale, suffix)
     }
     return "\(bytes) B"
+}
+
+/// What a run tells the caller while it is happening.
+///
+/// Split by *destination* rather than by kind: `.line` is the record, and belongs on stdout
+/// and in the journal; `.status` is a redrawing counter that belongs on a terminal and
+/// nowhere else. Deciding that here would mean this type knowing what a journal is.
+public enum IngestEvent: Sendable {
+    case planned(albums: Int, files: Int, bytes: Int64, deletions: Int, pulls: Int)
+    case line(String)
+    case status(String)
+}
+
+/// Files done, bytes moved, and what that implies about when this finishes.
+///
+/// Throttled to one update a second: a status line redrawn once per uploaded photo would be
+/// several a second at the start of a small album and pointless the rest of the time.
+actor ProgressMeter {
+    private var totalFiles = 0
+    private var totalBytes: Int64 = 0
+    private var doneFiles = 0
+    private var doneBytes: Int64 = 0
+    private var started = Date()
+    private var lastEmit = Date.distantPast
+
+    func start(files: Int, bytes: Int64) {
+        totalFiles = files
+        totalBytes = bytes
+        doneFiles = 0
+        doneBytes = 0
+        started = Date()
+        lastEmit = .distantPast
+    }
+
+    func finished(bytes: Int64, album: String, now: Date = Date()) -> String? {
+        doneFiles += 1
+        doneBytes += bytes
+        guard totalFiles > 0 else { return nil }
+        guard now.timeIntervalSince(lastEmit) >= 1 || doneFiles == totalFiles else { return nil }
+        lastEmit = now
+
+        let elapsed = now.timeIntervalSince(started)
+        let rate = elapsed > 0 ? Double(doneBytes) / elapsed : 0
+        var text = "\(doneFiles)/\(totalFiles)  \(formatBytes(doneBytes))"
+        if totalBytes > 0 { text += " of \(formatBytes(totalBytes))" }
+        if rate > 0 {
+            text += String(format: "  %.2f MB/s", rate / 1_048_576)
+            let remaining = Double(totalBytes - doneBytes) / rate
+            if remaining > 0, remaining.isFinite { text += "  ~\(formatDuration(remaining)) left" }
+        }
+        return text + "  \(album)"
+    }
+}
+
+/// Hours and minutes, because the number this is usually reporting is "tomorrow".
+public func formatDuration(_ seconds: Double) -> String {
+    let total = Int(seconds.rounded())
+    let (hours, minutes) = (total / 3600, (total % 3600) / 60)
+    if hours > 0 { return "\(hours)h \(minutes)m" }
+    if minutes > 0 { return "\(minutes)m \(total % 60)s" }
+    return "\(total)s"
 }

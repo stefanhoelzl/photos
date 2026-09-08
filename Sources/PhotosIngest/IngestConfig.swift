@@ -142,10 +142,10 @@ public enum ExitCode {
     public static let completedWithFailures: Int32 = 1
     public static let usage: Int32 = 2
     public static let aborted: Int32 = 3
-    /// `EX_TEMPFAIL`. The keyring is locked because nobody has logged in yet — not a
-    /// failure, just not now. H's unit sets `SuccessExitStatus=75` so it stays quiet.
-    ///
-    /// Reachable only on the production path. A development run takes `PHOTOS_PASSWORD`
-    /// from the environment and never consults a keyring, so it can never defer.
+    /// `EX_TEMPFAIL`. Not now, rather than not working. Two things say it: the keyring is
+    /// still locked because nobody has logged in yet, and another sync already holds the
+    /// run lock. H's unit sets `SuccessExitStatus=75` so neither reaches `OnFailure=` —
+    /// both are the ordinary state of a machine that reboots and an import that outlasts
+    /// the hour between timer firings.
     public static let deferred: Int32 = 75
 }

@@ -71,8 +71,13 @@ confirmation step, and no run happens at all without a readable
 than an unmounted mount point.
 
 Exit codes: `0` clean · `1` finished with failures · `2` usage · `3` aborted before writing
-anything · `75` deferred, the keyring is locked because nobody has logged in yet (production
-path only — a run under `proton-env` never consults a keyring, so it never defers).
+anything · `75` deferred — either another sync holds the lock, or the keyring is still locked
+because nobody has logged in yet.
+
+Only one sync runs at a time (an `flock` in the cache directory), which matters because the
+first import outlasts the hour between timer firings. A run prints what it intends, then a
+line per album as it commits; on a terminal a counter on stderr shows files, bytes, rate and
+an estimate.
 
 ## Build and test
 

@@ -838,6 +838,17 @@ pending state to remember — **`--dry-run` is the one place to look before it h
   unconditionally — the ignore rules govern what goes up.
 - **A laptop-owned album is never restored.** `sync` reads the library and writes the zone; it
   does not put files back. Deleting a folder is a deletion, not a divergence to repair.
+- **One sync at a time**, enforced by an `flock` on a file in the cache directory. The first
+  import is about 39 hours and the timer fires hourly, so without it the two overlap
+  thirty-eight times: both derive and upload the same files, and the loser's blobs sit in the
+  zone with nothing pointing at them until the sweep collects them a week later. A second run
+  exits **75** rather than failing — the sync is happening, just not that one. The lock is
+  advisory and process-scoped, so the kernel releases it however the run ends, including
+  `kill -9`; there is no stale lock file to explain to anyone.
+- **A run says what it intends before it does it**, then a line per album as each commits, so
+  a 39-hour job is legible in the journal while it is still going rather than at the end. On a
+  terminal a redrawing counter on stderr adds files, bytes, rate and an estimate; the journal
+  never sees it.
 - **What to exclude comes from the library, not the tool: `$LIBRARY_ROOT/.photosignore`.**
   The CLI carries no built-in exclusions — no extension list, no filename list, not even a
   dot-file rule. The single hardcoded rule is that `.photosignore` excludes itself. What
@@ -867,8 +878,8 @@ pending state to remember — **`--dry-run` is the one place to look before it h
 
 - `OnCalendar=hourly`, `Persistent=true`, `RandomizedDelaySec=5m`. A no-op run is one LIST —
   which is exactly what the ETag cache beside the shards buys.
-- `SuccessExitStatus=75`, so a locked keyring before the first login is quiet rather than a
-  notification every hour.
+- `SuccessExitStatus=75`, which covers both deferrals: a keyring still locked before the
+  first login, and an hourly firing that lands while a long run still holds the lock.
 - The full reconciliation, deletions included. There is no second command to withhold: the
   marker guard is what makes that safe.
 - No `.path` unit: `systemd.path` is not recursive (it would see a new album folder but not

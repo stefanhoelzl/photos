@@ -79,6 +79,11 @@ extension PhotosCLI {
                     console.error(error.description)
                     throw ExitCode(PhotosIngest.ExitCode.aborted)
                 }
+            } catch let error as RunLock.Busy {
+                // Not a failure: the sync is happening, just not this one. Exit 75 so the
+                // hourly unit overlapping a long manual run stays out of OnFailure=.
+                console.line("deferred: \(error.description)")
+                throw ExitCode(PhotosIngest.ExitCode.deferred)
             } catch let error as IngestAbort {
                 console.error("aborted: \(error.description)")
                 console.error("nothing was written")
@@ -113,11 +118,28 @@ extension PhotosCLI {
                 dryRun: dryRun
             )
 
+            // Taken before anything is read or written, and held by the process until it
+            // exits however it exits.
+            let lock = try RunLock.acquire(in: config.cacheRoot)
+            defer { _ = lock }
+
             let client = S3Client(storage: storage.value, secretAccessKey: password.value)
-            // The per-album line is written as the album commits, not buffered to the end:
-            // a 20-hour first run has to be watchable, and in the journal as it happens.
-            let ingest = try Ingest(config: config, s3: client) { line in
-                FileHandle.standardOutput.write(Data((line + "\n").utf8))
+            // Written as it happens, never buffered to the end: a 39-hour run has to be
+            // watchable, and legible in the journal while it is still going.
+            let ingest = try Ingest(config: config, s3: client) { event in
+                switch event {
+                case .planned(let albums, let files, let bytes, let deletions, let pulls):
+                    var parts: [String] = []
+                    if albums > 0 { parts.append("\(albums) album(s), \(files) photos, \(formatBytes(bytes))") }
+                    if deletions > 0 { parts.append("\(deletions) album(s) to delete") }
+                    if pulls > 0 { parts.append("\(pulls) album(s) to pull") }
+                    console.line(parts.isEmpty ? "nothing to do" : "to do: " + parts.joined(separator: ", "))
+                case .line(let text):
+                    console.clearProgress()
+                    console.line(text)
+                case .status(let text):
+                    console.progress(text)
+                }
             }
 
             let report = try await ingest.run()
