@@ -6,8 +6,14 @@
 # that do not apply, and add rules when a stray actually shows up in a scan report.
 #
 # This file is the ONLY source of exclusions. The tool carries no built-in list: not of
-# extensions, not of filenames, and not even a rule for dot-files. Without this file, nothing
-# whatsoever is excluded.
+# extensions, not of filenames, and not even a rule for dot-files.
+#
+# It is also REQUIRED. photos-cli refuses to run without a readable .photosignore at the
+# library root, because the file doubles as the marker that says this directory really is the
+# library — an unmounted disk is a bare mount point, and a mistyped root is somebody else's
+# directory, and neither has one. Since a run deletes albums whose directory has gone, that
+# distinction is what stands between a failed mount and an empty zone. A library that wants no
+# exclusions at all still writes the file; it just leaves it empty.
 #
 # That matters more than it sounds. A photo-manager's trash directory typically holds real,
 # decodable photographs that you deleted — they are indistinguishable from any other JPEG, so

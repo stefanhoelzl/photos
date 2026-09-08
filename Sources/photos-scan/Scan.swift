@@ -24,8 +24,7 @@ enum Scan {
     }
 
     static func run(root: URL, limit: Int?, albumFilter: String?, jobs: Int,
-                    verbose: Bool, metadataOnly: Bool = false,
-                    sample: Int? = nil) async throws {
+                    verbose: Bool) async throws {
         let started = Date()
         print("scanning \(root.path)")
 
@@ -67,31 +66,6 @@ enum Scan {
         }
 
         print("\(allItems.count) media files, \(allSkipped.count) skipped\n")
-
-        // Classification and metadata cover every file cheaply. Derivation is where the hours
-        // go, and it is *not* where the interesting bugs have been: the HEIF EXIF fault that
-        // silently cost 1,531 photos their date and 187 their pairing was invisible to
-        // encoding and would have shown up here in minutes.
-        if metadataOnly {
-            try await reportMetadataOnly(items: allItems, skipped: allSkipped,
-                                         contents: contents, verbose: verbose,
-                                         elapsed: Date().timeIntervalSince(started))
-            return
-        }
-
-        var coverage: [(Sample.Key, Int, Int)] = []
-        if let sample {
-            let result = Sample.take(sample, from: allItems)
-            allItems = result.chosen
-            coverage = result.coverage
-            print("sampling \(allItems.count) files:")
-            for (key, taken, total) in coverage {
-                let whole = taken == total ? "  (all)" : ""
-                print(String(format: "  %-16@ %5d of %-6d%@", key.description as NSString,
-                             taken, total, whole as NSString))
-            }
-            print("")
-        }
 
         // Progress, from the pipeline's own event stream. A full-library run is tens of
         // minutes; without this it is tens of minutes of silence, and there is no way to tell
@@ -147,49 +121,6 @@ enum Scan {
 
         try await report(totals: totals, skipped: allSkipped, contents: contents,
                          verbose: verbose, elapsed: Date().timeIntervalSince(started))
-    }
-
-    /// Everything the full report says about *what the library is*, without encoding anything.
-    static func reportMetadataOnly(items: [MediaItem], skipped: [SkippedFile],
-                                   contents: LibraryContents, verbose: Bool,
-                                   elapsed: TimeInterval) async throws {
-        var stills = 0, raws = 0, live = 0, videos = 0
-        var dated = 0, located = 0, undecodable: [String] = []
-        let backend = NativeImageBackend()
-
-        for item in items {
-            switch item.kind {
-            case .still: stills += 1
-            case .raw: stills += 1; raws += 1
-            case .livePhoto: stills += 1; live += 1
-            case .video: videos += 1
-            }
-            guard let tags = try? backend.rawTags(at: item.url) else {
-                undecodable.append(item.filename)
-                continue
-            }
-            if ExifMapper.date(from: tags) != nil { dated += 1 }
-            if ExifMapper.coordinate(from: tags) != nil { located += 1 }
-        }
-
-        print(String(repeating: "─", count: 72))
-        print("metadata only — no derivatives generated")
-        print(String(repeating: "─", count: 72))
-        print("stills         \(stills)  (raw \(raws), live photos \(live))")
-        print("videos         \(videos)")
-        print("with a date    \(dated)  (\(percentOf(dated, items.count)))")
-        print("with GPS       \(located)  (\(percentOf(located, items.count)))")
-        print("unreadable     \(undecodable.count)")
-        print("skipped        \(skipped.count)")
-        if !contents.rules.isEmpty {
-            print("ignored        \(contents.ignoredFiles.count) files, "
-                  + "\(contents.prunedDirectories.count) directories pruned")
-        }
-        for rule in contents.unusedRules {
-            print("  \(IgnoreRules.filename) line \(rule.line) matched nothing: \(rule.source)")
-        }
-        if verbose { for name in undecodable.prefix(40) { print("  unreadable: \(name)") } }
-        print("\nelapsed \(fmt(elapsed, "s"))")
     }
 
     static func percentOf(_ part: Int, _ whole: Int) -> String {

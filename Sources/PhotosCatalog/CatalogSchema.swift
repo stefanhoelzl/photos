@@ -12,13 +12,22 @@ public enum CatalogSchema {
     /// A reader reads any shard at or below this and **skips anything above it**, naming it
     /// in the sync report. A device always reads what it wrote, so a skip only ever affects
     /// whichever device is behind (§3).
-    public static let version = 1
+    ///
+    /// **2** — `photo.source_filename` added, and `photo.bytes` redefined to describe the
+    /// blob a tap fetches rather than the file on disk (§3). The bump is not merely about
+    /// the new column: a version-1 reader would read `bytes` as something it is not.
+    public static let version = 2
 
     // MARK: - Shard: meta/<album-uuid>.db
 
     public static let shardDDL = """
         PRAGMA page_size = 4096;
 
+        -- `album_id` and `source_path` are permanently stable: never removed, never
+        -- retyped, whatever a later schema_version does. That is what lets any reader
+        -- learn which folder a shard claims without understanding the rest of it, so a
+        -- shard too new to read is still *identifiable* rather than merely unreadable —
+        -- which is what stops its directory being re-uploaded as a duplicate album (§3).
         CREATE TABLE album_info (
           id             INTEGER PRIMARY KEY CHECK (id = 1),
           album_id       TEXT NOT NULL,
@@ -32,8 +41,9 @@ public enum CatalogSchema {
         );
 
         CREATE TABLE photo (
-          id            TEXT PRIMARY KEY,
-          filename      TEXT NOT NULL,
+          id              TEXT PRIMARY KEY,
+          filename        TEXT NOT NULL,
+          source_filename TEXT,
           taken_at      INTEGER,
           lat           REAL,
           lon           REAL,
@@ -53,8 +63,15 @@ public enum CatalogSchema {
         "album_id, name, parent, source_path, cover_photo_id, thumbs_id, added_at, schema_version"
 
     static let photoColumns =
-        "id, filename, taken_at, lat, lon, width, height, bytes, media_type, "
-        + "original_id, live_video_id, preview_id, video_id"
+        "id, filename, source_filename, taken_at, lat, lon, width, height, bytes, "
+        + "media_type, original_id, live_video_id, preview_id, video_id"
+
+    /// One `?` per column of `photoColumns`, so adding a column cannot leave a hand-counted
+    /// placeholder list behind. `+ extra` covers the merged table's leading `album_id`.
+    static func photoPlaceholders(extra: Int = 0) -> String {
+        let count = photoColumns.split(separator: ",").count + extra
+        return Array(repeating: "?", count: count).joined(separator: ", ")
+    }
 
     // MARK: - Thumbnail pack: one blob per album
 
@@ -91,9 +108,10 @@ public enum CatalogSchema {
         CREATE INDEX IF NOT EXISTS ix_album_folded ON album(name_folded);
 
         CREATE TABLE IF NOT EXISTS photo (
-          id            TEXT NOT NULL,
-          album_id      TEXT NOT NULL,
-          filename      TEXT NOT NULL,
+          id              TEXT NOT NULL,
+          album_id        TEXT NOT NULL,
+          filename        TEXT NOT NULL,
+          source_filename TEXT,
           taken_at      INTEGER,
           lat           REAL,
           lon           REAL,

@@ -77,7 +77,8 @@ enum Fixture {
     ///
     /// Written by hand rather than by `ShardWriter`, which always stamps the current
     /// version — the whole point is a file the current code could not have produced.
-    static func futureShard(version: Int = CatalogSchema.version + 1) throws -> (UUID, Data) {
+    static func futureShard(version: Int = CatalogSchema.version + 1,
+                            sourcePath: String? = "From The Future") throws -> (UUID, Data) {
         let id = UUID()
         let database = try Database(path: nil, options: .inMemory)
         try database.execute(CatalogSchema.shardDDL)
@@ -85,7 +86,8 @@ enum Fixture {
             "INSERT INTO album_info (id, \(CatalogSchema.albumInfoColumns)) "
             + "VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
-                .text(id.catalogString), .text("From The Future"), .null, .null, .null, .null,
+                .text(id.catalogString), .text("From The Future"), .null,
+                SQLiteValue(sourcePath), .null, .null,
                 .integer(0), .integer(Int64(version)),
             ]
         )

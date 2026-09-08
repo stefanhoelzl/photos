@@ -57,7 +57,7 @@ public final class CatalogWriter {
             )
             let insertPhoto = try database.prepare(
                 "INSERT INTO photo (album_id, \(CatalogSchema.photoColumns)) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                + "VALUES (\(CatalogSchema.photoPlaceholders(extra: 1)))"
             )
 
             for shard in shards {

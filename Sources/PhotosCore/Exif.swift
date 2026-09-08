@@ -197,6 +197,7 @@ public enum ExifMapper {
     public static func photoRow(
         id: UUID = UUID(),
         filename: String,
+        sourceFilename: String? = nil,
         bytes: Int64?,
         mediaType: MediaType = .photo,
         tags: ExifTags,
@@ -210,6 +211,7 @@ public enum ExifMapper {
         return PhotoRow(
             id: id,
             filename: filename,
+            sourceFilename: sourceFilename,
             takenAt: date(from: tags),
             latitude: coordinate?.latitude,
             longitude: coordinate?.longitude,

@@ -24,6 +24,22 @@ public enum ShardError: Error, Hashable, Sendable, CustomStringConvertible {
     }
 }
 
+/// What can be learned from a shard this build cannot read.
+///
+/// The fields come from the two `album_info` columns §3 declares permanently stable, so a
+/// reader from any era can produce one.
+public struct ShardProbe: Hashable, Sendable {
+    public var albumID: UUID
+    public var sourcePath: String?
+    public var schemaVersion: Int
+
+    public init(albumID: UUID, sourcePath: String?, schemaVersion: Int) {
+        self.albumID = albumID
+        self.sourcePath = sourcePath?.precomposedStringWithCanonicalMapping
+        self.schemaVersion = schemaVersion
+    }
+}
+
 /// Builds a shard's bytes, ready to PUT at `meta/<album-uuid>.db`.
 ///
 /// The whole shard is rewritten every time; there is no incremental path, which is what
@@ -53,7 +69,7 @@ public enum ShardWriter {
 
             let insert = try database.prepare(
                 "INSERT INTO photo (\(CatalogSchema.photoColumns)) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                + "VALUES (\(CatalogSchema.photoPlaceholders()))"
             )
             for photo in shard.photos {
                 try insert.bind(photo.bindings)
@@ -115,6 +131,28 @@ public enum ShardReader {
         ) { _ in true } ?? false
     }
 
+    /// What a shard says about itself even when it is too new to read.
+    ///
+    /// Only the two columns §3 declares permanently stable are touched, so this keeps
+    /// working across every future schema. It is what makes a skipped shard *unreadable*
+    /// rather than *absent*: the CLI learns which folder the album claims, leaves that
+    /// folder alone, and so cannot re-upload it as a duplicate (§3).
+    public static func probe(_ data: Data) throws -> ShardProbe {
+        let database = try Database.deserialized(data)
+        guard try hasAlbumInfo(database) else { throw ShardError.missingAlbumInfo }
+        let probe = try database.queryOne(
+            "SELECT album_id, source_path, schema_version FROM album_info WHERE id = 1"
+        ) { row -> ShardProbe in
+            guard let id = row.uuidOrNil(0) else {
+                throw ShardError.malformed("album_id is not a uuid")
+            }
+            return ShardProbe(albumID: id, sourcePath: row.stringOrNil(1),
+                              schemaVersion: Int(row.int(2)))
+        }
+        guard let probe else { throw ShardError.missingAlbumInfo }
+        return probe
+    }
+
     /// The schema version alone, without decoding the rest.
     ///
     /// Lets a caller decide to skip a shard before paying to read it.
@@ -136,6 +174,7 @@ extension PhotoRow {
         [
             .text(id.catalogString),
             .text(filename),
+            SQLiteValue(sourceFilename),
             SQLiteValue(takenAt.map { Int64($0.timeIntervalSince1970.rounded()) }),
             SQLiteValue(latitude),
             SQLiteValue(longitude),
@@ -154,23 +193,24 @@ extension PhotoRow {
     /// select in that order — so one initialiser serves both.
     init(row: Statement) throws {
         guard let id = row.uuidOrNil(0) else { throw ShardError.malformed("photo.id is not a uuid") }
-        guard let mediaType = MediaType(rawValue: Int(row.int(8))) else {
-            throw ShardError.malformed("unknown media_type \(row.int(8))")
+        guard let mediaType = MediaType(rawValue: Int(row.int(9))) else {
+            throw ShardError.malformed("unknown media_type \(row.int(9))")
         }
         self.init(
             id: id,
             filename: row.string(1),
-            takenAt: row.intOrNil(2).map { Date(timeIntervalSince1970: TimeInterval($0)) },
-            latitude: row.doubleOrNil(3),
-            longitude: row.doubleOrNil(4),
-            width: row.intOrNil(5).map(Int.init),
-            height: row.intOrNil(6).map(Int.init),
-            bytes: row.intOrNil(7),
+            sourceFilename: row.stringOrNil(2),
+            takenAt: row.intOrNil(3).map { Date(timeIntervalSince1970: TimeInterval($0)) },
+            latitude: row.doubleOrNil(4),
+            longitude: row.doubleOrNil(5),
+            width: row.intOrNil(6).map(Int.init),
+            height: row.intOrNil(7).map(Int.init),
+            bytes: row.intOrNil(8),
             mediaType: mediaType,
-            originalID: row.uuidOrNil(9),
-            liveVideoID: row.uuidOrNil(10),
-            previewID: row.uuidOrNil(11),
-            videoID: row.uuidOrNil(12)
+            originalID: row.uuidOrNil(10),
+            liveVideoID: row.uuidOrNil(11),
+            previewID: row.uuidOrNil(12),
+            videoID: row.uuidOrNil(13)
         )
     }
 }

@@ -20,7 +20,7 @@ public struct SyncReport: Hashable, Sendable {
     /// A caller reconciling a local library against the zone must treat these as
     /// **unreadable, not absent** — an absent album gets re-uploaded as a new one, and with
     /// UUID keys nothing collides to stop the duplicate (§3).
-    public var unreadableShards: [UUID] = []
+    public var unreadableShards: [ShardProbe] = []
     /// Albums whose `parent` named a shard that is not present. Surfaced at the root.
     public var orphanedAlbums: [UUID] = []
     /// Names appearing more than once under one parent. Shown, never merged (§2).
@@ -53,7 +53,12 @@ public actor CatalogSync {
     public let cacheRoot: URL
 
     private let state: SyncState
-    private var writer: CatalogWriter
+    /// Created on first rebuild, not at startup.
+    ///
+    /// The CLI stops at `refresh()` and never merges anything (§7), so eagerly opening this
+    /// would leave a schema-only 40 KB database in the cache of every laptop run — a file
+    /// contradicting the design's claim that the merged DB is the phone's alone.
+    private var writer: CatalogWriter?
 
     public init(s3: S3Client, cacheRoot: URL) throws {
         self.s3 = s3
@@ -61,7 +66,6 @@ public actor CatalogSync {
         try FileManager.default.createDirectory(at: cacheRoot.appending(path: "shards"),
                                                 withIntermediateDirectories: true)
         self.state = try SyncState(path: cacheRoot.appending(path: "sync_state.db"))
-        self.writer = try CatalogWriter(path: cacheRoot.appending(path: "merged.db"))
     }
 
     public var mergedPath: URL { cacheRoot.appending(path: "merged.db") }
@@ -71,9 +75,11 @@ public actor CatalogSync {
     /// would succeed into a file that no longer has a name, and the catalog would silently
     /// fail to reappear. So the file's existence is checked before every rebuild, not only
     /// at startup.
-    private func ensureWriter() throws {
-        guard !FileManager.default.fileExists(atPath: mergedPath.path) else { return }
-        writer = try CatalogWriter(path: mergedPath)
+    private func ensureWriter() throws -> CatalogWriter {
+        if let writer, FileManager.default.fileExists(atPath: mergedPath.path) { return writer }
+        let writer = try CatalogWriter(path: mergedPath)
+        self.writer = writer
+        return writer
     }
 
     func shardPath(_ albumID: UUID) -> URL {
@@ -89,6 +95,28 @@ public actor CatalogSync {
     /// moving (§4).
     @discardableResult
     public func sync() async throws -> SyncReport {
+        let refreshed = try await refresh()
+        var report = refreshed.report
+        guard refreshed.changed else { return report }
+
+        let summary = try ensureWriter().rebuild(from: refreshed.shards)
+        report.rebuilt = true
+        report.albums = summary.albums
+        report.photos = summary.photos
+        report.orphanedAlbums = summary.orphanedAlbums
+        report.duplicateNames = try duplicateNames()
+
+        return report
+    }
+
+    /// Everything `sync()` does except the rebuild: LIST, diff, fetch, record ETags, and
+    /// hand back every shard now on disk.
+    ///
+    /// The CLI stops here — it reconciles against the shards themselves and never wants a
+    /// merged database (§7). Splitting it out rather than giving the CLI its own loop is
+    /// the point: one implementation of "what does the zone hold", exercised by both
+    /// devices, so they cannot drift in how they diff or in what a missing key means.
+    public func refresh() async throws -> RefreshResult {
         var report = SyncReport()
 
         let diff = try await plan()
@@ -110,20 +138,11 @@ public actor CatalogSync {
             report.deletedAlbums.append(albumID)
         }
 
-        guard !diff.isEmpty else { return report }
-
         let (shards, unreadable) = try loadShards()
         report.unreadableShards = unreadable
 
-        try ensureWriter()
-        let summary = try writer.rebuild(from: shards)
-        report.rebuilt = true
-        report.albums = summary.albums
-        report.photos = summary.photos
-        report.orphanedAlbums = summary.orphanedAlbums
-        report.duplicateNames = try duplicateNames()
-
-        return report
+        return RefreshResult(shards: shards, report: report, changed: !diff.isEmpty,
+                             etags: try state.known())
     }
 
     /// The single LIST, diffed against what is on disk. The whole sync plan (§4).
@@ -170,25 +189,29 @@ public actor CatalogSync {
         return data
     }
 
-    /// Reads every shard on disk. A shard too new to read is skipped and named, never
-    /// treated as absent.
-    private func loadShards() throws -> (shards: [Shard], unreadable: [UUID]) {
+    /// Reads every shard on disk. A shard too new to read is skipped and *probed*, never
+    /// treated as absent: §3's two stable columns say which folder it claims, which is what
+    /// stops that folder being re-uploaded as a duplicate album.
+    private func loadShards() throws -> (shards: [Shard], unreadable: [ShardProbe]) {
         let directory = cacheRoot.appending(path: "shards")
         let files = (try? FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: nil
         )) ?? []
 
         var shards: [Shard] = []
-        var unreadable: [UUID] = []
+        var unreadable: [ShardProbe] = []
 
         for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
         where file.pathExtension == "db" {
             let name = file.deletingPathExtension().lastPathComponent
-            guard let albumID = UUID(uuidString: name) else { continue }
+            guard UUID(uuidString: name) != nil else { continue }
+            let data = try Data(contentsOf: file)
             do {
-                shards.append(try ShardReader.read(try Data(contentsOf: file)))
+                shards.append(try ShardReader.read(data))
             } catch ShardError.unsupportedVersion {
-                unreadable.append(albumID)
+                // A probe that itself fails is left to throw: the album is then genuinely
+                // unidentifiable, and continuing would risk duplicating it.
+                unreadable.append(try ShardReader.probe(data))
             }
         }
         return (shards, unreadable)
@@ -228,6 +251,35 @@ public actor CatalogSync {
         case staleETag
     }
 
+    /// Re-downloads one shard and records its new ETag. The 412 recovery path (§2): read
+    /// what actually landed, re-decide against it, write again.
+    public func reload(_ albumID: UUID) async throws -> Shard {
+        let data = try await fetchShard(albumID)
+        let shard = try ShardReader.read(data)
+        try data.write(to: shardPath(albumID), options: .atomic)
+        if let object = try await s3.head(StorageKey.shard(albumID)), let etag = object.etag {
+            try state.record(albumID, etag: etag.value)
+        }
+        return shard
+    }
+
+    /// The ETag this device last saw for a shard, for `If-Match`.
+    public func etag(of albumID: UUID) throws -> ETag? {
+        try state.known()[albumID].map { ETag(unquoted: $0) }
+    }
+
+    /// Removes an album's shard from the zone and from the local cache.
+    ///
+    /// The shard goes **first**, so the album stops existing before its blobs do: the
+    /// reverse order would leave a shard pointing at objects that are gone, and §2's rule
+    /// is that the catalog never lies. The blobs it listed become unreferenced and are the
+    /// caller's to delete.
+    public func deleteShard(_ albumID: UUID) async throws {
+        try await s3.delete(StorageKey.shard(albumID))
+        try? FileManager.default.removeItem(at: shardPath(albumID))
+        try state.forget(albumID)
+    }
+
     // MARK: - Local state
 
     /// Drops the merged database's contents and replays every shard on disk. No network.
@@ -238,8 +290,7 @@ public actor CatalogSync {
     public func rebuildFromDisk() throws -> SyncReport {
         var report = SyncReport()
         let (shards, unreadable) = try loadShards()
-        try ensureWriter()
-        let summary = try writer.rebuild(from: shards)
+        let summary = try ensureWriter().rebuild(from: shards)
         report.rebuilt = true
         report.unreadableShards = unreadable
         report.albums = summary.albums
@@ -254,6 +305,17 @@ public actor CatalogSync {
         let (shards, _) = try loadShards()
         return Set(shards.flatMap(\.objectIDs))
     }
+}
+
+/// What `refresh()` found: every shard now on disk, plus what the LIST implied.
+public struct RefreshResult: Sendable {
+    public var shards: [Shard]
+    public var report: SyncReport
+    /// Whether the LIST changed anything. `false` means the no-op run §7 promises: one
+    /// request and nothing else.
+    public var changed: Bool
+    /// album id → ETag, for the `If-Match` on a rewrite.
+    public var etags: [UUID: String]
 }
 
 public enum CatalogSyncError: Error, Hashable, Sendable, CustomStringConvertible {

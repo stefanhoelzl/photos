@@ -119,12 +119,32 @@ public final class Pipeline: Sendable {
         let extraction = try CR2.extract(contentsOf: item.url)
         let decoded = try PixelImage.decode(jpeg: extraction.jpeg,
                                             maxLongEdge: DerivativeSpec.previewLongEdge)
-        return try finishStill(item: item, tags: tags, decoded: decoded,
-                               original: .data(extraction.jpeg), mediaType: .photo)
+        // §3: the row describes what is in the zone. What is in the zone is the carved
+        // JPEG — so that is the name and that is the size, and the CR2's own name is kept
+        // as `sourceFilename` so reconciliation can still find the file on disk.
+        return try finishStill(
+            item: item, tags: tags, decoded: decoded,
+            original: .data(extraction.jpeg), mediaType: .photo,
+            filename: Self.renaming(item.filename, to: "jpg"),
+            sourceFilename: item.filename,
+            bytes: Int64(extraction.jpeg.count)
+        )
+    }
+
+    /// `IMG_1234.CR2` → `IMG_1234.jpg`. An extensionless name simply gains one.
+    ///
+    /// Public because D predicts the name before spending the CPU: two rows in one album
+    /// may not claim the same `filename` (§3), and the only way that happens is a
+    /// derivative renaming its source onto a sibling.
+    public static func renaming(_ filename: String, to ext: String) -> String {
+        let stem = (filename as NSString).deletingPathExtension
+        return stem.isEmpty ? filename : "\(stem).\(ext)"
     }
 
     private func finishStill(item: MediaItem, tags: ExifTags, decoded: PixelImage,
-                             original: OriginalSource, mediaType: MediaType) throws -> Derivatives {
+                             original: OriginalSource, mediaType: MediaType,
+                             filename: String? = nil, sourceFilename: String? = nil,
+                             bytes: Int64? = nil) throws -> Derivatives {
         // Orientation is already applied — libjpeg's caller bakes it, libheif applies irot
         // itself, and the video path bakes the display matrix — so the decoded buffer's own
         // dimensions are the display dimensions §3 wants stored.
@@ -139,8 +159,9 @@ public final class Pipeline: Sendable {
         continuation.yield(.thumbnailed(item.url, bytes: thumbnail.count))
 
         var row = ExifMapper.photoRow(
-            filename: item.filename,
-            bytes: item.byteCount,
+            filename: filename ?? item.filename,
+            sourceFilename: sourceFilename,
+            bytes: bytes ?? item.byteCount,
             mediaType: mediaType,
             tags: tags
         )
@@ -210,9 +231,15 @@ public final class Pipeline: Sendable {
         }
         continuation.yield(.transcoding(item.url, progress: 1))
 
+        // §3 again: the zone holds the transcode, not the camera's file, so the row is
+        // named and sized after the transcode. The source name survives in
+        // `sourceFilename` — which is also what tells §7's byte-size assertion to leave
+        // this row alone, since there is nothing on disk it should equal.
         var row = ExifMapper.photoRow(
-            filename: item.filename,
-            bytes: item.byteCount,
+            filename: Self.renaming(item.filename, to: "mp4"),
+            sourceFilename: item.filename,
+            bytes: (try? FileManager.default.attributesOfItem(atPath: output.path)[.size]
+                    as? Int64) ?? nil,
             mediaType: .video,
             tags: tags
         )

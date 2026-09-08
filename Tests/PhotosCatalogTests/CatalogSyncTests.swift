@@ -149,7 +149,12 @@ struct CatalogSyncTests {
         let (sync, _) = try makeSync(transport)
         let report = try await sync.sync()
 
-        #expect(report.unreadableShards == [futureID])
+        // Probed, not merely skipped: §3's two permanently stable columns say which folder
+        // the album claims, which is what lets D leave that folder alone instead of
+        // uploading it a second time.
+        #expect(report.unreadableShards.map(\.albumID) == [futureID])
+        #expect(report.unreadableShards.first?.sourcePath == "From The Future")
+        #expect(report.unreadableShards.first?.schemaVersion == CatalogSchema.version + 1)
         #expect(report.albums == 1)                 // the readable one still landed
         #expect(!report.deletedAlbums.contains(futureID))
         #expect(report.hasAnomalies)

@@ -112,6 +112,13 @@ public enum StorageKey {
     public static func shard(_ albumID: UUID) -> String { "\(metaPrefix)\(albumID.catalogString).db" }
     public static func blob(_ objectID: UUID) -> String { "\(blobPrefix)\(objectID.catalogString)" }
 
+    /// The object id in `blob/<uuid>`, or `nil` for anything else. What the orphan sweep
+    /// uses to tell a blob from the `blob/` directory marker or a stray key.
+    public static func objectID(fromBlobKey key: String) -> UUID? {
+        guard key.hasPrefix(blobPrefix) else { return nil }
+        return UUID(uuidString: String(key.dropFirst(blobPrefix.count)))
+    }
+
     /// The album id in `meta/<uuid>.db`, or `nil` for anything else — a directory marker,
     /// a stray key, a name that is not a uuid.
     ///

@@ -17,9 +17,10 @@ by the compiler rather than by discipline.
 | `CNativeImaging` / `CImaging` | the native stack and the C shim over it | done |
 | `PhotosPipeline` | **C** — thumbs, previews, transcode, CR2, pairing | done |
 | `PhotosLibrary` | walking `$LIBRARY_ROOT`, and `.photosignore` | done |
-| `photos-scan` | C's acceptance harness; D absorbs it as `photos scan` | done |
+| `photos-scan` | C's acceptance harness. Dev-only: it compares against one library's figures, so it does not ship | done |
 | `native-smoke` | the only thing that can exercise the musl build | done |
-| `photos` | D — ingest CLI | not started |
+| `PhotosIngest` | **D** — reconciliation, deletion, pull, sweep | done |
+| `PhotosCLI` | **D** — the shipped `photos-cli` binary | done |
 | `ios/` | E–G — the app | blocked on a Mac |
 
 ## Toolchain
@@ -31,6 +32,44 @@ curl -O https://download.swift.org/swiftly/linux/swiftly-x86_64.tar.gz
 tar zxf swiftly-x86_64.tar.gz && ./swiftly init
 swiftly install 6.3.3
 ```
+
+## Running it
+
+```sh
+cp photosignore.example ~/Pictures/Albums/.photosignore     # required: see DESIGN §7
+export PHOTOS_LIBRARY_ROOT=~/Pictures/Albums
+
+photos-cli sync --dry-run    # always, after any reorganisation
+photos-cli sync
+```
+
+**Production** takes the password from the desktop keyring and the endpoint from the
+environment:
+
+```sh
+secret-tool store --label='photos-cli' service photos-cli   # once
+export PHOTOS_ENDPOINT=https://de-s3.storage.bunnycdn.com/my-photos
+```
+
+**Development** overrides both from Proton Pass — `.proton.yaml` maps them, and `proton-env`
+injects them:
+
+```sh
+proton-env photos-cli sync --dry-run
+```
+
+`PHOTOS_PASSWORD` beats the keyring when it is set, and a run that uses it says so on stderr,
+so a stale variable cannot quietly point you at the wrong zone.
+
+`sync` is the only verb. The library says everything: a new folder is a new album, a deleted
+file is a deleted photo, `rm -rf` on an album deletes it from the zone. There is no
+confirmation step, and no run happens at all without a readable
+`$LIBRARY_ROOT/.photosignore` — that file is what proves the directory is the library rather
+than an unmounted mount point.
+
+Exit codes: `0` clean · `1` finished with failures · `2` usage · `3` aborted before writing
+anything · `75` deferred, the keyring is locked because nobody has logged in yet (production
+path only — a run under `proton-env` never consults a keyring, so it never defers).
 
 ## Build and test
 
@@ -69,6 +108,16 @@ Verified for milestone C: the whole imaging stack cross-compiles against the SDK
 sysroot — libheif and x265 included, both C++ — and the resulting static binary decodes,
 encodes and transcodes. **70.6 MB stripped**, so the imaging stack costs about 8 MB over A.
 
+Verified for milestone D: `photos-cli` itself links statically, swift-argument-parser and the
+vendored SQLite included. **80 MB stripped.** The only thing it does not carry is
+`secret-tool`, which it shells out to for the password — see DESIGN §1 for why linking
+libsecret (and therefore glib) was refused.
+
+```sh
+Scripts/with-native.sh musl swift build -c release \
+  --swift-sdk x86_64-swift-linux-musl --product photos-cli
+```
+
 musl is not a preference. Swift ships exactly one fully-static target, and glibc resolves DNS
 through NSS, which `dlopen`s at runtime — so a statically linked glibc binary would fail at
 the one thing this tool does on every run.
@@ -88,6 +137,13 @@ the one thing this tool does on every run.
   back — plus a keyed stub transport for the sync loop. No committed `.db` files, so nothing
   goes stale. The one case a round trip structurally cannot reach, a shard written by a
   *newer* schema, is forged in `Fixture.futureShard` rather than shipped as a binary.
+- **The ingest rules** — every rule that can lose a photograph — are proven in
+  `PhotosIngestTests` against real directories and hand-built shards, with no network and no
+  encoder: a `stat` decides existence, `.photosignore` decides uploads, a missing directory
+  deletes, an emptied one does not.
+- **The full cycle** runs against `FakeZone`, an in-process zone with real `If-Match` and a
+  clock a test can set. Deliberately not S3Mock: the wire is A's business and already covered
+  above, whereas the sweep's age floor can only be asserted by a test that owns the clock.
 
 ### Milestone B
 
@@ -178,3 +234,33 @@ is still nowhere near the constraint. DESIGN §7 and INGEST §3 now carry the me
 zone confirmed bunny.net accepts `UNSIGNED-PAYLOAD` on header-authenticated PUTs, so
 file uploads skip a full read pass over every byte. In-memory bodies are still hashed
 for real — they are small. `.signed` remains available.
+
+### Milestone D
+
+One verb, and the reason it is one verb. The interview that produced D tried three shapes
+before this one: an additive `sync` beside a destructive `prune`; then a `sync` that
+*restored* whatever was missing beside a `delete` that removed the local folder too. Both
+existed to stop an unattended hourly run reading "file not present" as "delete it from the
+zone" — a real hazard, since an unmounted disk, a half-finished copy and a broadened ignore
+rule all look exactly like that.
+
+What replaced them is structural rather than procedural:
+
+- **`.photosignore` is the library marker.** No readable file, no run. An unmounted disk is a
+  bare mount point; a root pointed one directory too high is somebody else's directory;
+  neither has one. That single check subsumes an empty-root check, an empty-album check and a
+  "did we recognise any album at all" check.
+- **Existence is a `stat`, not the walk.** The rules govern uploads and nothing else, so
+  broadening one can stop a photo going up but can never make an uploaded one look deleted.
+- **A missing directory deletes; an emptied one does not.** `rm album/*` leaves the album with
+  zero photos, because removing the directory is the gesture that means deletion.
+
+The cost, stated plainly: deletion is irreversible and now happens with no confirmation step.
+`sync --dry-run` is the only thing between you and it.
+
+Two schema consequences came out of the same interview, both in shard version **2**:
+`photo.bytes` now describes the blob a tap fetches rather than the file on disk — so §6's
+`Original …` badge stops lying for every video and every CR2 — and `photo.source_filename`
+carries the on-disk name when the two differ. `album_info.album_id` and `source_path` became
+permanently stable columns, which is what lets a shard too new to read still say which
+directory it claims, so that directory is left alone rather than uploaded a second time.

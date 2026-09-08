@@ -21,10 +21,16 @@ let package = Package(
         .library(name: "PhotosCatalog", targets: ["PhotosCatalog"]),
         .library(name: "PhotosPipeline", targets: ["PhotosPipeline"]),
         .library(name: "PhotosLibrary", targets: ["PhotosLibrary"]),
+        .library(name: "PhotosIngest", targets: ["PhotosIngest"]),
+        .executable(name: "photos-cli", targets: ["PhotosCLI"]),
         .executable(name: "photos-scan", targets: ["photos-scan"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.8.0"),
+        // Pure Swift, no swift-nio. §7's objection to Soto was NIO's static-link cost under
+        // musl, not dependencies as such, and a four-flag CLI with subcommands, --help and
+        // exit codes is most of what this package is.
+        .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
     ],
     targets: [
         // The contracts both sides of the system share: the EXIF vocabulary and its
@@ -96,8 +102,36 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
+        // Milestone D. Everything that decides what the zone should contain: folder→album
+        // matching, the per-album diff, container synthesis, the mixed-folder and
+        // too-new-shard rules, the pull and the orphan sweep.
+        //
+        // A library rather than part of the executable because this is the code most worth
+        // testing offline — every rule here can lose photographs — and an ArgumentParser
+        // command is awkward to drive from a test.
+        .target(
+            name: "PhotosIngest",
+            dependencies: ["PhotosCore", "PhotosStorage", "PhotosCatalog",
+                           "PhotosPipeline", "PhotosLibrary"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        // The shipped binary: argument parsing, credentials and console output. No
+        // judgement about the library lives here.
+        .executableTarget(
+            name: "PhotosCLI",
+            dependencies: [
+                "PhotosIngest",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
         // Milestone C's acceptance harness (§10: "verified by running over the real library").
-        // D absorbs this as `photos scan` and the standalone target goes away.
+        //
+        // Deliberately *not* absorbed into the shipped binary: it compares against figures
+        // measured from one particular library, and baking those into a package this design
+        // presents as reusable is the mixing of concerns `INGEST.md` exists to prevent. Built
+        // from source when the pipeline changes; never installed.
         .executableTarget(
             name: "photos-scan",
             dependencies: ["PhotosCore", "PhotosPipeline", "PhotosLibrary"],
@@ -136,6 +170,12 @@ let package = Package(
         .testTarget(
             name: "PhotosPipelineTests",
             dependencies: ["PhotosPipeline"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "PhotosIngestTests",
+            dependencies: ["PhotosIngest", "PhotosCatalog", "PhotosPipeline",
+                           "PhotosStorage", "PhotosLibrary"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]

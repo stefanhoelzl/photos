@@ -25,8 +25,8 @@ Both render identically; only the content differs.
 
 **Components**
 - **Storage** — one bunny.net storage zone (Frankfurt), S3-compatible API.
-- **Ingest CLI** — Linux, single static binary. Populates the zone from a local library root,
-  and pulls phone-uploaded albums back down.
+- **Ingest CLI** — Linux, single static binary (`photos-cli`). Reconciles the zone with a
+  local library root in one command, and pulls phone-uploaded albums back down.
 - **iOS app** — browses the zone; can upload new albums.
 
 **Hard constraints**
@@ -108,23 +108,48 @@ and that domain serves `/.well-known/apple-app-site-association` over HTTPS with
 Without it, iOS shows only a generic key icon and the entry must be found by hand. Password
 fields use `textContentType = .password` alongside a `.username` field.
 
-**The laptop is different.** The systemd unit needs unattended write access, so its copy of the
-password is encrypted with `systemd-creds encrypt --with-key=host` and loaded via
-`LoadCredential=`. TPM sealing may be unavailable, in which case it is host-key encrypted rather
-than hardware-bound.
+**The laptop is different.** The systemd unit needs unattended write access, and takes it from
+the same keyring — which is why a run before the first login defers rather than fails. It runs
+`photos-cli` directly, not under `proton-env`: the development override exists for a terminal,
+not for a timer.
 
-Local credential mapping for the CLI lives in `.proton.yaml`:
+The CLI takes the endpoint from the environment and the password from the desktop keyring:
 
-| env var | contents |
+| where | contents |
 |---|---|
-| `PHOTOS_ENDPOINT` | the full **storage URL** — host and zone in one value |
-| `PHOTOS_PASSWORD` | the zone's Secret Access Key |
+| `PHOTOS_ENDPOINT` | the full **storage URL** — host and zone in one value. Not a secret. |
+| `PHOTOS_LIBRARY_ROOT` | the library root. Not a secret either. |
+| `secret-tool lookup service photos-cli` | the zone's Secret Access Key |
+
+**In production the key lives in the keyring and nowhere else.** Store it once with
+`secret-tool store --label='photos-cli' service photos-cli`; it is then not in a dotfile, not
+in the environment, and not inherited by child processes.
+
+**In development `PHOTOS_PASSWORD` overrides it**, because the secret is already in Proton
+Pass and `proton-env` — which reads `.proton.yaml` and execs with the entries injected — is
+how every other command in this repository reaches it:
+
+```sh
+proton-env photos-cli sync --dry-run
+```
+
+The environment wins when it is set, which is what an override means, and a run that takes
+that path **says so on stderr** — a stale variable silently outranking the keyring is exactly
+the kind of thing that costs an hour, so it is not silent. An *empty* variable is treated as
+unset: `proton-env` that cannot resolve an entry leaves the name defined and blank, and a
+blank secret would otherwise reach the signer and come back as an opaque 403.
+
+libsecret itself is not linked — see §7's dependency note, and the accepted cost on the
+production path: **an unattended run before the first graphical login finds the keyring
+locked**, because gnome-keyring unlocks through PAM at login. That is a deferral rather than a
+failure. The run prints one line and exits **75** (`EX_TEMPFAIL`), and the unit declares
+`SuccessExitStatus=75` so `OnFailure=` stays quiet; the next hourly run succeeds once you have
+logged in. A keyring that *is* reachable and holds no such item is a real error and says so.
 
 > **One key here too.** An earlier draft gave the CLI a read-only/read-write split, on the
 > grounds that the hourly systemd unit should not hold a key that can delete the library. It
 > was dropped: bunny.net issues one Secret Access Key per zone, so the split would have to be
-> maintained by hand for a single unattended process whose blast radius is already bounded by
-> `--prune` never running unattended (§7). One key, one concept, everywhere.
+> maintained by hand for a single unattended process. One key, one concept, everywhere.
 
 No encryption beyond TLS. The zone is private (AWS4-signed requests only, no public pull zone).
 Accepted: anyone with the read key, and bunny.net itself, can read the photos.
@@ -243,14 +268,15 @@ CREATE TABLE album_info (
 );
 
 CREATE TABLE photo (
-  id            TEXT PRIMARY KEY,    -- row identity; survives re-encoding
-  filename      TEXT NOT NULL,       -- NFC, with extension, exactly as on disk
+  id              TEXT PRIMARY KEY,  -- row identity; survives re-encoding
+  filename        TEXT NOT NULL,     -- NFC, with extension; the name *in the zone*
+  source_filename TEXT,              -- the name on disk, when it differs. NULL usually
   taken_at      INTEGER,             -- epoch seconds; NULL when no EXIF date
   lat           REAL,
   lon           REAL,
   width         INTEGER,             -- display dimensions, already rotated
   height        INTEGER,
-  bytes         INTEGER,
+  bytes         INTEGER,           -- the size of the blob a tap fetches, not the file's
   media_type    INTEGER NOT NULL,    -- 0 photo · 1 video · 2 live photo
   original_id   TEXT,                -- blob: the original as uploaded
   live_video_id TEXT,                -- blob: paired MOV, when media_type = 2
@@ -259,6 +285,25 @@ CREATE TABLE photo (
 );
 CREATE INDEX ix_photo_taken ON photo(taken_at);
 ```
+
+**The row describes what is in the zone, not what is on disk.** `bytes` is the size of the
+blob a tap actually fetches, and `filename` carries the extension its bytes really have — so
+§6's `Original …` badge is true for every one of the 34,201 files rather than for the 33,768
+whose original happens to be the file itself. For a video that means the transcode, for a
+developed CR2 the carved JPEG, and `source_filename` keeps the camera's own name so ingest
+can still find the file on disk: `IMG_1234.CR2` beside `filename = IMG_1234.jpg`,
+`VID_0001.MOV` beside `VID_0001.mp4`. It is NULL for the great majority of rows, where the
+blob simply *is* the file.
+
+That column is also what says whether §7's byte-size assertion applies. Only a row whose
+original was uploaded byte-for-byte can be checked against a directory entry; a video has no
+original in the zone at all, and a carved RAW's blob is 1.6 MB of JPEG next to 22 MB of CR2.
+
+**`album_id` and `source_path` are permanently stable.** Never removed, never retyped,
+whatever a later `schema_version` does. That is what lets any reader learn which folder a
+shard claims without understanding the rest of it — so a shard too new to read is still
+*identifiable*, and the CLI can leave its directory alone instead of uploading it a second
+time. Everything else in the schema is free to change.
 
 **A typed single row, not a key/value bag.** `album_info` holds real columns with real types,
 so the schema documents itself and a mistyped field fails when the statement is prepared
@@ -338,7 +383,7 @@ CREATE INDEX ix_album_folded ON album(name_folded);
 
 CREATE TABLE photo (
   id, album_id TEXT NOT NULL REFERENCES album(album_id),
-  filename, taken_at, lat, lon, width, height, bytes,
+  filename, source_filename, taken_at, lat, lon, width, height, bytes,
   media_type, original_id, live_video_id, preview_id, video_id,
   PRIMARY KEY (album_id, id)
 );
@@ -414,6 +459,14 @@ self-correcting once that device updates.
 > library against the bucket, and a skipped album that reads as "not there" would be re-uploaded
 > as a new one — with UUID keys there is no key collision to stop it, so the result is a silent
 > duplicate.
+>
+> Which is why the two columns above are stable for ever: a skipped shard is still *probed* for
+> `album_id` and `source_path`, so the CLI knows which directory it claims and leaves that
+> directory entirely alone — not uploaded, not deleted, not re-minted. A shard whose probe also
+> fails is the one genuinely unidentifiable case, and it aborts the run.
+
+Version **2** is current: it added `source_filename` and redefined `bytes` as the size of the
+blob rather than of the file on disk.
 
 ---
 
@@ -464,8 +517,11 @@ shards means `merged.db` can be deleted and rebuilt with no network at all. Dele
 
 **Reported, not resolved.** A sync returns what it could not make sense of rather than guessing:
 albums whose `parent` resolved to nothing (surfaced at top level), shards too new to read
-(skipped), and duplicate names under one parent (both shown). Each is a condition the design
-deliberately does not auto-correct.
+(skipped, and their directory left alone), duplicate names under one parent (both shown), a
+directory holding both files and sub-albums, loose files at the library root, a file the
+pipeline could not decode, and an ignore rule that matched nothing. Each is a condition the
+design deliberately does not auto-correct, and each is named on **every** run until a person
+deals with it — which is the only thing that distinguishes a typo from a rule not yet needed.
 
 ---
 
@@ -657,7 +713,11 @@ shared package, because a contract belongs with the other contracts.
 **One fully self-contained static binary.** Swift's Static Linux SDK cross-compiles against
 musl — `swift build --swift-sdk x86_64-swift-linux-musl` — producing a static ELF with no
 dynamic linker, no shared libraries and no Swift installation on the target, for x86-64 and
-ARM64. **libheif, x265 and ffmpeg are statically linked in**, not shelled out.
+ARM64. **libheif, x265 and ffmpeg are statically linked in**, not shelled out. Measured: 80 MB
+stripped.
+
+The one thing it does shell out to is `secret-tool`, for the password (§1) — a deliberate
+trade against linking glib, and the only reason the binary is not literally self-sufficient.
 
 musl is not a preference: Swift ships exactly one fully-static target, and glibc resolves DNS
 through NSS, which `dlopen`s at runtime — so a statically linked glibc binary breaks the one
@@ -669,9 +729,24 @@ thing this tool does on every run.
 macOS builds need no external tools at all — it reuses the iOS `ImageBackend`.
 Windows is unblocked but untargeted.
 
+### Dependencies
+
+**URLSession + swift-crypto + swift-argument-parser. No Soto, no swift-nio, no glib.**
+
+swift-argument-parser is pure Swift and links statically under musl without trouble; §7's
+objection to Soto was swift-nio's static-link cost and its lack of Windows support, not
+dependencies as such, and subcommands, `--help`, validation and exit codes are most of what a
+CLI is.
+
+**glib stays out, which means no libsecret.** Reaching the desktop keyring through libsecret
+would drag meson, libffi, PCRE2, proxy-libintl, libgcrypt and libgpg-error into both build
+prefixes for about 8 MB — and glib `dlopen`s its GIO modules, which is a stub that always
+fails in a static musl binary. `secret-tool` is shelled out to instead (§1). The same
+reasoning already kept libvips out (`Scripts/PROVENANCE.md`).
+
 ### S3 layer
 
-**URLSession + swift-crypto + a hand-written AWS4-HMAC-SHA256 signer. No Soto, no swift-nio.**
+**A hand-written AWS4-HMAC-SHA256 signer over URLSession.**
 
 Soto pulls in swift-nio, which is large to link statically and does not support Windows.
 The signing surface here is small — one service (`s3`), one region, static credentials, no STS
@@ -682,18 +757,40 @@ explicitly developer preview.
 **Validate against AWS's published SigV4 test vectors.** A subtle signing bug fails *every*
 request, so this is the one place that needs real test coverage.
 
+### One verb
+
+**`photos-cli sync`, and nothing else.** The library is the master copy and the only way to say
+anything: adding a folder adds an album, deleting a file deletes its photo, `rm -rf` on an
+album deletes the album. There is no `delete` command, no `--prune`, no `--confirm` and no
+pending state to remember — **`--dry-run` is the one place to look before it happens.**
+
+> An earlier draft split this into an additive `sync` and a destructive `prune --dry-run
+> --confirm`, and then into a `sync` that *restored* anything missing plus a `delete` that
+> removed the local folder too. Both were attempts to stop an unattended hourly run treating
+> "file not present" as "delete it from the zone" — a real hazard, since an unmounted disk, a
+> half-finished copy and a broadened ignore rule all look exactly like that. The guards below
+> address it structurally instead, which is what let the second command go. The one thing not
+> recovered is ceremony: deletion is irreversible and now happens without a confirmation step.
+
 ### Behaviour
 
-- **Idempotency: LIST the bucket and compare against local files.** No local state file, so the
-  tool is self-correcting and survives losing laptop state. Costs a full LIST each run. Under
-  UUID keys the comparison runs through the shards: `source_path` reconnects a local folder to
-  its album, and filenames within it are matched against `photo` rows.
-- **Images are asserted never to change on disk**, and the assertion is checked. A file present
-  in both places is untouched; local-only is new; a row with no file is deleted. Ingest also
+- **Idempotency: LIST the bucket and compare against the library.** No local state beyond a
+  cache of the shards themselves, so the tool is self-correcting and survives losing laptop
+  state. Under UUID keys the comparison runs through the shards: `source_path` reconnects a
+  local directory to its album, and filenames within it are matched against `photo` rows —
+  against `source_filename` too, so an album still reconciles after a pull has replaced a CR2
+  with its carved JPEG.
+- **Existence is a `stat`, never the walk.** Whether a row still has a file is answered by
+  stat-ing `source_path/filename` directly. `.photosignore` decides what may be *uploaded* and
+  nothing else, so broadening a rule can only ever stop an upload — it can never make a
+  photograph look deleted. This is the rule the whole deletion model rests on.
+- **Images are asserted never to change on disk**, and the assertion is checked. Ingest
   compares the shard's `bytes` against the directory entry — free, since the scan reads it
   anyway — and **aborts the run on a mismatch** rather than re-ingesting. A changed file means
   the library broke its contract, so nothing is written that run and `OnFailure=` surfaces it.
-  There is no mtime column, no hashing pass and no re-ingest path.
+  There is no mtime column, no hashing pass and no re-ingest path. The check covers the 33,768
+  rows whose original *is* the file on disk; video and carved-RAW rows have nothing on disk
+  their `bytes` should equal, so they are not checked.
 - **Parallelism:** one worker per core for encoding. Measured during milestone C on real
   18 MP photos: **2.7 s/photo serial**, **0.43 s/photo** wall with 16 workers — so roughly
   **4 h for ~34k photos**, plus video. The HEIC encode is ~1.5 s of the 2.7 s and does not
@@ -702,14 +799,37 @@ request, so this is the one place that needs real test coverage.
   > An earlier 0.79 s/photo, i.e. 40–60 min, was recorded here. It was optimistic by ~3.4×.
   > The conclusion it supported is unchanged and in fact stronger: §9's upload is 17–22 h and
   > encoding overlaps it, so encoding is nowhere near the bottleneck either way.
-- **Deletion is laptop-only, explicit, dry-run first.** `--prune --dry-run` prints what it would
-  remove; `--confirm` acts. The same pass sweeps **unreferenced blobs** — objects whose shard
-  write never landed, e.g. a crash mid-upload — since it is already computing the full set of
-  referenced ids. One destructive command rather than two. **The app never deletes.** `delete` exists on the shared S3 client
-  because the CLI needs it, but no iOS code path calls it — a convention, not a compiler-enforced
-  boundary. With no versioning underneath, this is the single irreversible operation in the system.
-- **Pull is archive-only.** Phone-uploaded albums are copied into `$LIBRARY_ROOT`; the
-  laptop never rewrites a phone-owned album's objects.
+- **Deletion is what the library says it is.** A row whose file is gone is dropped, its blobs
+  deleted and the album's thumbnail pack repacked, in the same run. A **directory that is gone**
+  deletes the album — shard first, so the album stops existing before its objects do and the
+  catalog never names a blob that is not there. A directory that still exists but has lost every
+  file is not a special case at all: every row drops and the album survives with **zero photos**,
+  because `rm album/*` is not how an album is deleted.
+- **The one structural guard: `$LIBRARY_ROOT/.photosignore` must exist and be readable**, or the
+  run aborts before writing anything. The file doubles as the marker saying *this directory is a
+  library root*, which is what makes unattended deletion defensible: an unmounted disk is a bare
+  mount point with no marker, a mistyped root (`~/Pictures` for `~/Pictures/Albums`) has no
+  marker, and a missing root has none either. One rule covers all three, with no notion of "too
+  many deletions" to tune.
+- **The orphan sweep runs inside `sync`**, on the same pass. Unreferenced blobs — objects whose
+  shard write never landed, e.g. a crash mid-upload — are deleted once they are **older than
+  seven days**. That floor is anchored rather than guessed: presigned URLs live at most 7 days
+  (§1) and §8's background uploads run against them, so an older blob cannot belong to an upload
+  that can still complete, while a younger one is indistinguishable from one the phone is
+  uploading right now. The sweep stands down entirely if any shard is too new to read, since the
+  referenced set would then be missing whatever that album owns.
+- **The app never deletes.** `delete` exists on the shared S3 client because the CLI needs it,
+  but no iOS code path calls it — a convention, not a compiler-enforced boundary. With no
+  versioning underneath, deletion is the single irreversible operation in the system.
+- **Pull is archive-only, and folded into `sync`.** An album with no `source_path` was made by
+  the phone: `sync` copies it into `$LIBRARY_ROOT` and *claims* it with one `If-Match` write
+  setting `source_path`, which is metadata rather than the objects the laptop must not rewrite.
+  From then on it is an ordinary album. A pulled Live Photo's MOV has no name of its own in the
+  catalog and is written as `<still-stem>.MOV`, the convention all 187 pairs already follow;
+  pairing is by content identifier, so the walker re-pairs it either way. Pulls write
+  unconditionally — the ignore rules govern what goes up.
+- **A laptop-owned album is never restored.** `sync` reads the library and writes the zone; it
+  does not put files back. Deleting a folder is a deletion, not a divergence to repair.
 - **What to exclude comes from the library, not the tool: `$LIBRARY_ROOT/.photosignore`.**
   The CLI carries no built-in exclusions — no extension list, no filename list, not even a
   dot-file rule. The single hardcoded rule is that `.photosignore` excludes itself. What
@@ -721,27 +841,32 @@ request, so this is the one place that needs real test coverage.
     directory, which is not descended into; `#` comments. No negation and no `**`, so order
     never matters — a partial gitignore that *looks* like gitignore is worse than one that
     plainly is not. Matching ignores case and Unicode composition (§2's hazard).
-  - **Missing means no exclusions**, silently. **Present but unreadable aborts the run** — a
-    file that exists means exclusions were intended, and continuing without them is how a
-    trash directory full of deleted photographs gets uploaded. Same posture as the byte-size
-    mismatch above.
-  - Applied by the walker and nowhere else, so the ingest pass, the `--prune` sweep and the
-    change assertion cannot disagree about what the library contains. An **ignored file is
-    therefore indistinguishable from an absent one**: broadening a rule marks already-uploaded
-    photos for removal, which `--prune --dry-run` is what stands between you and losing them.
+  - **Missing or unreadable aborts the run**, because the file is also the marker that says
+    this directory is the library (see the guard above). A library that genuinely wants no
+    exclusions writes an empty one — which is a sentence of explanation in exchange for
+    making an unmounted disk structurally unable to look like a library whose every album was
+    deleted.
+  - Applied by the walker and nowhere else, and it governs **uploads only**. Whether a row
+    still has a file is a separate question answered by `stat`, so an ignored file and an
+    absent one are *not* the same thing: broadening a rule stops photos going up, and can
+    never mark uploaded ones for removal.
   - The run reports how many files each rule excluded, and names any rule that matched
     nothing — the only way a typo is distinguishable from a rule not yet needed.
-  - `photosignore.example` in the repository is a commented starting point.
+  - `photosignore.example` in the repository is a commented starting point, and — since the
+    file is now required — the thing to copy in before the first run.
 
 ### Unattended sync (systemd user units)
 
-- `OnCalendar=hourly`, `Persistent=true`, `RandomizedDelaySec=5m`. A no-op run is one LIST.
-- Pull + push of new content. **`--prune` is never run unattended.**
+- `OnCalendar=hourly`, `Persistent=true`, `RandomizedDelaySec=5m`. A no-op run is one LIST —
+  which is exactly what the ETag cache beside the shards buys.
+- `SuccessExitStatus=75`, so a locked keyring before the first login is quiet rather than a
+  notification every hour.
+- The full reconciliation, deletions included. There is no second command to withhold: the
+  marker guard is what makes that safe.
 - No `.path` unit: `systemd.path` is not recursive (it would see a new album folder but not
   photos added inside an existing one) and is edge-triggered when the directory entry appears —
   i.e. *before* a copy finishes — so it would sync half-copied albums.
-- Write key via `systemd-creds encrypt --with-key=host` + `LoadCredential=`; never in the unit
-  file, the environment, or `ps`.
+- The key comes from the keyring, never from the unit file, the environment, or `ps`.
 - Guards: `ConditionACPower=true` (never transcode on battery), `Nice=19`,
   `IOSchedulingClass=idle`, a `CPUQuota=` ceiling, and an `OnFailure=` notification unit.
 - `Wants=`/`After=network-online.target`. Linger is already enabled.
@@ -780,9 +905,14 @@ inside an album, a sub-album of it.
 
 **Upload order — originals, then previews, then thumbnails, then the shard LAST**, only after
 every object is uploaded and verified. An interrupted upload therefore leaves **orphan objects
-that no catalog references** — invisible, harmless, swept up by the next `--prune` — rather than
-a catalog pointing at objects that do not exist. Cost: the album does not appear on other
-devices until it is complete.
+that no catalog references** — invisible, harmless, swept up by the laptop's sweep once they
+are a week old — rather than a catalog pointing at objects that do not exist. Cost: the album
+does not appear on other devices until it is complete.
+
+> The seven-day floor on that sweep exists for exactly this upload. Below it, an unreferenced
+> blob is indistinguishable from one this session has uploaded but not yet written a shard
+> for; above it, the presigned URLs it was uploaded through have expired, so it cannot belong
+> to an upload that can still finish (§7).
 
 **Transfer** uses a background `URLSession` with `allowsCellularAccess = true`, so it survives
 the app being backgrounded, the phone locked, and app crashes. Progress is shown live in the
@@ -850,7 +980,12 @@ cannot renegotiate.
 Thumbs, previews, video transcode, CR2 extraction, Live-Photo pairing, `.photosignore`
 filtering, and the Linux `ImageBackend`. Verified by running over the real library and checking output against
 previously measured sizes and counts (see `INGEST.md`) — any large deviation means the pipeline
-is wrong. `photos-scan` is that check, made repeatable; D absorbs it as `photos scan`.
+is wrong. `photos-scan` is that check, made repeatable.
+
+> §10 originally had D absorb it as `photos scan`. It does not: the figures it compares
+> against were measured from one particular library, and compiling those into a package this
+> document presents as reusable is the mixing of concerns `INGEST.md` exists to prevent. It
+> stays a dev-only target, built from source when the pipeline changes and never installed.
 
 > §10 originally called C dependency-free. It is not: `ImageBackend`, `ExifTags`, `MediaType`
 > and `PhotoRow` are contracts both the catalog and the pipeline own, so they live in a
@@ -861,15 +996,22 @@ is wrong. `photos-scan` is that check, made repeatable; D absorbs it as `photos 
 > phone uploads from `PHAssetCollection` and has no library tree to walk.
 
 **D · Ingest CLI** = A+B+C — first real data in the bucket.
+`PhotosIngest` holds every rule that decides what the zone should contain — folder→album
+matching, the per-album diff, container synthesis, the mixed-folder and too-new-shard rules,
+the pull, the sweep — and `photos-cli` is argument parsing and wiring over it. That split is
+not tidiness: this is the code that can lose photographs, and it has to be reachable from a
+test with a temporary directory and nothing else.
 *Ingest one album end-to-end before the bulk import.*
 
 **E · iOS read-only app** = B — first point the project is useful. Can start on fixtures.
+It must render an album with **zero photos**: emptying a directory leaves one (§7).
 
 **F · Map** = B — parallel with E.
 
 **G · iOS upload** = A+B.
 
-**H · Laptop pull + systemd** = D.
+**H · systemd units** = D. Pull is not part of it: `sync` already pulls and claims
+phone-owned albums, so H is the units and nothing more.
 
 ```
 A → B → C  →  D  →  (E ∥ F)  and  (G ∥ H)
