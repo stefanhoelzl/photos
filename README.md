@@ -47,12 +47,16 @@ The library root is the working directory, or `--library-path`. Run it somewhere
 a library and it aborts on the missing `.photosignore` rather than concluding every album was
 deleted.
 
-**Production** takes both credentials from the desktop keyring — two items under one service:
+**Production** takes both credentials from the desktop keyring — two items under one service,
+stored and removed by the tool itself:
 
 ```sh
-secret-tool store --label='photos-cli password' service photos-cli field password
-secret-tool store --label='photos-cli endpoint' service photos-cli field endpoint
+photos-cli login     # prompts for the endpoint and the password, stores both
+photos-cli logout    # removes both
 ```
+
+The keyring is read and written in-process over D-Bus, so nothing is shelled out to and
+nothing needs to be on `PATH`. Items stored earlier with `secret-tool` are found unchanged.
 
 **Development** overrides them from Proton Pass — `.proton.yaml` maps them, `proton-env`
 injects them:
@@ -71,8 +75,10 @@ confirmation step, and no run happens at all without a readable
 than an unmounted mount point.
 
 Exit codes: `0` clean · `1` finished with failures · `2` usage · `3` aborted before writing
-anything · `75` deferred — either another sync holds the lock, or the keyring is still locked
-because nobody has logged in yet.
+anything · `75` deferred — another sync holds the lock, or the keyring cannot be reached: no
+session bus yet, nothing answering on it, or a collection still locked because nobody has
+logged in. A keyring that *does* answer and holds no such item is a real error, not a
+deferral, and says so.
 
 Only one sync runs at a time (an `flock` in the cache directory), which matters because the
 first import outlasts the hour between timer firings. A run prints what it intends, then a
@@ -85,7 +91,7 @@ Milestone C links a native imaging stack, so builds go through a wrapper that po
 pkg-config at the right prefix:
 
 ```sh
-Scripts/build-native.sh host          # once: libjpeg-turbo, libheif, x265, ffmpeg, lcms2, libexif
+Scripts/build-native.sh host          # once: libjpeg-turbo, libheif, x265, ffmpeg, lcms2, libexif, dbus
 Scripts/with-native.sh host swift build
 Scripts/with-native.sh host swift test
 ```
@@ -97,6 +103,10 @@ installed system-wide and nothing needs `sudo`.
 `swift test` starts adobe/S3Mock itself, on a free port, and stops it afterwards.
 The jar is fetched into the gitignored `.tools/` on first run; it needs `java`.
 Without java the round-trip tests skip and the rest still run.
+
+The keyring tests do the same with `dbus-daemon`: each one gets a private bus with a stub
+Secret Service on it, so they exercise the real wire protocol without ever reading or writing
+your actual credentials. Without `dbus-daemon` they skip and the rest still run.
 
 ## Static Linux binary
 
@@ -117,9 +127,10 @@ sysroot — libheif and x265 included, both C++ — and the resulting static bin
 encodes and transcodes. **70.6 MB stripped**, so the imaging stack costs about 8 MB over A.
 
 Verified for milestone D: `photos-cli` itself links statically, swift-argument-parser and the
-vendored SQLite included. **80 MB stripped.** The only thing it does not carry is
-`secret-tool`, which it shells out to for the password — see DESIGN §1 for why linking
-libsecret (and therefore glib) was refused.
+vendored SQLite included. **80.6 MiB stripped**, and it shells out to nothing: the desktop
+keyring is reached in-process through a statically linked libdbus-1, which costs 204 KB. See
+DESIGN §1 for why libsecret (and therefore glib) is still refused — libdbus is not glib — and
+`Scripts/PROVENANCE.md` for what that pulled in.
 
 ```sh
 Scripts/with-native.sh musl swift build -c release \

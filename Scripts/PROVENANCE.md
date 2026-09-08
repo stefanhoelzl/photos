@@ -1,5 +1,6 @@
-# Native imaging stack — what is built, and why
+# Native libraries — what is built, and why
 
+Mostly milestone C's imaging stack, plus the two libraries the keyring client needs (§1).
 `build-native.sh` fetches and builds these from pinned source releases into
 `.tools/native/<host|musl>/`, which is gitignored. Nothing is installed system-wide and
 nothing needs `sudo`; this machine has none.
@@ -15,6 +16,7 @@ configuration and the shipped one the same code rather than merely similar.
 |---|---|---|
 | `Sources/CImaging` | **our own C**, ~2,200 lines — the shim over the libraries below | yes, it is our source |
 | `Sources/CNativeImaging` | a `systemLibrary` target carrying pkg-config flags; one modulemap and an empty header, no code | yes, ~300 bytes |
+| `Sources/CDBus` | the same, for libdbus-1 — but its modulemap *does* expose `<dbus/dbus.h>`, because the Secret Service client is Swift written against it directly | yes, ~600 bytes |
 | the libraries below | fetched as pinned source tarballs into gitignored `.tools/native/src` (~307 MB) and built here | **no** |
 
 That last row is the difference from `Sources/CSQLite`, which *is* vendored: SQLite is a single
@@ -31,6 +33,8 @@ people's source in a Swift package, which is why this script exists.
 | **ffmpeg** | 7.1.1 | Video decode/transcode, PNG and TIFF decode, and swscale — the single resampler for stills and video frames alike. Configured `--disable-everything` and then enumerated; see below. |
 | **lcms2** | 2.16 | The one colour conversion the pipeline performs: thumbnails to sRGB. ~1 MB of C, no dependencies. |
 | **libexif** | 0.6.24 | EXIF extraction. Apple's maker note is walked by hand on top of the raw bytes libexif hands back — a bounded read of one documented IFD, which is what keeps exiv2 (C++, GPL, another cross-build) out of the stack for the sake of 187 Live Photos. |
+| **libdbus-1** | 1.14.10 | The Secret Service client (§1) — the desktop keyring, read and written in-process instead of by exec'ing `secret-tool`, which is what makes the shipped binary self-sufficient. The reference D-Bus implementation, dependent on nothing but libc, and **not** glib: that is libsecret, which is what §7 refused. 204 KB in the final binary after `--gc-sections`. 1.14.x rather than 1.16, which dropped autotools for meson. Only the `dbus/` subdirectory is built — the daemon and the command-line tools are precisely what is being removed. |
+| **expat** | 2.6.4 | Not wanted for itself: dbus's `configure` requires an XML parser even when only the client library is being built, and refuses to proceed without one. No dependencies of its own, and nothing in our code includes it. |
 | **cmake** | 3.31.6 | Build tool, fetched as a binary. |
 | **nasm** | 2.16.03 | Build tool, built from source. Needed for libjpeg-turbo's SIMD and x265's assembly. |
 
@@ -45,6 +49,15 @@ Not here, and deliberately:
 - **libvips** — its tidier API buys nothing once a C shim exists anyway (libjpeg's
   `setjmp`/`longjmp` error handling forces one), and it would drag a glib stack into the musl
   cross-build.
+- **libsecret** — the keyring library, as opposed to libdbus the *bus* library. It would drag
+  meson, libffi, PCRE2, proxy-libintl, libgcrypt and libgpg-error in for about 8 MB, and glib
+  `dlopen`s its GIO modules, which always fails in a static musl binary. The Secret Service is
+  a D-Bus protocol; speaking it needs libdbus and about 300 lines of Swift.
+- **`KeyringAccess` / `wendylabsinc/dbus` (Swift)** — the right shape, Apache-2.0, and pure
+  Swift, but built on SwiftNIO and arriving with CryptoSwift and swift-nio-ssl. Measured
+  against the Static Linux SDK: +8.5 MB and +18 packages, including nio-http2,
+  swift-certificates and service-lifecycle, plus a second BoringSSL beside swift-crypto's — to
+  read one password once per run.
 
 ## ffmpeg's configuration
 
@@ -96,3 +109,9 @@ stops the correct order from being something anyone has to know.
 
 Writing the `.pc` ourselves is also what keeps `unsafeFlags` out of `Package.swift` — a package
 using them cannot be consumed as a dependency, and the iOS app will consume this one.
+
+`photos-dbus.pc` is separate rather than folded in, because it is a separate concern:
+`PhotosIngest` links the keyring client and `PhotosPipeline` links the imaging stack, and
+neither should drag the other in merely because one script builds both. It carries two include
+directories, since dbus generates `dbus-arch-deps.h` per architecture and installs it under
+`libdir` rather than beside its other headers.

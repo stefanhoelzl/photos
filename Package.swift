@@ -109,10 +109,17 @@ let package = Package(
         // A library rather than part of the executable because this is the code most worth
         // testing offline — every rule here can lose photographs — and an ArgumentParser
         // command is awkward to drive from a test.
+        // libdbus-1, for reading and writing the keyring in-process (§1).
+        //
+        // Linux-only, and conditionally depended on below: the Secret Service is a
+        // freedesktop concept, and the phone reaches its credentials through the Keychain.
+        // That is also why this is not in PhotosStorage — nothing here is shared with iOS.
+        .systemLibrary(name: "CDBus", path: "Sources/CDBus", pkgConfig: "photos-dbus"),
         .target(
             name: "PhotosIngest",
             dependencies: ["PhotosCore", "PhotosStorage", "PhotosCatalog",
-                           "PhotosPipeline", "PhotosLibrary"],
+                           "PhotosPipeline", "PhotosLibrary",
+                           .target(name: "CDBus", condition: .when(platforms: [.linux]))],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // The shipped binary: argument parsing, credentials and console output. No
@@ -175,7 +182,8 @@ let package = Package(
         .testTarget(
             name: "PhotosIngestTests",
             dependencies: ["PhotosIngest", "PhotosCatalog", "PhotosPipeline",
-                           "PhotosStorage", "PhotosLibrary"],
+                           "PhotosStorage", "PhotosLibrary",
+                           .target(name: "CDBus", condition: .when(platforms: [.linux]))],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]

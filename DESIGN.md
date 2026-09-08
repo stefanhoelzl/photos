@@ -114,12 +114,32 @@ the same keyring — which is why a run before the first login defers rather tha
 not for a timer.
 
 **In production both credentials live in the keyring and nowhere else** — two items under one
-service, told apart by a `field` attribute:
+service, told apart by a `field` attribute, put there and taken away by the tool itself:
 
 ```sh
-secret-tool store --label='photos-cli password' service photos-cli field password
-secret-tool store --label='photos-cli endpoint' service photos-cli field endpoint
+photos-cli login     # prompts for the endpoint and the password, stores both
+photos-cli logout    # removes both
 ```
+
+The keyring is read and written **in-process, over D-Bus** (`Sources/PhotosIngest/SecretService.swift`),
+not by exec'ing `secret-tool`. That is what makes the shipped binary literally self-sufficient
+(§7), and it is why `login` exists at all: reading in-process while setup still needed
+libsecret's tools on `PATH` would have moved the dependency rather than removed it. The items
+carry the attributes `secret-tool` wrote, so anything stored before the client existed is
+found unchanged.
+
+`logout` removes **both** items, because `service photos-cli` is one concept: removing half
+leaves an install that is neither working nor clean. Removing nothing is not an error — the
+gesture means *make sure they are gone*, and afterwards they are — and there is no
+confirmation step, because §7 refused ceremony where the stakes are photographs and a keyring
+item is recoverable in seconds. Guarding the reversible action while `rm -rf` on an album
+needs no guard would be exactly backwards.
+
+> **Three verbs, and the rule is intact.** "One verb, and nothing else" (§7) is about the
+> *library* being the only way to say anything about photographs — no `delete`, no `--prune`,
+> no pending state. `login` and `logout` touch neither the library nor the zone. They are
+> credential plumbing, and keeping them out would only mean the binary could run somewhere it
+> could not be set up.
 
 The endpoint is not a secret — it is a URL — but it *is* configuration the run cannot do
 without, so keeping it beside the password makes a working install one concept rather than a
@@ -147,12 +167,26 @@ is not silent. An *empty* variable is treated as unset — `proton-env` that can
 entry leaves the name defined and blank, and a blank secret would otherwise reach the signer
 and come back as an opaque 403.
 
-libsecret itself is not linked — see §7's dependency note, and the accepted cost on the
-production path: **an unattended run before the first graphical login finds the keyring
-locked**, because gnome-keyring unlocks through PAM at login. That is a deferral rather than a
-failure. The run prints one line and exits **75** (`EX_TEMPFAIL`), and the unit declares
-`SuccessExitStatus=75` so `OnFailure=` stays quiet; the next hourly run succeeds once you have
-logged in. A keyring that *is* reachable and holds no such item is a real error and says so.
+libsecret is still not linked — see §7's dependency note — and the accepted cost on the
+production path is unchanged: **an unattended run before the first graphical login finds the
+keyring locked**, because gnome-keyring unlocks through PAM at login. That is a deferral
+rather than a failure. The run prints one line and exits **75** (`EX_TEMPFAIL`), and the unit
+declares `SuccessExitStatus=75` so `OnFailure=` stays quiet; the next hourly run succeeds once
+you have logged in. **Locked items are never unlocked**: `Unlock` needs a graphical prompter,
+which is exactly what an hourly timer does not have.
+
+The three outcomes are now distinguished by the protocol rather than guessed at. Under
+`secret-tool` the only signal was whether the subprocess had written to stderr; over D-Bus,
+no bus address, a failed connect, `NoReply` and `ServiceUnknown` are **75**, and a
+`SearchItems` that matches nothing is a real error and says so (**3**). A reply the spec does
+not allow is also 3 — waiting an hour will not change it.
+
+The session is opened with the `plain` algorithm. The secret crosses a
+peer-credential-authenticated `AF_UNIX` socket inside the caller's own `$XDG_RUNTIME_DIR`;
+negotiating the encrypted algorithm would put a DH exchange and an AES-CBC decrypt on the
+credential path, where a wrong decrypt surfaces as precisely the opaque 403 this section
+forbids. The threat `plain` does not stop — a process already running as this uid — can simply
+ask the keyring itself.
 
 > **One key here too.** An earlier draft gave the CLI a read-only/read-write split, on the
 > grounds that the hourly systemd unit should not hold a key that can delete the library. It
@@ -724,8 +758,11 @@ dynamic linker, no shared libraries and no Swift installation on the target, for
 ARM64. **libheif, x265 and ffmpeg are statically linked in**, not shelled out. Measured: 80 MB
 stripped.
 
-The one thing it does shell out to is `secret-tool`, for the password (§1) — a deliberate
-trade against linking glib, and the only reason the binary is not literally self-sufficient.
+It shells out to nothing. The keyring is reached in-process through a statically linked
+libdbus-1 (§1), which is what closed the last gap: an earlier draft exec'd `secret-tool` for
+the password, on the grounds that reaching the keyring in-process meant linking glib. It does
+not — that is true of *libsecret*, not of libdbus, which has no glib dependency at all. The
+client costs **204 KB** in the shipped binary.
 
 musl is not a preference: Swift ships exactly one fully-static target, and glibc resolves DNS
 through NSS, which `dlopen`s at runtime — so a statically linked glibc binary breaks the one
@@ -749,8 +786,25 @@ CLI is.
 **glib stays out, which means no libsecret.** Reaching the desktop keyring through libsecret
 would drag meson, libffi, PCRE2, proxy-libintl, libgcrypt and libgpg-error into both build
 prefixes for about 8 MB — and glib `dlopen`s its GIO modules, which is a stub that always
-fails in a static musl binary. `secret-tool` is shelled out to instead (§1). The same
-reasoning already kept libvips out (`Scripts/PROVENANCE.md`).
+fails in a static musl binary. The same reasoning already kept libvips out
+(`Scripts/PROVENANCE.md`).
+
+**libdbus-1 comes in, and it is not glib.** The Secret Service is a D-Bus protocol, and
+speaking it needs a D-Bus library, not a keyring library. libdbus-1 is the reference
+implementation, depends on nothing but libc, links statically, and costs 204 KB in the
+shipped binary. Its `configure` requires an XML parser even to build the client library, so
+expat comes with it — 377 KB of archive, no dependencies of its own, and nothing in our code
+includes it. Both are pinned in `build-native.sh`; dbus at 1.14.10 because 1.16 dropped
+autotools for meson.
+
+**The Swift options were measured and refused.** `KeyringAccess` is the right shape and
+Apache-2.0, but reaches the bus through `wendylabsinc/dbus`, which is built on SwiftNIO, and
+brings CryptoSwift and swift-nio-ssl with it. Measured against the Static Linux SDK: **+8.5 MB
+and +18 packages** — nio-http2, swift-certificates and service-lifecycle among them, plus a
+second BoringSSL beside swift-crypto's — to read one password once per run. The objection is
+the graph on the credential path, not the megabytes; the note above about swift-nio's
+static-link cost was written about Soto on the hot path of every request, and does not by
+itself decide this case.
 
 ### S3 layer
 
@@ -771,6 +825,11 @@ request, so this is the one place that needs real test coverage.
 anything: adding a folder adds an album, deleting a file deletes its photo, `rm -rf` on an
 album deletes the album. There is no `delete` command, no `--prune`, no `--confirm` and no
 pending state to remember — **`--dry-run` is the one place to look before it happens.**
+
+`login` and `logout` (§1) do not qualify the rule, because the rule is about the *library*:
+they say nothing about photographs, touch neither the library nor the zone, and exist only so
+the binary can be set up on a machine that has none of libsecret's tools. One verb decides
+what the zone contains; the other two decide nothing at all.
 
 > An earlier draft split this into an additive `sync` and a destructive `prune --dry-run
 > --confirm`, and then into a `sync` that *restored* anything missing plus a `delete` that
@@ -885,7 +944,8 @@ pending state to remember — **`--dry-run` is the one place to look before it h
 - No `.path` unit: `systemd.path` is not recursive (it would see a new album folder but not
   photos added inside an existing one) and is edge-triggered when the directory entry appears —
   i.e. *before* a copy finishes — so it would sync half-copied albums.
-- The key comes from the keyring, never from the unit file, the environment, or `ps`.
+- The key comes from the keyring, never from the unit file, the environment, or `ps` — and
+  now literally so: nothing is exec'd, so it is never an argument to a child process either.
 - Guards: `ConditionACPower=true` (never transcode on battery), `Nice=19`,
   `IOSchedulingClass=idle`, a `CPUQuota=` ceiling, and an `OnFailure=` notification unit.
 - `Wants=`/`After=network-online.target`. Linger is already enabled.

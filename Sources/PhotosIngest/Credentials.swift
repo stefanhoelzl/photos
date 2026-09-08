@@ -3,11 +3,11 @@ import PhotosStorage
 
 /// Where a run gets its endpoint, its library root and its password.
 ///
-/// **Production takes both credentials from the desktop keyring**, via `secret-tool`. Two
-/// items under one service, told apart by a `field` attribute:
+/// **Production takes both credentials from the desktop keyring**, read in-process over
+/// D-Bus (`SecretService.swift`). Two items under one service, told apart by a `field`
+/// attribute, both written by `photos-cli login`:
 ///
-///     secret-tool store --label='photos-cli password' service photos-cli field password
-///     secret-tool store --label='photos-cli endpoint' service photos-cli field endpoint
+///     photos-cli login
 ///
 /// The endpoint is not a secret — it is a URL — but it is *configuration the run cannot do
 /// without*, and putting it beside the password means a working install is one concept
@@ -23,16 +23,14 @@ import PhotosStorage
 /// run that takes that path says so on stderr, so a stale variable silently outranking the
 /// keyring is visible rather than an hour of confusion.
 ///
-/// libsecret itself is not linked, and `secret-tool` is shelled out to instead. Reaching the
-/// keyring in-process would drag meson, libffi, PCRE2, proxy-libintl, libgcrypt and
-/// libgpg-error into both build prefixes for about 8 MB — and glib `dlopen`s its GIO modules,
-/// which is a stub that always fails in the static musl binary §7 ships.
+/// The attributes are the ones `secret-tool store service photos-cli field password` wrote,
+/// so items stored before the client existed are found unchanged.
 public enum Credentials {
 
     public static let service = "photos-cli"
 
     /// The `field` attribute distinguishing the two items under `service photos-cli`.
-    public enum Field: String, Sendable {
+    public enum Field: String, Sendable, CaseIterable {
         case password
         case endpoint
     }
@@ -51,12 +49,16 @@ public enum Credentials {
 
     public enum Failure: Error, CustomStringConvertible {
         case missingLibraryRoot
-        /// The keyring could not be reached — no session bus, or it is still locked because
-        /// nobody has logged in yet. Not a failure: exit 75 and try again next hour.
+        /// The keyring could not be reached — no session bus, nothing owning
+        /// `org.freedesktop.secrets`, or a collection still locked because nobody has logged
+        /// in yet. Not a failure: exit 75 and try again next hour.
         case keyringUnavailable(String)
         /// The keyring answered, and holds no such item. That is a real error.
         case noSuchItem(Field)
-        case toolMissing
+        /// The keyring answered with something the Secret Service spec does not allow. Not a
+        /// deferral — waiting an hour will not change it — so it aborts like any other
+        /// condition that stops a run before it writes.
+        case keyringProtocol(String)
 
         public var description: String {
             switch self {
@@ -68,12 +70,11 @@ public enum Credentials {
                 """
                 nothing in the keyring for service \(Credentials.service), field \(field.rawValue). \
                 Store it with:
-                  secret-tool store --label='photos-cli \(field.rawValue)' \
-                    service \(Credentials.service) field \(field.rawValue)
+                  photos-cli login
                 For development, run under proton-env instead, which injects both from Proton Pass.
                 """
-            case .toolMissing:
-                "secret-tool is not on PATH — install libsecret's tools"
+            case .keyringProtocol(let detail):
+                detail
             }
         }
     }
@@ -81,50 +82,12 @@ public enum Credentials {
     /// The environment if it has one, the keyring otherwise.
     public static func password(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        lookUpKeyring: (Field) throws -> String = { try secretTool(field: $0) }
+        lookUpKeyring: (Field) throws -> String = { try keyring($0) }
     ) throws -> Resolved<String> {
         if let injected = value(environment["PHOTOS_PASSWORD"]) {
             return Resolved(value: injected, source: .environment)
         }
         return Resolved(value: try lookUpKeyring(.password), source: .keyring)
-    }
-
-    /// `secret-tool lookup service photos-cli field <field>`.
-    ///
-    /// The two failure modes are told apart by where the noise comes out: a keyring that
-    /// simply holds no such item exits nonzero and says nothing, while a keyring that cannot
-    /// be reached complains on stderr first. That distinction is what lets an unattended run
-    /// before the first login defer quietly instead of paging you every hour.
-    public static func secretTool(field: Field,
-                                  service: String = Credentials.service) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        // Both attributes, always: `service` alone matches either item, and which one it
-        // returns is not defined.
-        process.arguments = ["secret-tool", "lookup",
-                             "service", service, "field", field.rawValue]
-        let out = Pipe()
-        let err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-
-        do {
-            try process.run()
-        } catch {
-            throw Failure.toolMissing
-        }
-        let stdout = out.fileHandleForReading.readDataToEndOfFile()
-        let stderr = err.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-
-        if process.terminationStatus == 0, let password = value(String(decoding: stdout, as: UTF8.self)) {
-            return password
-        }
-        if process.terminationStatus == 127 { throw Failure.toolMissing }
-        if let complaint = value(String(decoding: stderr, as: UTF8.self)) {
-            throw Failure.keyringUnavailable(complaint)
-        }
-        throw Failure.noSuchItem(field)
     }
 
     /// The storage URL: host, signing region and zone in one value (§1).
@@ -134,7 +97,7 @@ public enum Credentials {
     public static func storage(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         override: String? = nil,
-        lookUpKeyring: (Field) throws -> String = { try secretTool(field: $0) }
+        lookUpKeyring: (Field) throws -> String = { try keyring($0) }
     ) throws -> Resolved<StorageURL> {
         if let raw = value(override ?? environment["PHOTOS_ENDPOINT"]) {
             return Resolved(value: try StorageURL(raw),
@@ -170,4 +133,118 @@ public enum Credentials {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
+
+    static func attributes(for field: Field, service: String = Credentials.service)
+        -> [(String, String)] {
+        [("service", service), ("field", field.rawValue)]
+    }
+
+    // MARK: - The keyring
+
+#if os(Linux)
+
+    /// Read one item out of the desktop keyring.
+    ///
+    /// A locked collection is reported as unavailable rather than unlocked: `Unlock` needs a
+    /// graphical prompter, and the case §1 cares about is an hourly timer that has none. The
+    /// run defers and the next one succeeds once somebody has logged in.
+    public static func keyring(
+        _ field: Field,
+        service: String = Credentials.service,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> String {
+        do {
+            let bus = try SecretService.connect(environment: environment)
+            let found = try SecretService.search(bus, attributes: attributes(for: field,
+                                                                            service: service))
+            guard let item = found.unlocked.first else {
+                if !found.locked.isEmpty { throw SecretService.Failure.locked }
+                throw SecretService.Failure.notFound
+            }
+            let session = try SecretService.openSession(bus)
+            let raw = try SecretService.secret(bus, item: item, session: session)
+            guard let secret = value(String(decoding: raw, as: UTF8.self)) else {
+                throw SecretService.Failure.malformed("the stored \(field.rawValue) is empty")
+            }
+            return secret
+        } catch let error as SecretService.Failure {
+            throw translate(error, field: field)
+        }
+    }
+
+    /// Write both items, replacing whatever is there. Used by `photos-cli login`.
+    public static func store(
+        password: String,
+        endpoint: String,
+        service: String = Credentials.service,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws {
+        do {
+            let bus = try SecretService.connect(environment: environment)
+            let session = try SecretService.openSession(bus)
+            for (field, secret) in [(Field.password, password), (Field.endpoint, endpoint)] {
+                try SecretService.createItem(
+                    bus,
+                    label: "\(service) \(field.rawValue)",
+                    attributes: attributes(for: field, service: service),
+                    value: Array(secret.utf8),
+                    session: session)
+            }
+        } catch let error as SecretService.Failure {
+            throw translate(error, field: .password)
+        }
+    }
+
+    /// Remove both items, and say which were actually there. Used by `photos-cli logout`.
+    ///
+    /// Removing nothing is not an error: the gesture means "make sure they are gone", and
+    /// afterwards they are.
+    @discardableResult
+    public static func remove(
+        service: String = Credentials.service,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> [Field] {
+        do {
+            let bus = try SecretService.connect(environment: environment)
+            var removed: [Field] = []
+            for field in Field.allCases {
+                let found = try SecretService.search(bus, attributes: attributes(for: field,
+                                                                                service: service))
+                if found.unlocked.isEmpty && !found.locked.isEmpty {
+                    throw SecretService.Failure.locked
+                }
+                for item in found.unlocked {
+                    try SecretService.delete(bus, item: item)
+                }
+                if !found.unlocked.isEmpty { removed.append(field) }
+            }
+            return removed
+        } catch let error as SecretService.Failure {
+            throw translate(error, field: .password)
+        }
+    }
+
+    /// The one place the protocol's outcomes become §7's exit codes.
+    static func translate(_ error: SecretService.Failure, field: Field) -> Failure {
+        switch error {
+        case .unavailable(let detail): .keyringUnavailable(detail)
+        case .locked: .keyringUnavailable("the keyring is locked; log in and it will unlock")
+        case .notFound: .noSuchItem(field)
+        case .malformed(let detail): .keyringProtocol(detail)
+        }
+    }
+
+#else
+
+    /// The desktop keyring is a freedesktop concept. macOS builds of this package exist so
+    /// the shared targets can be tested from Xcode; they do not run the ingest CLI.
+    public static func keyring(
+        _ field: Field,
+        service: String = Credentials.service,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> String {
+        throw Failure.keyringUnavailable("the Secret Service keyring is Linux-only")
+    }
+
+#endif
 }

@@ -40,6 +40,8 @@ DE265_V=1.0.15
 X265_V=3.6
 HEIF_V=1.19.8
 FFMPEG_V=7.1.1
+EXPAT_V=2.6.4
+DBUS_V=1.14.10
 
 log() { printf '\n\033[1m== %s\033[0m\n' "$*" >&2; }
 have() { [ -f "$PREFIX/.stamp/$1" ]; }
@@ -334,6 +336,71 @@ if ! have ffmpeg; then
     make -C "$BUILD/ffmpeg" install >>"$BUILD/ffmpeg.log" 2>&1
     stamp ffmpeg
 fi
+
+# ---------------------------------------------------------------- expat
+# Not wanted for itself: dbus's configure requires an XML parser even when only the client
+# library is being built, and refuses to proceed without one. ~377 KB, no dependencies of its
+# own. Nothing in our code includes it.
+if ! have expat; then
+    log "expat $EXPAT_V"
+    tb=$(fetch "https://github.com/libexpat/libexpat/releases/download/R_${EXPAT_V//./_}/expat-$EXPAT_V.tar.xz" "expat-$EXPAT_V.tar.xz")
+    d=$(unpack "$tb" "expat-$EXPAT_V")
+    autotools_build "$d" expat --without-docbook --without-examples --without-tests
+    stamp expat
+fi
+
+# ---------------------------------------------------------------- dbus
+# The Secret Service client (§1) speaks D-Bus in-process rather than exec'ing `secret-tool`,
+# which is what makes the shipped binary literally self-sufficient. libdbus-1 is the reference
+# implementation and, unlike libsecret, does not drag glib in -- so §7's "no glib" survives
+# intact while the last shell-out goes away.
+#
+# Only the `dbus/` subdirectory is built. The top-level target would also build dbus-daemon
+# and the command-line tools, which is precisely the thing being removed here; the client
+# library is all we link.
+#
+# 1.14.x rather than 1.16: 1.16 dropped autotools for meson, and this script speaks autotools
+# and cmake. --disable-x11-autolaunch matters beyond size -- see Credentials.swift on why the
+# client opens an explicit address rather than letting libdbus fork dbus-launch.
+if ! have dbus; then
+    log "dbus $DBUS_V"
+    tb=$(fetch "https://dbus.freedesktop.org/releases/dbus/dbus-$DBUS_V.tar.xz" "dbus-$DBUS_V.tar.xz")
+    d=$(unpack "$tb" "dbus-$DBUS_V")
+    rm -rf "$BUILD/dbus"; mkdir -p "$BUILD/dbus"
+    host_arg=()
+    [ "$CROSS" = 1 ] && host_arg=(--host="$HOST_TRIPLE")
+    ( cd "$BUILD/dbus" && "$d/configure" --prefix="$PREFIX" --enable-static --disable-shared \
+        "${host_arg[@]}" --disable-tests --disable-doxygen-docs --disable-xml-docs \
+        --disable-selinux --disable-apparmor --disable-systemd --disable-launchd \
+        --without-x --disable-x11-autolaunch --with-xml=expat ) >"$BUILD/dbus.log" 2>&1 \
+        || { echo "configure failed for dbus; tail:" >&2; tail -30 "$BUILD/dbus.log" >&2; exit 1; }
+    make -C "$BUILD/dbus/dbus" -j"$JOBS" >>"$BUILD/dbus.log" 2>&1 \
+        || { echo "build failed for dbus; tail:" >&2; tail -30 "$BUILD/dbus.log" >&2; exit 1; }
+    make -C "$BUILD/dbus/dbus" install >>"$BUILD/dbus.log" 2>&1
+    stamp dbus
+fi
+
+# ---------------------------------------------------------------- photos-dbus.pc
+# Separate from photos-native.pc because it is a separate concern: PhotosIngest links the
+# keyring client, PhotosPipeline links the imaging stack, and neither should drag the other in
+# because they happen to be built by the same script.
+#
+# dbus splits its headers across two prefixes -- dbus-arch-deps.h is generated per
+# architecture and installed under libdir -- so both directories have to be on the include
+# path or <dbus/dbus.h> fails to resolve its own include.
+log "photos-dbus.pc"
+mkdir -p "$PREFIX/lib/pkgconfig"
+cat > "$PREFIX/lib/pkgconfig/photos-dbus.pc" <<PCEOF
+prefix=$PREFIX
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: photos-dbus
+Description: libdbus-1 for the Secret Service client ($TARGET)
+Version: 1
+Cflags: -I\${includedir}/dbus-1.0 -I\${libdir}/dbus-1.0/include
+Libs: -L\${libdir} -ldbus-1 -lexpat -lpthread
+PCEOF
 
 # ---------------------------------------------------------------- one .pc to rule them all
 # SwiftPM's pkgConfig support calls `pkg-config --libs` without --static, so the transitive

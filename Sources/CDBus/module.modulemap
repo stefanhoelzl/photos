@@ -1,0 +1,10 @@
+// Unlike CNativeImaging, this one is meant to be imported from Swift: <dbus/dbus.h> is
+// self-contained, and the Secret Service client is written in Swift against it directly.
+//
+// No C shim is needed. libdbus's variadic entry points (dbus_message_append_args,
+// dbus_message_get_args) are unreachable from Swift, but the DBusMessageIter API they wrap
+// is not variadic and is what the client uses throughout.
+module CDBus [system] {
+    header "shim.h"
+    export *
+}

@@ -20,8 +20,106 @@ struct PhotosCLI: AsyncParsableCommand {
             album was deleted. A library that wants no exclusions writes an empty one.
             """,
         version: "1.0.0",
-        subcommands: [Sync.self]
+        subcommands: [Sync.self, Login.self, Logout.self]
     )
+}
+
+extension PhotosCLI {
+
+    /// Put both credentials in the desktop keyring.
+    ///
+    /// §7's "one verb, and nothing else" is about the *library* being the only way to say
+    /// anything about photos — no `delete`, no `--prune`, no pending state. This verb and its
+    /// counterpart never touch the library or the zone; they exist because reading the
+    /// keyring in-process would otherwise leave setup still needing `secret-tool` on PATH,
+    /// which is the dependency the client was written to remove.
+    struct Login: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Store the endpoint and password in the desktop keyring.",
+            discussion: """
+                Both values are stored under service \(Credentials.service), told apart by a \
+                `field` attribute, and replace whatever is already there. Nothing is written \
+                to disk, to the environment, or to your shell history.
+                """
+        )
+
+        @Option(name: .customLong("endpoint"),
+                help: "Storage URL. Prompted for when not given.")
+        var endpoint: String?
+
+        func run() async throws {
+            let console = Console()
+            guard let endpoint = endpoint
+                ?? console.ask("Storage URL (e.g. https://de-s3.storage.bunnycdn.com/my-photos): "),
+                  !endpoint.isEmpty else {
+                console.error("no endpoint given")
+                throw ExitCode(PhotosIngest.ExitCode.usage)
+            }
+            // Parsed before it is stored: a mistyped URL that only fails on the next sync is
+            // exactly the opaque error §1 refuses, and this is the one moment it is cheap
+            // to catch.
+            let storage = try StorageURL(endpoint)
+
+            guard let password = console.ask("Password: ", secret: true), !password.isEmpty else {
+                console.error("no password given")
+                throw ExitCode(PhotosIngest.ExitCode.usage)
+            }
+
+            do {
+                try Credentials.store(password: password, endpoint: endpoint)
+            } catch let error as Credentials.Failure {
+                throw keyringExit(error, console)
+            }
+            console.line("stored the endpoint and password for zone \(storage.zone)")
+        }
+    }
+
+    /// Take both credentials back out again.
+    struct Logout: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Remove the endpoint and password from the desktop keyring.",
+            discussion: """
+                Removes both items, because they are one concept: half an install is neither \
+                working nor clean. Removing nothing is not an error — the gesture means make \
+                sure they are gone, and afterwards they are.
+                """
+        )
+
+        func run() async throws {
+            let console = Console()
+            let removed: [Credentials.Field]
+            do {
+                removed = try Credentials.remove()
+            } catch let error as Credentials.Failure {
+                throw keyringExit(error, console)
+            }
+            console.line(removed.isEmpty
+                ? "nothing stored for service \(Credentials.service)"
+                : "removed " + removed.map(\.rawValue).joined(separator: " and "))
+        }
+    }
+}
+
+/// Credential failures as §7's exit codes. One copy, so all three verbs agree.
+private func keyringExit(_ error: Credentials.Failure,
+                         _ console: Console) -> ArgumentParser.ExitCode {
+    switch error {
+    case .keyringUnavailable:
+        // Not a failure: no session bus yet, or nobody has logged in so gnome-keyring is
+        // still locked. H's unit declares SuccessExitStatus=75 so this stays out of
+        // OnFailure=, and the next hourly run succeeds.
+        console.line("deferred: \(error.description)")
+        return ExitCode(PhotosIngest.ExitCode.deferred)
+    case .missingLibraryRoot:
+        console.error(error.description)
+        return ExitCode(PhotosIngest.ExitCode.usage)
+    case .noSuchItem, .keyringProtocol:
+        // A keyring that answered and holds no such item is a real error — but one that
+        // stopped the run before it wrote anything, which is what exit 3 says. A reply the
+        // spec does not allow is the same: waiting an hour will not change it.
+        console.error(error.description)
+        return ExitCode(PhotosIngest.ExitCode.aborted)
+    }
 }
 
 extension PhotosCLI {
@@ -62,23 +160,7 @@ extension PhotosCLI {
             do {
                 try await execute(console)
             } catch let error as Credentials.Failure {
-                switch error {
-                case .missingLibraryRoot:
-                    console.error(error.description)
-                    throw ExitCode(PhotosIngest.ExitCode.usage)
-                case .keyringUnavailable:
-                    // Not a failure: nobody has logged in yet, so gnome-keyring is still
-                    // locked. H's unit declares SuccessExitStatus=75 so this stays out of
-                    // OnFailure=, and the next hourly run succeeds.
-                    console.line("deferred: \(error.description)")
-                    throw ExitCode(PhotosIngest.ExitCode.deferred)
-                case .noSuchItem, .toolMissing:
-                    // A keyring that answered and holds no such item is a real error — but
-                    // one that stopped the run before it wrote anything, which is what
-                    // exit 3 says.
-                    console.error(error.description)
-                    throw ExitCode(PhotosIngest.ExitCode.aborted)
-                }
+                throw keyringExit(error, console)
             } catch let error as RunLock.Busy {
                 // Not a failure: the sync is happening, just not this one. Exit 75 so the
                 // hourly unit overlapping a long manual run stays out of OnFailure=.
