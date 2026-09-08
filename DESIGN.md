@@ -255,7 +255,7 @@ CREATE TABLE photo (
   original_id   TEXT,                -- blob: the original as uploaded
   live_video_id TEXT,                -- blob: paired MOV, when media_type = 2
   preview_id    TEXT,                -- blob: 2048px HEIC
-  video_id      TEXT                 -- blob: 1080p H.264 transcode
+  video_id      TEXT                 -- blob: 1080p-ceiling HEVC transcode
 );
 CREATE INDEX ix_photo_taken ON photo(taken_at);
 ```
@@ -299,8 +299,9 @@ CREATE TABLE thumb (
 );
 ```
 
-At ~9 KB per thumbnail a 100-photo album is ~0.9 MB and a 1,750-photo album ~15 MB, so **one
-request opens an album's entire grid, offline**. Shard the pack only if an album exceeds a few
+At ~11.6 KB per thumbnail a 100-photo album is ~1.2 MB and a 1,750-photo album ~20.8 MB, so
+**one request opens an album's entire grid, offline** — about 2.8 s for the largest album at
+the measured 7.5 MB/s. Shard the pack only if an album exceeds a few
 thousand photos.
 
 **Why a pack rather than a blob per thumbnail.** One blob each would be uniform with
@@ -369,6 +370,13 @@ the pre-transaction snapshot for its whole duration and switch at commit, rather
 
 - **Dates come from EXIF `DateTimeOriginal` only.** No inference from album names, no file
   mtime. 99.5% of photos have one; the rest are undated and absent from date filters.
+- **A GPS block whose `GPSStatus` is `V` is ignored.** `V` is EXIF for "measurement void" —
+  the camera wrote a position block while having no fix. 1,028 photos here carry one, all with
+  latitude byte-identical to longitude. They are rejected on those grounds rather than because
+  the numbers happen to be absurd, since a void block holding plausible coordinates would
+  otherwise place a photo somewhere it has never been — and an album's pin is the centroid of
+  its photos. Like every other reading of a tag, this rule is `ExifMapper`'s and therefore
+  shared: §7's point is that the phone and the laptop must not disagree about what a tag means.
 - **Locations come from EXIF GPS only.** An album's pin is the centroid of its own tagged
   photos; a **container's is the centroid of all its descendants'**, since a container owns no
   photos of its own. Both are computed during the rebuild, so nothing about location is stored
@@ -467,11 +475,25 @@ Two tiers only:
 
 | tier | typical size | where | purpose |
 |---|---|---|---|
-| **256px q75 JPEG** | ~9 KB | packed per album, one blob | the grid |
-| **2048px HEIC** | ~370 KB | one blob per photo | fullscreen |
+| **256×256 q75 JPEG** | ~11.6 KB | packed per album, one blob | the grid |
+| **2048px HEIC** | ~285 KB | one blob per photo | fullscreen |
+
+**Thumbnails are a square centre crop, not a fitted image.** Every consumer in §6 is a square
+`object-fit: cover` box — the grid, the 54pt album-list cover, the 38pt map pin and search row,
+the 30pt filmstrip, the 26pt set-cover dialog. The only surface that uses `contain` is the
+fullscreen viewer, and it reads the preview. So an aspect-preserved thumbnail stores pixels
+nothing ever displays, *and* starves the one thing that does: fitting a 3:2 photo into 256×256
+leaves it 256×171, and a 4-column grid tile on a 3× iPhone is 287 device pixels — a 1.68×
+upscale. Filling the box is 1.12×. Measured on 120 photos from the library: fitted 8.78 KB,
+cropped 11.59 KB. The crop costs 27% more storage and is not irreversible — originals remain,
+and re-thumbnailing an album mints a new `thumbs_id` (§2).
 
 Rejected: 320px and 512px thumbs (a 512px tier is 3.7× larger and breaks the
 one-request-per-album property); 1280px previews (visibly soft on a 3× display).
+
+> The 2-column pinch density cannot be served sharply by *any* thumbnail tier — a 580px tile at
+> 3× would need ~576px thumbs. It either accepts softness or fetches previews; that is §6's
+> decision, not this one's.
 
 For this library's actual totals see `INGEST.md`.
 
@@ -484,6 +506,11 @@ A PSNR-matched benchmark (HEIC/AVIF quality raised until they matched the JPEG b
 | 256px thumb | **0.32 GB** | 0.90 GB (279%) | 0.47 GB (145%) |
 | 2048px preview | 14.57 GB | **12.35 GB (85%)** | 10.57 GB (72%) |
 
+> Re-derived during milestone C, because the benchmark's own settings had not survived. The
+> JPEG baseline reproduces at q84 (427 KB/photo measured against the 434 KB recorded), and
+> HEIC **quality 50** matches its PSNR at 285 KB/photo — so the tier is ~9.8 GB rather than
+> 12.35 GB. The original shipped above what its stated criterion required.
+
 At thumbnail size the container overhead swamps any codec advantage, so **JPEG wins outright**.
 At preview size AVIF is smallest but decodes in software; **HEIC is 15% smaller than JPEG and
 still hardware-decoded** via the HEVC block, so swiping stays fast.
@@ -493,12 +520,27 @@ still hardware-decoded** via the HEVC block, so swiping stays fast.
 - **Live Photos** — the preview is a plain still and needs no identifier. Long-press fetches the
   **original HEIC + original MOV**, whose `content.identifier` values already match,
   and hands both to `PHLivePhotoView`. No maker-note surgery at ingest.
-- **Video** — everything is transcoded to a uniform **1080p H.264/AAC MP4, faststart**. This
-  covers formats iOS cannot play at all (AVI, MPG, 3GP) and tames large camera MP4s.
-  **Originals stay on the laptop.**
-- **RAW** — CR2 is developed to a full-resolution JPEG at ingest and only the derivative is
-  uploaded; the RAW stays on the laptop. Where a RAW has no JPEG sibling the laptop copy is that
-  photo's sole archive, so the bucket is explicitly *not* a backup for it.
+- **Video** — everything is transcoded to a uniform **HEVC/AAC MP4, faststart, `hvc1`**, with
+  **1080p as a ceiling rather than a target**. This covers formats iOS cannot play at all
+  (AVI, MPG, 3GP) and tames large camera MP4s. **Originals stay on the laptop.**
+  - **HEVC, not H.264.** 223 of the library's 550 videos are already HEVC, iOS 18
+    hardware-decodes it on every supported device, and x265 is linked for HEIC previews
+    regardless — so it is the encoder that was already there, and choosing it drops libx264
+    from the build entirely. It is also the only choice that does not *inflate* the 132 files
+    already at 1080p. This is the same hardware-decode argument that picked HEIC over JPEG.
+  - **A ceiling, not a target.** 137 files are 640×480 or smaller; scaling those up would be
+    20× the pixels for no added detail. Only the 14 files above 1080p are scaled at all.
+  - **Rotation is baked into the pixels** and the display matrix cleared — 118 files carry a
+    90° matrix and 15 carry 180°, and a transcode that ignores it plays sideways.
+  - Deinterlacing runs only when the decoder reports interlaced frames. The 33 `.mpg` files are
+    MPEG-1 and progressive, so it should never fire here.
+- **RAW** — every CR2 carries a **full-resolution JPEG at IFD0** — the camera's own rendering,
+  ~2.5 MB — so "developing" it is a byte-range extraction, not a demosaic. No LibRaw, no
+  development parameters. The RAW stays on the laptop and only the extracted JPEG is uploaded,
+  with an EXIF APP1 grafted in from the CR2's own IFDs so it looks like every other original
+  rather than arriving with no date, no GPS and no orientation. Where a RAW has no JPEG sibling
+  the laptop copy is that photo's sole archive, so the bucket is explicitly *not* a backup
+  for it.
 
 ---
 
@@ -599,11 +641,14 @@ catalog: the shard schema, NFC normalisation, the mapping from EXIF tags to cata
 S3 client and signer, and the LIST-diff sync algorithm.
 
 Encoders stay platform-native behind an `ImageBackend` protocol — **ImageIO/AVFoundation on
-iOS and macOS**, **libheif/ffmpeg on Linux**. **`ImageBackend` also extracts raw EXIF tags**,
+iOS and macOS**, **libjpeg-turbo/libheif/x265/ffmpeg/lcms2/libexif on Linux**, behind a small
+C shim (libjpeg reports errors by `longjmp`, which Swift cannot safely be on the far end of). **`ImageBackend` also extracts raw EXIF tags**,
 since both platforms already have a library that reads them and neither would gain from a
 hand-written container parser. What the shared package owns is the *interpretation*:
 `"2013:07:04 18:22:11"` → epoch, `GPSLatitudeRef 'S'` → a negative latitude, rationals →
-degrees, orientation → swapped dimensions. That is where a disagreement would corrupt the
+degrees, orientation → swapped dimensions. Backends also normalise Apple's maker-note content
+identifier to `AppleContentIdentifier`, so Live-Photo pairing (§5) is a shared decision rather
+than a platform one. That is where a disagreement would corrupt the
 catalog, and it is the same code on both platforms. The protocol itself is declared in the
 shared package, because a contract belongs with the other contracts.
 
@@ -613,6 +658,10 @@ shared package, because a contract belongs with the other contracts.
 musl — `swift build --swift-sdk x86_64-swift-linux-musl` — producing a static ELF with no
 dynamic linker, no shared libraries and no Swift installation on the target, for x86-64 and
 ARM64. **libheif, x265 and ffmpeg are statically linked in**, not shelled out.
+
+musl is not a preference: Swift ships exactly one fully-static target, and glibc resolves DNS
+through NSS, which `dlopen`s at runtime — so a statically linked glibc binary breaks the one
+thing this tool does on every run.
 
 > **x265 is GPLv2.** A statically linked binary inherits GPL terms *if distributed*.
 > Irrelevant for personal use; relevant the day it goes on GitHub with release artifacts.
@@ -645,8 +694,14 @@ request, so this is the one place that needs real test coverage.
   anyway — and **aborts the run on a mismatch** rather than re-ingesting. A changed file means
   the library broke its contract, so nothing is written that run and `OnFailure=` surfaces it.
   There is no mtime column, no hashing pass and no re-ingest path.
-- **Parallelism:** one worker per core for encoding. Measured **0.79 s/photo** for decode +
-  2048px HEIC + 256px JPEG on a 16-thread laptop, i.e. ~40–60 min for ~34k photos, plus video.
+- **Parallelism:** one worker per core for encoding. Measured during milestone C on real
+  18 MP photos: **2.7 s/photo serial**, **0.43 s/photo** wall with 16 workers — so roughly
+  **4 h for ~34k photos**, plus video. The HEIC encode is ~1.5 s of the 2.7 s and does not
+  come down without trading preview quality (x265 `superfast` saves 13%; `ultrafast` is 3.3×
+  faster and 8% larger).
+  > An earlier 0.79 s/photo, i.e. 40–60 min, was recorded here. It was optimistic by ~3.4×.
+  > The conclusion it supported is unchanged and in fact stronger: §9's upload is 17–22 h and
+  > encoding overlaps it, so encoding is nowhere near the bottleneck either way.
 - **Deletion is laptop-only, explicit, dry-run first.** `--prune --dry-run` prints what it would
   remove; `--confirm` acts. The same pass sweeps **unreferenced blobs** — objects whose shard
   write never landed, e.g. a crash mid-upload — since it is already computing the full set of
@@ -655,7 +710,28 @@ request, so this is the one place that needs real test coverage.
   boundary. With no versioning underneath, this is the single irreversible operation in the system.
 - **Pull is archive-only.** Phone-uploaded albums are copied into `$LIBRARY_ROOT`; the
   laptop never rewrites a phone-owned album's objects.
-- Excludes trash directories and non-photo strays (`.dtrashinfo`, `Thumbs.db`, `.doc`, `.psd`…).
+- **What to exclude comes from the library, not the tool: `$LIBRARY_ROOT/.photosignore`.**
+  The CLI carries no built-in exclusions — no extension list, no filename list, not even a
+  dot-file rule. The single hardcoded rule is that `.photosignore` excludes itself. What
+  counts as junk is a fact about a particular library, and baking one library's photo-manager
+  artefacts into a package this document presents as reusable is the mixing of concerns
+  `INGEST.md` exists to prevent.
+  - **Syntax**: `fnmatch` globs (`*`, `?`, `[abc]`); a pattern with no `/` matches a file's
+    name at any depth, one containing `/` is anchored to the root; a trailing `/` means a
+    directory, which is not descended into; `#` comments. No negation and no `**`, so order
+    never matters — a partial gitignore that *looks* like gitignore is worse than one that
+    plainly is not. Matching ignores case and Unicode composition (§2's hazard).
+  - **Missing means no exclusions**, silently. **Present but unreadable aborts the run** — a
+    file that exists means exclusions were intended, and continuing without them is how a
+    trash directory full of deleted photographs gets uploaded. Same posture as the byte-size
+    mismatch above.
+  - Applied by the walker and nowhere else, so the ingest pass, the `--prune` sweep and the
+    change assertion cannot disagree about what the library contains. An **ignored file is
+    therefore indistinguishable from an absent one**: broadening a rule marks already-uploaded
+    photos for removal, which `--prune --dry-run` is what stands between you and losing them.
+  - The run reports how many files each rule excluded, and names any rule that matched
+    nothing — the only way a typo is distinguishable from a rule not yet needed.
+  - `photosignore.example` in the repository is a commented starting point.
 
 ### Unattended sync (systemd user units)
 
@@ -770,10 +846,19 @@ stubbed transport, no network — plus a **measured full-scale rebuild**: 288 sh
 albums, 34,607 rows, inside §4's 1–3 s budget, since that is the one number E inherits and
 cannot renegotiate.
 
-**C · Derivative pipeline** *(no deps)*
-Thumbs, previews, video transcode, CR2 develop, Live-Photo pairing, junk filtering.
-Verified by running over the real library and checking output against previously measured
-sizes and counts (see `INGEST.md`) — any large deviation means the pipeline is wrong.
+**C · Derivative pipeline** *(needs `PhotosCore`, extracted from B)*
+Thumbs, previews, video transcode, CR2 extraction, Live-Photo pairing, `.photosignore`
+filtering, and the Linux `ImageBackend`. Verified by running over the real library and checking output against
+previously measured sizes and counts (see `INGEST.md`) — any large deviation means the pipeline
+is wrong. `photos-scan` is that check, made repeatable; D absorbs it as `photos scan`.
+
+> §10 originally called C dependency-free. It is not: `ImageBackend`, `ExifTags`, `MediaType`
+> and `PhotoRow` are contracts both the catalog and the pipeline own, so they live in a
+> `PhotosCore` target below both. C does not link SQLite.
+>
+> Traversal lives in a further target, `PhotosLibrary` — `$LIBRARY_ROOT` as something you walk,
+> with its own `.photosignore`. It sits below D rather than inside the pipeline because the
+> phone uploads from `PHAssetCollection` and has no library tree to walk.
 
 **D · Ingest CLI** = A+B+C — first real data in the bucket.
 *Ingest one album end-to-end before the bulk import.*
@@ -787,7 +872,7 @@ sizes and counts (see `INGEST.md`) — any large deviation means the pipeline is
 **H · Laptop pull + systemd** = D.
 
 ```
-A → B ;  C  →  D  →  (E ∥ F)  and  (G ∥ H)
+A → B → C  →  D  →  (E ∥ F)  and  (G ∥ H)
 critical path: A → B → E
 ```
 

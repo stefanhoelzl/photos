@@ -1,0 +1,63 @@
+# Example .photosignore — copy to $LIBRARY_ROOT/.photosignore and CUT IT DOWN.
+#
+# This is a menu, not a starting configuration. Every rule below that your library does not
+# actually need will be reported as unused on every single run — applied unedited to the
+# library this project was built for, five of its seven rules match nothing. Delete the ones
+# that do not apply, and add rules when a stray actually shows up in a scan report.
+#
+# This file is the ONLY source of exclusions. The tool carries no built-in list: not of
+# extensions, not of filenames, and not even a rule for dot-files. Without this file, nothing
+# whatsoever is excluded.
+#
+# That matters more than it sounds. A photo-manager's trash directory typically holds real,
+# decodable photographs that you deleted — they are indistinguishable from any other JPEG, so
+# nothing else will stop them being uploaded, and the storage zone has no undelete.
+#
+#
+# SYNTAX
+#
+#   *.db              fnmatch glob. No "/", so it matches a file's NAME at any depth.
+#   Album/one.psd     Contains "/", so it is anchored to the library root and matches
+#                     that one path only.
+#   .dtrash/          Trailing "/" means a directory: it is not descended into, so the
+#                     files inside are never even enumerated.
+#   # comment         Lines starting with # are ignored, as are blank lines.
+#
+#   Matching ignores case, and ignores Unicode composition — so a pattern typed on a Mac
+#   still matches a name stored on Linux.
+#
+#   There is no negation and no "**". Order therefore never matters: this is a set of rules,
+#   not a sequence of them.
+#
+#   .photosignore always excludes itself; that is the one rule not written here.
+#
+#
+# TWO THINGS WORTH KNOWING
+#
+#   A rule that matches nothing is reported as unused on every run. That is deliberate — it
+#   is the only way a typo like "*.pds" is distinguishable from a rule you simply do not need
+#   yet. The practical consequence: write rules when a stray actually appears, rather than
+#   defensively up front.
+#
+#   An ignored file is indistinguishable from an absent one. Adding a rule that matches
+#   photos you have already uploaded therefore marks them for removal, which `--prune` will
+#   offer to carry out. Broadening a rule is a destructive edit; read the dry-run.
+
+
+# --- a photo manager's trash: usually real photographs, not junk ------------------
+.dtrash/
+.Trash/
+
+# --- photo-manager databases, thumbnail caches and sidecars ----------------------
+*.db
+*.xmp
+
+# --- operating-system litter -----------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- documents that happen to live among the photos ------------------------------
+# Prefer anchoring these to exact paths rather than excluding *.psd everywhere, so that a
+# new one somewhere else is reported as a stray instead of silently disappearing.
+# Some Album/scan-notes.pdf

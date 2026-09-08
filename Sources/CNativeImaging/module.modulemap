@@ -1,0 +1,6 @@
+// Flag carrier only. The real headers are included by CImaging's C sources, in an order
+// jpeglib.h is happy with; nothing here is meant to be imported from Swift.
+module CNativeImaging [system] {
+    header "empty.h"
+    export *
+}
