@@ -113,31 +113,39 @@ the same keyring — which is why a run before the first login defers rather tha
 `photos-cli` directly, not under `proton-env`: the development override exists for a terminal,
 not for a timer.
 
-The CLI takes the endpoint from the environment and the password from the desktop keyring:
+**In production both credentials live in the keyring and nowhere else** — two items under one
+service, told apart by a `field` attribute:
 
-| where | contents |
-|---|---|
-| `PHOTOS_ENDPOINT` | the full **storage URL** — host and zone in one value. Not a secret. |
-| `PHOTOS_LIBRARY_ROOT` | the library root. Not a secret either. |
-| `secret-tool lookup service photos-cli` | the zone's Secret Access Key |
+```sh
+secret-tool store --label='photos-cli password' service photos-cli field password
+secret-tool store --label='photos-cli endpoint' service photos-cli field endpoint
+```
 
-**In production the key lives in the keyring and nowhere else.** Store it once with
-`secret-tool store --label='photos-cli' service photos-cli`; it is then not in a dotfile, not
-in the environment, and not inherited by child processes.
+The endpoint is not a secret — it is a URL — but it *is* configuration the run cannot do
+without, so keeping it beside the password makes a working install one concept rather than a
+keyring entry plus an exported variable somebody has to remember. Neither value is then in a
+dotfile, in the environment, or inherited by child processes.
 
-**In development `PHOTOS_PASSWORD` overrides it**, because the secret is already in Proton
-Pass and `proton-env` — which reads `.proton.yaml` and execs with the entries injected — is
-how every other command in this repository reaches it:
+**The library root is the working directory**, or `--library-path`. There is no variable for
+it, and the default pairs with the marker rule below: `photos-cli sync` typed in the wrong
+directory finds no `.photosignore` and refuses, rather than concluding the library is empty
+and deleting 292 albums. The convenient default is also the safe one.
+
+**In development `PHOTOS_PASSWORD` and `PHOTOS_ENDPOINT` override the keyring**, because both
+are already in Proton Pass and `proton-env` — which reads `.proton.yaml` and execs with the
+entries injected — is how every other command in this repository reaches them:
 
 ```sh
 proton-env photos-cli sync --dry-run
 ```
 
-The environment wins when it is set, which is what an override means, and a run that takes
-that path **says so on stderr** — a stale variable silently outranking the keyring is exactly
-the kind of thing that costs an hour, so it is not silent. An *empty* variable is treated as
-unset: `proton-env` that cannot resolve an entry leaves the name defined and blank, and a
-blank secret would otherwise reach the signer and come back as an opaque 403.
+Both resolve the same way — flag, then environment, then keyring — so there is one rule to
+remember rather than one per credential. The environment wins when it is set, which is what an
+override means, and a run that takes that path **names the variables on stderr**: a stale
+value silently outranking the keyring is exactly the kind of thing that costs an hour, so it
+is not silent. An *empty* variable is treated as unset — `proton-env` that cannot resolve an
+entry leaves the name defined and blank, and a blank secret would otherwise reach the signer
+and come back as an opaque 403.
 
 libsecret itself is not linked — see §7's dependency note, and the accepted cost on the
 production path: **an unattended run before the first graphical login finds the keyring

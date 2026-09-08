@@ -31,12 +31,12 @@ extension PhotosCLI {
             abstract: "Reconcile the zone with the library."
         )
 
-        @Option(name: .customLong("library"),
-                help: "The library root. Defaults to $PHOTOS_LIBRARY_ROOT.")
-        var library: String?
+        @Option(name: .customLong("library-path"),
+                help: "The library root. Defaults to the working directory.")
+        var libraryPath: String?
 
         @Option(name: .customLong("endpoint"),
-                help: "Storage URL, e.g. https://de-s3.storage.bunnycdn.com/my-photos. Defaults to $PHOTOS_ENDPOINT.")
+                help: "Storage URL, e.g. https://de-s3.storage.bunnycdn.com/my-photos. Defaults to the keyring.")
         var endpoint: String?
 
         @Option(name: .customLong("cache-dir"),
@@ -63,7 +63,7 @@ extension PhotosCLI {
                 try await execute(console)
             } catch let error as Credentials.Failure {
                 switch error {
-                case .missingEndpoint, .missingLibraryRoot:
+                case .missingLibraryRoot:
                     console.error(error.description)
                     throw ExitCode(PhotosIngest.ExitCode.usage)
                 case .keyringUnavailable:
@@ -87,14 +87,19 @@ extension PhotosCLI {
         }
 
         private func execute(_ console: Console) async throws {
-            let root = try Credentials.libraryRoot(override: library)
+            let root = try Credentials.libraryRoot(override: libraryPath)
             let storage = try Credentials.storage(override: endpoint)
             let password = try Credentials.password()
-            // Only ever true under `proton-env` or a shell that exported it. Said out loud
+            // Only ever true under `proton-env` or a shell that exported them. Said out loud
             // so a stale variable outranking the keyring is visible rather than an hour of
             // wondering why the wrong zone is being written.
-            if password.source == .environment {
-                console.error("using PHOTOS_PASSWORD from the environment (development)")
+            let injected = [
+                storage.source == .environment ? "PHOTOS_ENDPOINT" : nil,
+                password.source == .environment ? "PHOTOS_PASSWORD" : nil,
+            ].compactMap { $0 }
+            if !injected.isEmpty {
+                console.error("using \(injected.joined(separator: " and ")) "
+                              + "from the environment (development)")
             }
 
             let config = IngestConfig(
@@ -108,7 +113,7 @@ extension PhotosCLI {
                 dryRun: dryRun
             )
 
-            let client = S3Client(storage: storage, secretAccessKey: password.value)
+            let client = S3Client(storage: storage.value, secretAccessKey: password.value)
             // The per-album line is written as the album commits, not buffered to the end:
             // a 20-hour first run has to be watchable, and in the journal as it happens.
             let ingest = try Ingest(config: config, s3: client) { line in

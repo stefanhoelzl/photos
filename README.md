@@ -36,30 +36,33 @@ swiftly install 6.3.3
 ## Running it
 
 ```sh
-cp photosignore.example ~/Pictures/Albums/.photosignore     # required: see DESIGN §7
-export PHOTOS_LIBRARY_ROOT=~/Pictures/Albums
+cp photosignore.example ~/Pictures/Albums/.photosignore    # required: see DESIGN §7
 
+cd ~/Pictures/Albums
 photos-cli sync --dry-run    # always, after any reorganisation
 photos-cli sync
 ```
 
-**Production** takes the password from the desktop keyring and the endpoint from the
-environment:
+The library root is the working directory, or `--library-path`. Run it somewhere that is not
+a library and it aborts on the missing `.photosignore` rather than concluding every album was
+deleted.
+
+**Production** takes both credentials from the desktop keyring — two items under one service:
 
 ```sh
-secret-tool store --label='photos-cli' service photos-cli   # once
-export PHOTOS_ENDPOINT=https://de-s3.storage.bunnycdn.com/my-photos
+secret-tool store --label='photos-cli password' service photos-cli field password
+secret-tool store --label='photos-cli endpoint' service photos-cli field endpoint
 ```
 
-**Development** overrides both from Proton Pass — `.proton.yaml` maps them, and `proton-env`
+**Development** overrides them from Proton Pass — `.proton.yaml` maps them, `proton-env`
 injects them:
 
 ```sh
 proton-env photos-cli sync --dry-run
 ```
 
-`PHOTOS_PASSWORD` beats the keyring when it is set, and a run that uses it says so on stderr,
-so a stale variable cannot quietly point you at the wrong zone.
+The environment beats the keyring when set, and a run that uses it names the variables on
+stderr, so a stale value cannot quietly point you at the wrong zone.
 
 `sync` is the only verb. The library says everything: a new folder is a new album, a deleted
 file is a deleted photo, `rm -rf` on an album deletes it from the zone. There is no
