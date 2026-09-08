@@ -1,4 +1,5 @@
 import Foundation
+import PhotosCore
 
 public enum ShardError: Error, Hashable, Sendable, CustomStringConvertible {
     /// The shard was written by a newer schema than this build understands.

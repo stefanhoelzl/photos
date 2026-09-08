@@ -1,4 +1,5 @@
 import Foundation
+import PhotosCore
 
 /// Folds a name for search: lowercased and diacritic-stripped.
 ///

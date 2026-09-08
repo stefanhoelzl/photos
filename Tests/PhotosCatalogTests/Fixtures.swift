@@ -1,5 +1,6 @@
 import Foundation
 @testable import PhotosCatalog
+import PhotosCore
 
 /// Builds synthetic catalogs.
 ///

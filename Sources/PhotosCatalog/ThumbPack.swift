@@ -1,4 +1,5 @@
 import Foundation
+import PhotosCore
 
 /// An album's thumbnails, packed into one blob (§3).
 ///

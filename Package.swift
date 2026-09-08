@@ -5,6 +5,7 @@ let package = Package(
     name: "photos",
     platforms: [.macOS(.v14), .iOS(.v18)],
     products: [
+        .library(name: "PhotosCore", targets: ["PhotosCore"]),
         .library(name: "PhotosStorage", targets: ["PhotosStorage"]),
         .library(name: "PhotosCatalog", targets: ["PhotosCatalog"]),
     ],
@@ -12,6 +13,13 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.8.0"),
     ],
     targets: [
+        // The contracts both sides of the system share: the EXIF vocabulary and its
+        // interpretation, and the row shape the pipeline fills and the catalog stores.
+        // Pure Foundation, no deps — which is what lets a pipeline use it without SQLite.
+        .target(
+            name: "PhotosCore",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .target(
             name: "PhotosStorage",
             dependencies: [.product(name: "Crypto", package: "swift-crypto")],
@@ -35,7 +43,12 @@ let package = Package(
         ),
         .target(
             name: "PhotosCatalog",
-            dependencies: ["CSQLite", "PhotosStorage"],
+            dependencies: ["PhotosCore", "CSQLite", "PhotosStorage"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "PhotosCoreTests",
+            dependencies: ["PhotosCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(

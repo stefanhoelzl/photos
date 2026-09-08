@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import PhotosCatalog
+import PhotosCore
 
 /// A shard is the unit of write in §2's conflict model — rewritten wholesale, guarded by
 /// `If-Match`. If a round trip loses a field, the loss is silent and permanent, so every

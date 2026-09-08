@@ -124,6 +124,16 @@ public enum ExifMapper {
     /// Both halves must be present: half a coordinate places a photo on the null island,
     /// which would then drag its album's centroid there too.
     public static func coordinate(from tags: ExifTags) -> (latitude: Double, longitude: Double)? {
+        // GPSStatus 'V' means the fix was void — the camera wrote a GPS block while having no
+        // position. 1,028 photos in this library carry one, all with latitude identical to
+        // longitude and both wildly out of range. They are rejected by the range check below
+        // anyway, but only by luck: a void block holding plausible-looking numbers would sail
+        // through and put a photo somewhere it has never been.
+        if let status = tags["GPSStatus"]?.stringValue?
+            .trimmingCharacters(in: .whitespaces).uppercased().first, status == "V" {
+            return nil
+        }
+
         guard
             let latitude = degrees(tags["GPSLatitude"], ref: tags["GPSLatitudeRef"]?.stringValue, negative: "S"),
             let longitude = degrees(tags["GPSLongitude"], ref: tags["GPSLongitudeRef"]?.stringValue, negative: "W"),

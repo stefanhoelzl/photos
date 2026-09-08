@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import PhotosCatalog
+@testable import PhotosCore
 
 /// §7 puts the *interpretation* of EXIF in the shared package precisely because a laptop and
 /// a phone disagreeing here would corrupt the catalog. These are the disagreements that were
@@ -246,5 +246,49 @@ struct ExifMapperTests {
         #expect(row.width == nil)
         #expect(row.bytes == 4096)
         #expect(row.mediaType == .photo)
+    }
+}
+
+/// GPS blocks that declare themselves invalid.
+struct GPSStatusTests {
+
+    static func coordinate(lat: [Double], lon: [Double], status: String?) -> ExifTags {
+        var values: [String: ExifValue] = [
+            "GPSLatitude": .array(lat.map { .rational(numerator: $0, denominator: 1) }),
+            "GPSLatitudeRef": .string("N"),
+            "GPSLongitude": .array(lon.map { .rational(numerator: $0, denominator: 1) }),
+            "GPSLongitudeRef": .string("E"),
+        ]
+        if let status { values["GPSStatus"] = .string(status) }
+        return ExifTags(values)
+    }
+
+    @Test("a void fix is rejected even when the numbers look plausible")
+    func voidStatusRejected() {
+        // The case the range check cannot catch: 1,028 photos in the real library carry a
+        // void block, and they are only rejected today because their garbage happens to be
+        // out of range. Plausible numbers in a void block would be accepted.
+        let tags = Self.coordinate(lat: [47, 35, 0], lon: [11, 30, 0], status: "V")
+        #expect(ExifMapper.coordinate(from: tags) == nil)
+    }
+
+    @Test("an active fix is accepted")
+    func activeStatusAccepted() {
+        let tags = Self.coordinate(lat: [47, 35, 0], lon: [11, 30, 0], status: "A")
+        let c = ExifMapper.coordinate(from: tags)
+        #expect(c != nil)
+        #expect(abs((c?.latitude ?? 0) - 47.5833) < 0.001)
+    }
+
+    @Test("no GPSStatus at all is accepted — most cameras omit it")
+    func absentStatusAccepted() {
+        let tags = Self.coordinate(lat: [47, 35, 0], lon: [11, 30, 0], status: nil)
+        #expect(ExifMapper.coordinate(from: tags) != nil)
+    }
+
+    @Test("the library's actual void signature is rejected")
+    func realWorldVoidBlock() {
+        let tags = Self.coordinate(lat: [17056881, 40, 0], lon: [17056881, 40, 0], status: "V")
+        #expect(ExifMapper.coordinate(from: tags) == nil)
     }
 }

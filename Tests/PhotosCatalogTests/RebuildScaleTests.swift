@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import PhotosCatalog
+import PhotosCore
 
 /// Milestone B's empirical bar, the counterpart to A's 38 SigV4 vectors and its static ELF.
 ///
