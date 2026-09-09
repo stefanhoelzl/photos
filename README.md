@@ -14,7 +14,8 @@ is the only place that knows which adapter satisfies which port.
 | `:domain` | the shared tier: EXIF interpretation, the S3 client and signer, the catalog and its sync loop, the library walk, the ingest rules |
 | `:adapter:linux` | the imaging backend over `native/CImaging`, the Secret Service client over libdbus, the flock run lock, XDG paths |
 | `:app:cli` | the shipped `photos-cli`: argument parsing, the composition root, exit codes |
-| `:tools:smoke` | the only thing that exercises the *shipped* link end to end |
+| `:tests:fixtures` | synthetic media — JPEG, HEIC, video, CR2, PNG, EXIF — generated, never committed |
+| `:tests:cli` | the end-to-end suite: declares a library and a zone, runs the *shipped* binary, asserts both |
 
 Not modules, and not Kotlin:
 
@@ -90,7 +91,15 @@ an estimate.
 Scripts/build-native.sh          # once: imaging stack, sqlite, openssl, curl, dbus
 ./gradlew build                  # 308 tests
 ./gradlew :app:cli:linkReleaseExecutableLinuxX64
+./gradlew :tests:cli:e2e         # 13 scenarios against the shipped binary — opt-in
 ```
+
+`:tests:cli` is **not** part of `build`, which compiles its scenarios but does not run them —
+so a rename in `:domain` still breaks the build immediately, while the inner loop stays fast.
+Run it after touching the pipeline or ingest, and before tagging. It declares a library tree and
+a zone, forks `photos-cli` against S3Mock, and asserts the library and zone that result: the
+library open-world, naming only what matters, and the zone exhaustively, so an unexpected row
+fails without anyone having predicted it.
 
 The native stack **must** be built with Kotlin/Native's own bundled toolchain, which is what
 `build-native.sh` does and why it takes no argument any more. Built with the host's gcc instead,

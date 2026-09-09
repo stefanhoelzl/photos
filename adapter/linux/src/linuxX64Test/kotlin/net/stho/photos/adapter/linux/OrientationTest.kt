@@ -7,6 +7,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.set
+import net.stho.photos.fixtures.exifApp1
+import net.stho.photos.fixtures.syntheticJpeg
+import net.stho.photos.fixtures.syntheticOrientedJpeg
+import net.stho.photos.fixtures.withApp1
 
 /**
  * §3 promises that stored dimensions are already rotated and that no consumer applies

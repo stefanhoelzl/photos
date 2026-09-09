@@ -3,13 +3,16 @@ package net.stho.photos.adapter.linux
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlinx.io.files.Path
+import net.stho.photos.fixtures.be32
+import net.stho.photos.fixtures.withScratchDirectory
+import net.stho.photos.fixtures.write
 import net.stho.photos.pipeline.MediaFormat
 
 /** A top-level atom: 4-byte big-endian size, then the type. */
 private fun atom(type: String, size: Int): ByteArray = be32(size) + type.encodeToByteArray()
 
 private fun sniffing(bytes: ByteArray): MediaFormat =
-    withTemporaryDirectory("sniff") { directory ->
+    withScratchDirectory("sniff") { directory ->
         CImagingProbe().sniff(Path(directory, "candidate").write(bytes).toString())
     }
 

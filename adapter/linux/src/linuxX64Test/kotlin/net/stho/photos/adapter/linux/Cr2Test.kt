@@ -8,6 +8,10 @@ import kotlin.test.assertTrue
 import kotlinx.io.files.Path
 import net.stho.photos.exif.Dimensions
 import net.stho.photos.exif.asText
+import net.stho.photos.fixtures.syntheticJpeg
+import net.stho.photos.fixtures.withScratchDirectory
+import net.stho.photos.fixtures.wrappedInCr2
+import net.stho.photos.fixtures.write
 import net.stho.photos.pipeline.MediaItem
 import net.stho.photos.pipeline.OriginalSource
 
@@ -78,7 +82,7 @@ class Cr2Test {
     }
 
     @Test
-    fun aCarvedOriginalIsWhatThePipelineUploadsForARaw() = withTemporaryDirectory("cr2") { directory ->
+    fun aCarvedOriginalIsWhatThePipelineUploadsForARaw() = withScratchDirectory("cr2") { directory ->
         val path = Path(directory, "IMG_7353.CR2")
             .write(syntheticJpeg(900, 600).wrappedInCr2(900, 600))
 
@@ -101,7 +105,7 @@ class Cr2Test {
 class Cr2GraftTest {
 
     @Test
-    fun aCarvedJpegCarriesTheCr2sOwnExif() = withTemporaryDirectory("graft") { directory ->
+    fun aCarvedJpegCarriesTheCr2sOwnExif() = withScratchDirectory("graft") { directory ->
         // Without a tag in IFD0 there is nothing to graft, so the graft path is silently
         // untested — which is exactly what happened until this fixture grew a Model.
         val jpeg = syntheticJpeg(320, 240)

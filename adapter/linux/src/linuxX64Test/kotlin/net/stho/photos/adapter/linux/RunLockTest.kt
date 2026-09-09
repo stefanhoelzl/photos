@@ -4,12 +4,13 @@ package net.stho.photos.adapter.linux
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
+import net.stho.photos.fixtures.withScratchDirectory
 import net.stho.photos.ports.LockAttempt
 import net.stho.photos.ports.LockHandle
 import platform.posix.getpid

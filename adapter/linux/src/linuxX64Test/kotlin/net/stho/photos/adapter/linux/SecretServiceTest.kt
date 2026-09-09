@@ -7,6 +7,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import net.stho.photos.CredentialFailure
+import net.stho.photos.fixtures.write
 import net.stho.photos.ingest.Credentials
 import net.stho.photos.ports.KeyringRead
 

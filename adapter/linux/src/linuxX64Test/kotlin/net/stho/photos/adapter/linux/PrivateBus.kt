@@ -2,6 +2,10 @@ package net.stho.photos.adapter.linux
 
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
+import net.stho.photos.fixtures.deleteTree
+import net.stho.photos.fixtures.readBytes
+import net.stho.photos.fixtures.scratchDirectory
+import net.stho.photos.fixtures.write
 import platform.posix.SIGTERM
 import platform.posix.kill
 import platform.posix.system

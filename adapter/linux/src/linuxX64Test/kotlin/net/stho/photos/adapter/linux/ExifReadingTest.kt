@@ -6,6 +6,11 @@ import kotlin.test.assertTrue
 import kotlinx.io.files.Path
 import net.stho.photos.exif.asLong
 import net.stho.photos.exif.asText
+import net.stho.photos.fixtures.syntheticHeic
+import net.stho.photos.fixtures.syntheticOrientedJpeg
+import net.stho.photos.fixtures.withScratchDirectory
+import net.stho.photos.fixtures.write
+import net.stho.photos.fixtures.writeSyntheticHeic
 
 /**
  * Reading EXIF back out of the containers the library actually holds.
@@ -19,7 +24,7 @@ import net.stho.photos.exif.asText
 class ExifReadingTest {
 
     @Test
-    fun tagsAreReadBackOutOfAHeic() = withTemporaryDirectory("exif") { directory ->
+    fun tagsAreReadBackOutOfAHeic() = withScratchDirectory("exif") { directory ->
         val path = Path(directory, "live.heic")
         writeSyntheticHeic(path, width = 64, height = 48, model = "iPhone XS")
 
@@ -29,13 +34,13 @@ class ExifReadingTest {
     }
 
     @Test
-    fun tagsAreReadBackOutOfAJpeg() = withTemporaryDirectory("exif") { directory ->
+    fun tagsAreReadBackOutOfAJpeg() = withScratchDirectory("exif") { directory ->
         val path = Path(directory, "photo.jpg").write(syntheticOrientedJpeg(64, 48, orientation = 6))
         assertEquals(6L, CImagingBackend().rawTags(path.toString())["Orientation"]?.asLong)
     }
 
     @Test
-    fun aHeicWithNoExifYieldsNoTagsRatherThanFailing() = withTemporaryDirectory("exif") { directory ->
+    fun aHeicWithNoExifYieldsNoTagsRatherThanFailing() = withScratchDirectory("exif") { directory ->
         val path = Path(directory, "bare.heic").write(syntheticHeic(32, 32))
         assertTrue(CImagingBackend().rawTags(path.toString()).values.isEmpty())
     }

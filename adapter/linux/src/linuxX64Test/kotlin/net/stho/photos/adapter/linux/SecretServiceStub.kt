@@ -13,6 +13,7 @@ import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.nativeHeap
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.toKString
+import net.stho.photos.fixtures.readBytes
 import net.stho.photos.ingest.Credentials
 import photosdbus.DBusMessageIter
 import photosdbus.dbus_bus_request_name

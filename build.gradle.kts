@@ -155,3 +155,9 @@ fun configureS3Mock(task: Task) {
 project(":domain") {
     tasks.matching { it.name == "linuxX64Test" }.configureEach { configureS3Mock(this) }
 }
+
+// The end-to-end suite needs one too. Its test task is opt-in -- `:tests:cli:e2e` -- and an
+// `onlyIf` skips the task and its actions together, so `build` never starts a second JVM.
+project(":tests:cli") {
+    tasks.matching { it.name == "linuxX64Test" }.configureEach { configureS3Mock(this) }
+}

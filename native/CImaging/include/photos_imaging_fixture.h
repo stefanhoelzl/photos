@@ -5,7 +5,7 @@
  * are cheap to synthesise in Kotlin, but a video needs an encoder, and the only one in the
  * build is the one the pipeline ships with. So the fixture writer lives here, beside it.
  *
- * Nothing in the pipeline calls this; it exists for the adapter's tests and for :tools:smoke.
+ * Nothing in the pipeline calls this; it exists for the adapter's tests and :tests:fixtures.
  */
 #ifndef PHOTOS_IMAGING_FIXTURE_H
 #define PHOTOS_IMAGING_FIXTURE_H

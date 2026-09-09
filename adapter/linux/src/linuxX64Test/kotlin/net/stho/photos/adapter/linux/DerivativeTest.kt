@@ -16,6 +16,10 @@ import kotlinx.cinterop.set
 import kotlinx.io.files.Path
 import net.stho.photos.derivative.DerivativeSpec
 import net.stho.photos.exif.Dimensions
+import net.stho.photos.fixtures.readBytes
+import net.stho.photos.fixtures.syntheticJpeg
+import net.stho.photos.fixtures.withScratchDirectory
+import net.stho.photos.fixtures.write
 import net.stho.photos.model.MediaType
 import net.stho.photos.pipeline.MediaItem
 import net.stho.photos.pipeline.OriginalSource
@@ -206,7 +210,7 @@ class EncodingTest {
 class PipelineTest {
 
     @Test
-    fun aStillYieldsBothTiersAndKeepsItsOriginal() = withTemporaryDirectory("still") { directory ->
+    fun aStillYieldsBothTiersAndKeepsItsOriginal() = withScratchDirectory("still") { directory ->
         val path = Path(directory, "photo.jpg").write(syntheticJpeg(3000, 2000))
 
         val derived = CImagingPipeline(workDirectory = directory.toString())
@@ -227,7 +231,7 @@ class PipelineTest {
     }
 
     @Test
-    fun anUndecodableFileThrowsRatherThanPoisoningTheRun(): Unit = withTemporaryDirectory("bad") { directory ->
+    fun anUndecodableFileThrowsRatherThanPoisoningTheRun(): Unit = withScratchDirectory("bad") { directory ->
         // A valid JPEG header followed by nothing usable: sniffing succeeds, decoding must not.
         // Decision 15 makes this per-file and recoverable.
         val path = Path(directory, "truncated.jpg")

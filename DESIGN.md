@@ -1206,8 +1206,8 @@ renegotiate.
 Thumbs, previews, video transcode, CR2 extraction, Live-Photo pairing, `.photosignore`
 filtering, and the Linux `ImageBackend` adapter. Verified by unit tests over synthesised
 images — every operation, every orientation, the CR2 carve, the colour conversions and the
-Live-Photo pairing rule — and by `:tools:smoke`, which drives the whole native stack through
-the configuration that actually ships.
+Live-Photo pairing rule — and by `:tests:cli`, which drives the whole native stack through the
+configuration that actually ships, by running the shipped binary over a synthetic library.
 
 > **What that no longer covers, stated plainly.** An earlier draft added a dev-only harness
 > that ran the pipeline over the real library and compared per-tier counts and sizes against

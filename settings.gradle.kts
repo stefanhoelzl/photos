@@ -18,4 +18,8 @@ rootProject.name = "photos"
 include(":domain")
 include(":adapter:linux")
 include(":app:cli")
-include(":tools:smoke")
+
+// Test-only modules. `:tests:fixtures` generates the synthetic media both the adapter's own
+// tests and the end-to-end suite work from; `:tests:cli` drives the shipped binary.
+include(":tests:fixtures")
+include(":tests:cli")

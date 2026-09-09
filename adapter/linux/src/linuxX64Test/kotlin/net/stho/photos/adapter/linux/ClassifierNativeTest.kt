@@ -7,6 +7,12 @@ import kotlin.test.assertTrue
 import kotlinx.io.files.Path
 import net.stho.photos.exif.ExifTags
 import net.stho.photos.exif.ExifValue
+import net.stho.photos.fixtures.syntheticHeic
+import net.stho.photos.fixtures.syntheticJpeg
+import net.stho.photos.fixtures.withScratchDirectory
+import net.stho.photos.fixtures.wrappedInCr2
+import net.stho.photos.fixtures.write
+import net.stho.photos.fixtures.writeSyntheticVideo
 import net.stho.photos.pipeline.MediaClassifier
 import net.stho.photos.pipeline.MediaItem
 import net.stho.photos.pipeline.SkippedFile
@@ -35,7 +41,7 @@ class ClassifierNativeTest {
         MediaClassifier(CImagingProbe(), StubBackend(identifiers))
 
     @Test
-    fun junkReachingTheClassifierIsSkippedAsUnrecognised() = withTemporaryDirectory("classify") { directory ->
+    fun junkReachingTheClassifierIsSkippedAsUnrecognised() = withScratchDirectory("classify") { directory ->
         // The classifier no longer knows what junk is — `.photosignore` and the walker handle
         // that. This is the property that made moving exclusions out safe: the denylist only
         // ever quieted the report, because every one of these sniffs as nothing.
@@ -54,7 +60,7 @@ class ClassifierNativeTest {
     }
 
     @Test
-    fun aNewMediaFormatIsPickedUpAutomatically() = withTemporaryDirectory("classify") { directory ->
+    fun aNewMediaFormatIsPickedUpAutomatically() = withScratchDirectory("classify") { directory ->
         // The payoff of a denylist over an allowlist: content decides, so a file whose extension
         // nobody enumerated is still ingested if it sniffs as media.
         val path = Path(directory, "photo.unknownext").write(syntheticJpeg(32, 32)).toString()
@@ -65,7 +71,7 @@ class ClassifierNativeTest {
     }
 
     @Test
-    fun aCr2IsClassifiedAsRawNeverAsADecodableStill() = withTemporaryDirectory("classify") { directory ->
+    fun aCr2IsClassifiedAsRawNeverAsADecodableStill() = withScratchDirectory("classify") { directory ->
         val path = Path(directory, "IMG_7353.CR2")
             .write(syntheticJpeg(128, 96).wrappedInCr2(128, 96)).toString()
 
@@ -74,7 +80,7 @@ class ClassifierNativeTest {
 
     @Test
     fun aHeicAndAMovSharingAContentIdentifierBecomeOneLivePhoto() =
-        withTemporaryDirectory("classify") { directory ->
+        withScratchDirectory("classify") { directory ->
             val identifier = "B34B6B99-C28F-4E16-A788-79AA0E30BB18"
             val still = Path(directory, "IMG_0679.HEIC").write(syntheticHeic(64, 48)).toString()
             val movie = Path(directory, "IMG_0679.mov")
@@ -92,7 +98,7 @@ class ClassifierNativeTest {
 
     @Test
     fun aMatchingFilenameDoesNotPairWithoutAMatchingIdentifier() =
-        withTemporaryDirectory("classify") { directory ->
+        withScratchDirectory("classify") { directory ->
             // The case that makes decision 14 worth its cost: an unrelated video that happens to
             // share a basename must stay a video, not be swallowed into a Live Photo.
             val still = Path(directory, "IMG_1234.HEIC").write(syntheticHeic(64, 48)).toString()

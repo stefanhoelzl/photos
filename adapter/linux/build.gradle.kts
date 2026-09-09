@@ -155,6 +155,12 @@ kotlin {
             // as a path. kotlinx-io is what the domain already uses for both.
             implementation(libs.kotlinx.io.core)
         }
-        linuxX64Test.dependencies { implementation(kotlin("test")) }
+        linuxX64Test.dependencies {
+            implementation(kotlin("test"))
+            // Synthetic media, shared with `:tests:cli`. A test source set depending on a module
+            // whose main depends on this one's main is not a cycle -- it is what JVM
+            // `testFixtures` does, one project up.
+            implementation(project(":tests:fixtures"))
+        }
     }
 }
