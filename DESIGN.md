@@ -113,7 +113,7 @@ fields use `textContentType = .password` alongside a `.username` field.
 
 **The laptop is different.** The systemd unit needs unattended write access, and takes it from
 the same keyring — which is why a run before the first login defers rather than fails. It runs
-`photos-cli` directly, not under `proton-env`: the development override exists for a terminal,
+`photos-cli` directly, not under `secrets-env`: the development override exists for a terminal,
 not for a timer.
 
 **In production both credentials live in the keyring and nowhere else** — two items under one
@@ -155,18 +155,18 @@ directory finds no `.photosignore` and refuses, rather than concluding the libra
 and deleting 292 albums. The convenient default is also the safe one.
 
 **In development `PHOTOS_PASSWORD` and `PHOTOS_ENDPOINT` override the keyring**, because both
-are already in Proton Pass and `proton-env` — which reads `.proton.yaml` and execs with the
+are already in Proton Pass and `secrets-env` — which reads `.secrets.yaml` and execs with the
 entries injected — is how every other command in this repository reaches them:
 
 ```sh
-proton-env photos-cli sync --dry-run
+secrets-env photos-cli sync --dry-run
 ```
 
 Both resolve the same way — flag, then environment, then keyring — so there is one rule to
 remember rather than one per credential. The environment wins when it is set, which is what an
 override means, and a run that takes that path **names the variables on stderr**: a stale
 value silently outranking the keyring is exactly the kind of thing that costs an hour, so it
-is not silent. An *empty* variable is treated as unset — `proton-env` that cannot resolve an
+is not silent. An *empty* variable is treated as unset — `secrets-env` that cannot resolve an
 entry leaves the name defined and blank, and a blank secret would otherwise reach the signer
 and come back as an opaque 403.
 

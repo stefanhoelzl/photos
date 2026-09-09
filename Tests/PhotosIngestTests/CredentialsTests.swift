@@ -5,7 +5,7 @@ import Testing
 /// Which source answers, and what happens when none does.
 ///
 /// The precedence is a safety property, not a convenience: production takes both credentials
-/// from the keyring, development overrides them from the environment under `proton-env`, and
+/// from the keyring, development overrides them from the environment under `secrets-env`, and
 /// the two must not be able to quietly swap places.
 @Suite("Credentials")
 struct CredentialsTests {
@@ -13,10 +13,10 @@ struct CredentialsTests {
     @Test("PHOTOS_PASSWORD wins, and says it came from the environment")
     func environmentOverridesTheKeyring() throws {
         let password = try Credentials.password(
-            environment: ["PHOTOS_PASSWORD": "from-proton-env"],
+            environment: ["PHOTOS_PASSWORD": "from-secrets-env"],
             lookUpKeyring: { _ in Issue.record("the keyring must not be consulted"); return "" }
         )
-        #expect(password.value == "from-proton-env")
+        #expect(password.value == "from-secrets-env")
         #expect(password.source == .environment)
     }
 
@@ -43,7 +43,7 @@ struct CredentialsTests {
         #expect(asked == [.password, .endpoint])
     }
 
-    /// `proton-env` that cannot resolve an entry leaves the name defined and empty. Treating
+    /// `secrets-env` that cannot resolve an entry leaves the name defined and empty. Treating
     /// that as a password would send a blank secret to the signer and get back an opaque 403
     /// — the one thing §1 says a credential failure must never be.
     @Test("an empty variable is not a password, and falls through to the keyring")

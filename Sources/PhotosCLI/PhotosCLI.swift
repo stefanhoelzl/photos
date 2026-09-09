@@ -177,7 +177,7 @@ extension PhotosCLI {
             let root = try Credentials.libraryRoot(override: libraryPath)
             let storage = try Credentials.storage(override: endpoint)
             let password = try Credentials.password()
-            // Only ever true under `proton-env` or a shell that exported them. Said out loud
+            // Only ever true under `secrets-env` or a shell that exported them. Said out loud
             // so a stale variable outranking the keyring is visible rather than an hour of
             // wondering why the wrong zone is being written.
             let injected = [

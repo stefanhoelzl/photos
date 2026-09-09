@@ -14,10 +14,10 @@ import PhotosStorage
 /// rather than a keyring entry plus an exported variable somebody has to remember.
 ///
 /// **Development overrides both from the environment**, because this repository already keeps
-/// them in Proton Pass and `proton-env` — which reads `.proton.yaml` and execs with the
+/// them in Proton Pass and `secrets-env` — which reads `.secrets.yaml` and execs with the
 /// entries injected — is how every other command here reaches them:
 ///
-///     proton-env photos-cli sync --dry-run
+///     secrets-env photos-cli sync --dry-run
 ///
 /// The environment therefore wins when it is set, which is exactly what an override means. A
 /// run that takes that path says so on stderr, so a stale variable silently outranking the
@@ -38,7 +38,7 @@ public enum Credentials {
     /// Which source answered. The caller says so when it was not the keyring.
     public enum Source: Sendable, Equatable {
         case keyring
-        /// The environment, i.e. `proton-env` or a shell — development only.
+        /// The environment, i.e. `secrets-env` or a shell — development only.
         case environment
     }
 
@@ -71,7 +71,7 @@ public enum Credentials {
                 nothing in the keyring for service \(Credentials.service), field \(field.rawValue). \
                 Store it with:
                   photos-cli login
-                For development, run under proton-env instead, which injects both from Proton Pass.
+                For development, run under secrets-env instead, which injects both from Proton Pass.
                 """
             case .keyringProtocol(let detail):
                 detail
@@ -125,7 +125,7 @@ public enum Credentials {
         return URL(fileURLWithPath: expanded)
     }
 
-    /// An empty variable is an unset one. `proton-env` failing to resolve an entry leaves the
+    /// An empty variable is an unset one. `secrets-env` failing to resolve an entry leaves the
     /// name defined and empty, and a blank secret would otherwise reach the signer and come
     /// back as an opaque 403 — which is exactly the error §1 says must never be opaque.
     static func value(_ raw: String?) -> String? {

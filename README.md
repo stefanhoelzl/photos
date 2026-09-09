@@ -78,11 +78,11 @@ photos-cli logout    # removes both
 The keyring is read and written in-process over D-Bus, so nothing is shelled out to and
 nothing needs to be on `PATH`. Items stored earlier with `secret-tool` are found unchanged.
 
-**Development** overrides them from Proton Pass — `.proton.yaml` maps them, `proton-env`
+**Development** overrides them from Proton Pass — `.secrets.yaml` maps them, `secrets-env`
 injects them:
 
 ```sh
-proton-env photos-cli sync --dry-run
+secrets-env photos-cli sync --dry-run
 ```
 
 The environment beats the keyring when set, and a run that uses it names the variables on
