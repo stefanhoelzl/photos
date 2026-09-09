@@ -12,7 +12,9 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
-            implementation(libs.coroutines.core)
+            // `api`, not `implementation`: the pipeline port publishes its progress as a
+            // `SharedFlow`, so `Flow` is part of the domain's own surface.
+            api(libs.coroutines.core)
             implementation(libs.kotlinx.datetime)
             // Storage: Ktor is both the platform abstraction and the test seam (DESIGN §7),
             // so there is no HttpTransport port. SigV4 needs SHA-256 and HMAC and nothing

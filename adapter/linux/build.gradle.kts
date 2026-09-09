@@ -85,6 +85,12 @@ kotlin {
         }
     }
     sourceSets {
-        linuxX64Main.dependencies { implementation(project(":domain")) }
+        linuxX64Main.dependencies {
+            implementation(project(":domain"))
+            // Files, not bytes: the carver reads a whole CR2 and the transcode is handed back
+            // as a path. kotlinx-io is what the domain already uses for both.
+            implementation(libs.kotlinx.io.core)
+        }
+        linuxX64Test.dependencies { implementation(kotlin("test")) }
     }
 }

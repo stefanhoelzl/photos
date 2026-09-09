@@ -2,7 +2,13 @@ package net.stho.photos.ports
 
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
+import kotlinx.coroutines.flow.SharedFlow
 import net.stho.photos.exif.ExifTags
+import net.stho.photos.pipeline.Derivatives
+import net.stho.photos.pipeline.MediaFormat
+import net.stho.photos.pipeline.MediaItem
+import net.stho.photos.pipeline.PipelineEvent
+import net.stho.photos.pipeline.VideoInfo
 
 /**
  * What the domain needs from the world (DESIGN §7).
@@ -24,9 +30,29 @@ import net.stho.photos.exif.ExifTags
  * phone and a laptop cannot derive different dates from the same file.
  */
 public fun interface ImageBackend {
-    /** Raw tags for one file, normalised to EXIF/TIFF tag names. */
+    /**
+     * Raw tags for one file, normalised to EXIF/TIFF tag names.
+     *
+     * Throws [MediaUnreadable] when this file cannot be read — and nothing else for that case.
+     * Callers treat missing tags as a courtesy withheld, not as a failed run.
+     */
     public fun rawTags(path: String): ExifTags
 }
+
+/**
+ * One file could not be read. Per-item and recoverable, and deliberately **not** a
+ * `PhotosFailure`.
+ *
+ * It exists so the two error tiers survive the port boundary. Without it a caller in the domain
+ * has nothing narrow to catch — the adapter's own exception type is not visible here — so it
+ * must catch `Exception`, which would silently swallow a genuinely fatal `PhotosFailure` and
+ * report it as "this file has no tags". Declaring the failure on the port is what lets the
+ * catch be narrow.
+ */
+public class MediaUnreadable(
+    message: String,
+    override val cause: Throwable? = null,
+) : Exception(message)
 
 /**
  * There is no `Clock` port: `kotlin.time.Clock` already is one.
@@ -105,4 +131,44 @@ public interface Reporter {
     public fun progress(message: String)
     public fun unresolved(condition: String, detail: String)
     public fun failed(subject: String, message: String)
+}
+
+/**
+ * What a file *is*, and what a video container says about it — both from a bounded read.
+ *
+ * A port for the second of the three reasons: sniffing is libheif/ffmpeg behind the C shim here
+ * and `CGImageSource`/`AVAsset` on iOS, and the classifier that consumes it is shared. It is
+ * kept apart from [ImageBackend] because that one is EXIF extraction and nothing else; a probe
+ * answers a question about the *container*, before any tag is read.
+ */
+public interface MediaProbe {
+    /**
+     * Reads a bounded header prefix, never the whole file — which is what makes pointing the
+     * scan at a 2.66 GB SQLite database cost one small read.
+     */
+    public fun sniff(path: String): MediaFormat
+
+    /**
+     * Null when the container cannot be read; a file the pipeline cannot probe is skipped.
+     * Throws [MediaUnreadable] only for a failure that is about this file.
+     */
+    public fun videoInfo(path: String): VideoInfo?
+}
+
+/**
+ * The derivative pipeline: one [MediaItem] in, everything §5 stores out.
+ *
+ * [derive] is synchronous and safe to call from many threads at once. It owns no worker pool —
+ * ingest owns that, because only ingest can interleave encoding, which is CPU-bound and
+ * parallel, with §9's uploads, which are link-bound and deliberately serial.
+ *
+ * Progress arrives on [events] rather than through a callback parameter, so [derive]'s
+ * signature stays a plain function and every worker publishes into the one flow. A
+ * `SharedFlow` never completes; a collector ends by cancelling its own scope, which is why
+ * there is no counterpart to Swift's `finish()`.
+ */
+public interface Pipeline {
+    public val events: SharedFlow<PipelineEvent>
+
+    public fun derive(item: MediaItem): Derivatives
 }

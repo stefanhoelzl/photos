@@ -1,0 +1,232 @@
+@file:OptIn(ExperimentalForeignApi::class, ExperimentalUuidApi::class)
+
+package net.stho.photos.adapter.linux
+
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.io.files.Path
+import kotlinx.io.files.SystemFileSystem
+import net.stho.photos.derivative.DerivativeSpec
+import net.stho.photos.exif.ExifTags
+import net.stho.photos.exif.toPhotoRow
+import net.stho.photos.model.MediaType
+import net.stho.photos.pipeline.Derivatives
+import net.stho.photos.pipeline.MediaItem
+import net.stho.photos.pipeline.OriginalSource
+import net.stho.photos.pipeline.PipelineEvent
+import net.stho.photos.pipeline.withExtension
+import net.stho.photos.ports.Ids
+import net.stho.photos.ports.ImageBackend
+import net.stho.photos.ports.MediaUnreadable
+import net.stho.photos.ports.Pipeline
+import photosimaging.pi_video_transcode
+
+/**
+ * The derivative pipeline over libjpeg-turbo, libheif and ffmpeg.
+ *
+ * [derive] is synchronous and safe to call from many threads at once. It owns no worker pool:
+ * ingest owns that, because only ingest can interleave encoding — which is CPU-bound and
+ * parallel — with §9's uploads, which are link-bound and deliberately serial.
+ */
+public class CImagingPipeline(
+    private val workDirectory: String,
+    private val backend: ImageBackend = CImagingBackend(),
+    /**
+     * Bounds x265's internal pool, for both tiers.
+     *
+     * It defaults to 1 because [derive] is documented as safe to call from many threads and the
+     * caller owns the pool — an encoder opening its own would be a second, hidden one. Measured
+     * on a 16-core machine with 16 workers: unbounded pools cost 7.2 GB resident. Raise it when
+     * driving the pipeline from a single thread.
+     */
+    private val encoderThreads: Int = 1,
+    /** Row identity. Injected so a run's rows can be asserted on at all (§7). */
+    private val ids: Ids = Ids { Uuid.random() },
+) : Pipeline {
+
+    // `bufferingNewest(256)` by another name: a caller that stops reading progress must never
+    // stall a worker mid-encode, so the oldest event is what gives way.
+    private val progress = MutableSharedFlow<PipelineEvent>(
+        extraBufferCapacity = 256,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    override val events: SharedFlow<PipelineEvent> = progress.asSharedFlow()
+
+    override fun derive(item: MediaItem): Derivatives {
+        progress.tryEmit(PipelineEvent.Started(item.path))
+        try {
+            val kind = item.kind
+            val result = when (kind) {
+                MediaItem.Kind.Still -> deriveStill(item, OriginalSource.File(item.path))
+                MediaItem.Kind.Raw -> deriveRaw(item)
+                is MediaItem.Kind.LivePhoto -> deriveStill(item, OriginalSource.File(item.path)).let {
+                    it.copy(
+                        row = it.row.copy(mediaType = MediaType.LIVE_PHOTO),
+                        liveVideo = kind.video,
+                    )
+                }
+                MediaItem.Kind.Video -> deriveVideo(item)
+            }
+            progress.tryEmit(PipelineEvent.Finished(item.path))
+            return result
+        } catch (failure: Exception) {
+            progress.tryEmit(PipelineEvent.Failed(item.path, failure.message ?: failure.toString()))
+            throw failure
+        }
+    }
+
+    // ---------------------------------------------------------------- stills
+
+    private fun deriveStill(item: MediaItem, original: OriginalSource): Derivatives {
+        val tags = tagsOrEmpty(item.path)
+        return PixelImage.decode(item.path, DerivativeSpec.PREVIEW_LONG_EDGE).use { decoded ->
+            finishStill(item, tags, decoded, original, MediaType.PHOTO)
+        }
+    }
+
+    private fun deriveRaw(item: MediaItem): Derivatives {
+        val tags = tagsOrEmpty(item.path)
+        val extraction = carveEmbeddedJpeg(item.path)
+        return PixelImage.decodeJpeg(extraction.jpeg, DerivativeSpec.PREVIEW_LONG_EDGE).use { decoded ->
+            // §3: the row describes what is in the zone. What is in the zone is the carved
+            // JPEG — so that is the name and that is the size, and the CR2's own name is kept
+            // as `sourceFilename` so reconciliation can still find the file on disk.
+            finishStill(
+                item = item,
+                tags = tags,
+                decoded = decoded,
+                original = OriginalSource.Bytes(extraction.jpeg),
+                mediaType = MediaType.PHOTO,
+                filename = item.filename.withExtension("jpg"),
+                sourceFilename = item.filename,
+                bytes = extraction.jpeg.size.toLong(),
+            )
+        }
+    }
+
+    private fun finishStill(
+        item: MediaItem,
+        tags: ExifTags,
+        decoded: PixelImage,
+        original: OriginalSource,
+        mediaType: MediaType,
+        filename: String? = null,
+        sourceFilename: String? = null,
+        bytes: Long? = null,
+    ): Derivatives {
+        // Orientation is already applied — libjpeg's caller bakes it, libheif applies irot
+        // itself, and the video path bakes the display matrix — so the decoded buffer's own
+        // dimensions are the display dimensions §3 wants stored.
+        if (decoded.hasAlpha) decoded.flattenAlpha(DerivativeSpec.ALPHA_BACKGROUND)
+        progress.tryEmit(PipelineEvent.Decoded(item.path, decoded.width, decoded.height))
+
+        val preview = makePreview(decoded)
+        progress.tryEmit(PipelineEvent.Previewed(item.path, preview.size))
+        val thumbnail = makeThumbnail(decoded)
+        progress.tryEmit(PipelineEvent.Thumbnailed(item.path, thumbnail.size))
+
+        val row = tags.toPhotoRow(
+            id = ids.next(),
+            filename = filename ?: item.filename,
+            sourceFilename = sourceFilename,
+            bytes = bytes ?: item.byteCount,
+            mediaType = mediaType,
+        ).copy(
+            // The decoded *source* is the authority, not the decoded buffer: shrink-on-load
+            // means a 3000px photo may well arrive as a 2250px buffer, and §3 stores the
+            // photograph's dimensions. EXIF is not consulted — PixelXDimension can be absent,
+            // can describe the embedded thumbnail, or can simply disagree with the pixels, and
+            // a grid that lays out from the wrong aspect ratio is visibly wrong.
+            width = decoded.sourceWidth,
+            height = decoded.sourceHeight,
+        )
+
+        return Derivatives(row, tags, thumbnail, preview, original)
+    }
+
+    /** 2048px long edge, aspect preserved, never upscaled, source ICC carried through. */
+    private fun makePreview(decoded: PixelImage): ByteArray =
+        decoded.resizedFitting(
+            longEdge = DerivativeSpec.PREVIEW_LONG_EDGE,
+            allowUpscale = DerivativeSpec.PREVIEW_UPSCALES,
+        ).use { resized ->
+            resized.applyColorHandling(DerivativeSpec.PREVIEW_COLOR)
+            resized.encodedHeic(quality = DerivativeSpec.PREVIEW_QUALITY, threads = encoderThreads)
+        }
+
+    /** 256×256 centre crop, converted to sRGB, no profile embedded. */
+    private fun makeThumbnail(decoded: PixelImage): ByteArray =
+        decoded.squareCropped(DerivativeSpec.THUMBNAIL_EDGE).use { square ->
+            square.applyColorHandling(DerivativeSpec.THUMBNAIL_COLOR)
+            square.encodedJpeg(quality = DerivativeSpec.THUMBNAIL_QUALITY, optimize = true)
+        }
+
+    // ---------------------------------------------------------------- video
+
+    private fun deriveVideo(item: MediaItem): Derivatives {
+        val info = probeVideo(item.path)
+        val tags = tagsOrEmpty(item.path)
+
+        return PixelImage.poster(item.path, DerivativeSpec.posterTime(info.duration)).use { poster ->
+            if (poster.hasAlpha) poster.flattenAlpha(DerivativeSpec.ALPHA_BACKGROUND)
+            progress.tryEmit(PipelineEvent.Decoded(item.path, poster.width, poster.height))
+
+            val preview = makePreview(poster)
+            progress.tryEmit(PipelineEvent.Previewed(item.path, preview.size))
+            val thumbnail = makeThumbnail(poster)
+            progress.tryEmit(PipelineEvent.Thumbnailed(item.path, thumbnail.size))
+
+            val work = Path(workDirectory)
+            SystemFileSystem.createDirectories(work)
+            val output = Path(work, "${Uuid.random()}.mp4")
+
+            progress.tryEmit(PipelineEvent.Transcoding(item.path, 0.0))
+            imagingCall { err ->
+                pi_video_transcode(
+                    item.path,
+                    output.toString(),
+                    DerivativeSpec.VIDEO_MAX_HEIGHT,
+                    DerivativeSpec.VIDEO_QUALITY,
+                    encoderThreads,
+                    err,
+                )
+            }
+            progress.tryEmit(PipelineEvent.Transcoding(item.path, 1.0))
+
+            // §3 again: the zone holds the transcode, not the camera's file, so the row is
+            // named and sized after the transcode. The source name survives in
+            // `sourceFilename` — which is also what tells §7's byte-size assertion to leave
+            // this row alone, since there is nothing on disk it should equal.
+            val row = tags.toPhotoRow(
+                id = ids.next(),
+                filename = item.filename.withExtension("mp4"),
+                sourceFilename = item.filename,
+                bytes = SystemFileSystem.metadataOrNull(output)?.size,
+                mediaType = MediaType.VIDEO,
+            ).copy(
+                width = poster.width,
+                // Posters decode at full size; no shrink-on-load.
+                height = poster.height,
+            )
+
+            // §3: a video has a video_id and a preview_id poster, but no original_id.
+            Derivatives(row, tags, thumbnail, preview, OriginalSource.None, video = output.toString())
+        }
+    }
+
+    /**
+     * Tags are a courtesy: a file whose EXIF block is missing or malformed still has
+     * derivatives, and decision 15 says only an undecodable file is skipped.
+     */
+    private fun tagsOrEmpty(path: String): ExifTags = try {
+        backend.rawTags(path)
+    } catch (_: MediaUnreadable) {
+        ExifTags()
+    }
+}
