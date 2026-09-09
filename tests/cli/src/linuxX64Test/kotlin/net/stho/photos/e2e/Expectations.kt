@@ -2,6 +2,7 @@
 
 package net.stho.photos.e2e
 
+import net.stho.photos.adapter.linux.NativeSqlDrivers
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import kotlinx.io.files.Path
@@ -170,7 +171,7 @@ internal class ZoneExpectations {
         )
         val pack = Path(scenario.scratch, "thumbs-${Uuid.random()}.db")
             .write(scenario.s3.fetch(thumbsId))
-        val jpeg = ThumbPack(pack).thumbnail(row.id) ?: throw DerivativeWrong(
+        val jpeg = ThumbPack(pack, NativeSqlDrivers()).thumbnail(row.id) ?: throw DerivativeWrong(
             "the thumbnail", row.filename, "the catalog writer",
             "a row in the album's thumbs pack", "no row for ${row.id}",
         )

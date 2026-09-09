@@ -4,9 +4,6 @@ import app.cash.sqldelight.ColumnAdapter
 import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.db.SqlSchema
-import app.cash.sqldelight.driver.native.NativeSqliteDriver
-import co.touchlab.sqliter.NO_VERSION_CHECK
-import co.touchlab.sqliter.JournalMode
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
 import kotlinx.io.files.FileNotFoundException
@@ -14,6 +11,8 @@ import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 import net.stho.photos.ShardFailure
 import net.stho.photos.model.MediaType
+import net.stho.photos.ports.Journal
+import net.stho.photos.ports.SqlDrivers
 import net.stho.photos.storage.ETag
 
 /**
@@ -64,7 +63,8 @@ internal val etagAdapter: ColumnAdapter<ETag, String> = object : ColumnAdapter<E
 }
 
 /** §3's measured sizes are all at SQLite's own default page size; it is stated, not assumed. */
-private const val PAGE_SIZE = 4096
+/** §3's `PRAGMA page_size`. Applied by each [SqlDrivers] adapter, in that driver's own way. */
+public const val PAGE_SIZE: Int = 4096
 
 /**
  * Opens the database at this path.
@@ -81,9 +81,10 @@ private const val PAGE_SIZE = 4096
  * rebuild transaction blocks the album list that is on screen while it runs.
  */
 internal fun Path.openDriver(
+    drivers: SqlDrivers,
     schema: SqlSchema<QueryResult.Value<Unit>>,
     creating: Boolean,
-    journalMode: JournalMode = JournalMode.DELETE,
+    journal: Journal = Journal.DELETE,
 ): SqlDriver {
     val directory = requireNotNull(parent) { "a database path needs a directory: $this" }
     if (creating) {
@@ -94,20 +95,7 @@ internal fun Path.openDriver(
         // "there is no file". The two must not be confused.
         throw FileNotFoundException("no database at $this")
     }
-    return NativeSqliteDriver(
-        schema = schema,
-        name = name,
-        onConfiguration = { configuration ->
-            configuration.copy(
-                version = if (creating) configuration.version else NO_VERSION_CHECK,
-                journalMode = journalMode,
-                extendedConfig = configuration.extendedConfig.copy(
-                    basePath = directory.toString(),
-                    pageSize = PAGE_SIZE,
-                ),
-            )
-        },
-    )
+    return drivers.open(toString(), schema, creating, journal)
 }
 
 /**

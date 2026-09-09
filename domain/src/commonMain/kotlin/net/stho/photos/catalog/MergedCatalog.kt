@@ -1,9 +1,10 @@
 package net.stho.photos.catalog
 
 import app.cash.sqldelight.adapter.primitive.IntColumnAdapter
-import co.touchlab.sqliter.JournalMode
 import kotlin.uuid.Uuid
 import kotlinx.io.files.Path
+import net.stho.photos.ports.SqlDrivers
+import net.stho.photos.ports.Journal
 import net.stho.photos.catalog.merged.MergedDatabase
 import net.stho.photos.catalog.merged.MergedQueries
 import net.stho.photos.catalog.merged.Photo as MergedPhoto
@@ -40,8 +41,8 @@ private val mergedPhotoAdapter = MergedPhoto.Adapter(
  * album list may be on screen, and WAL is what lets readers see the pre-transaction snapshot for
  * its whole duration and switch at commit, rather than blocking.
  */
-private fun Path.openMergedDriver() =
-    openDriver(MergedDatabase.Schema, creating = true, journalMode = JournalMode.WAL)
+private fun Path.openMergedDriver(drivers: SqlDrivers) =
+    openDriver(drivers, MergedDatabase.Schema, creating = true, journal = Journal.WAL)
 
 /**
  * The merged database's write side (§3): the rebuild, and nothing else.
@@ -49,9 +50,9 @@ private fun Path.openMergedDriver() =
  * The one write connection. Readers never go through here; they open their own, so a 1–3 s
  * rebuild never puts the album list behind a lock. [CatalogSync] is what serialises writers.
  */
-public class CatalogWriter(public val path: Path) : AutoCloseable {
+public class CatalogWriter(public val path: Path, drivers: SqlDrivers) : AutoCloseable {
 
-    private val driver = path.openMergedDriver()
+    private val driver = path.openMergedDriver(drivers)
     private val database = MergedDatabase(driver, mergedAlbumAdapter, mergedPhotoAdapter)
 
     /**
@@ -155,9 +156,9 @@ public data class DuplicateName(public val name: String, public val albums: List
  * Each consumer opens its own connection, which is what lets a query run while the writer holds
  * its transaction (§3). Readers need no locking at all.
  */
-public class CatalogReader(public val path: Path) : AutoCloseable {
+public class CatalogReader(public val path: Path, drivers: SqlDrivers) : AutoCloseable {
 
-    private val driver = path.openMergedDriver()
+    private val driver = path.openMergedDriver(drivers)
     private val queries: MergedQueries =
         MergedDatabase(driver, mergedAlbumAdapter, mergedPhotoAdapter).mergedQueries
 

@@ -2,6 +2,7 @@
 
 package net.stho.photos.e2e
 
+import net.stho.photos.adapter.linux.NativeSqlDrivers
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlin.uuid.ExperimentalUuidApi
@@ -54,7 +55,7 @@ internal suspend fun S3Client.readZone(scratch: Path): ZoneState {
         if (listed.isDirectoryMarker) continue
         val bytes = (get(listed.key) as GetResult.Content).bytes
         val local = Path(scratch, "read-${Uuid.random()}.db").write(bytes)
-        shards += local.readShard()
+        shards += local.readShard(NativeSqlDrivers())
     }
     val blobs = list(prefix = BLOB_PREFIX).toList()
         .filterNot(S3Object::isDirectoryMarker)
@@ -109,7 +110,7 @@ internal class GivenAlbum(private val name: String) {
         val thumbnails = rows.associate { it.id to syntheticJpeg(edge, edge) }
         val thumbsId = Uuid.random()
         val pack = Path(scratch, "given-thumbs-$thumbsId.db")
-        thumbnails.packThumbnails(pack)
+        thumbnails.packThumbnails(pack, NativeSqlDrivers())
         s3.put(thumbsId.blobKey, Body.File(pack))
 
         val shard = Shard(
@@ -123,7 +124,7 @@ internal class GivenAlbum(private val name: String) {
             photos = rows,
         )
         val local = Path(scratch, "given-$id.db")
-        shard.writeTo(local)
+        shard.writeTo(local, NativeSqlDrivers())
         s3.put(id.shardKey, Body.File(local))
     }
 

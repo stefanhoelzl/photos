@@ -18,6 +18,10 @@ kotlin {
     // annotation of its own -- a `TEXT AS Uuid` column puts the type in a generated signature.
     // Every key in the zone is a UUID (§2), so the alternative is a stringly-typed schema.
     compilerOptions { optIn.add("kotlin.uuid.ExperimentalUuidApi") }
+    // The desktop app is Compose Multiplatform, whose desktop target is the JVM (§6). The
+    // domain is platform-agnostic source -- no `platform.*` or cinterop import anywhere in
+    // commonMain -- but a KMP module still has to declare what it compiles to.
+    jvm()
     linuxX64 {
         compilations.getByName("main").defaultSourceSet.dependencies {
             implementation(libs.ktor.client.curl)
@@ -42,19 +46,11 @@ kotlin {
             implementation(libs.kotlincrypto.hmac.sha2)
             implementation(libs.xmlutil.core)
             api(libs.sqldelight.runtime)
-            // The native driver sits in `commonMain`, not under `linuxX64`, because it is the
-            // driver for *every* target this project will ever have -- Kotlin/Native is the
-            // whole platform set (§7), and SQLiter ships iOS variants as well. Keeping it here
-            // is what lets the catalog open a database in shared code instead of behind an
-            // `expect fun` that would have exactly one `actual`.
-            //
-            // This has a known expiry. `native-driver` is Kotlin/Native only, and the app needs
-            // a **JVM desktop target** for the Compose harness (§6) — which is most of why this
-            // project is Multiplatform at all. The day that target is added, `commonMain` can no
-            // longer name `NativeSqliteDriver`, and `Path.openDriver` becomes `expect`/`actual`
-            // with a JDBC driver beside the native one. Mechanical, but it will not announce
-            // itself until the target appears.
-            implementation(libs.sqldelight.driver.native)
+            // No driver here any more. The expiry an earlier comment predicted arrived with
+            // the `jvm` target above: `native-driver` is Kotlin/Native only, so `commonMain`
+            // cannot name it. It became the `SqlDrivers` **port** rather than the
+            // `expect`/`actual` that comment expected — one mechanism for a platform
+            // difference across the whole repo, and one a test can substitute.
             // SQLDelight's own adapters for the primitives SQLite has no separate type for:
             // `INTEGER AS Int`, which the shard's dimensions and schema_version need.
             implementation(libs.sqldelight.primitive.adapters)
@@ -62,6 +58,15 @@ kotlin {
             // files as well as bytes. kotlinx-io is what Ktor's own IO is built on, so this
             // adds a name, not a dependency.
             implementation(libs.kotlinx.io.core)
+        }
+        // Each target's own driver, behind the port, lives with that target's adapter --
+        // except in tests, which construct one directly.
+        linuxX64Test.dependencies {
+            implementation(libs.sqldelight.driver.native)
+        }
+        jvmTest.dependencies {
+            implementation(libs.sqldelight.driver.jdbc)
+            implementation(libs.ktor.client.okhttp)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
@@ -75,11 +80,14 @@ kotlin {
 // no test resources, so the path arrives through the environment.
 // The test fails loudly when it is missing rather than skipping: a subtle signing bug fails
 // every request, and this suite is the only proof the signer is right (§7).
+// Both targets, not just the native one: with a `jvm` target the same suite runs twice, which
+// is how the signer is proven against whichever crypto provider each platform actually uses.
+val sigv4Fixtures: String = rootDir.resolve("testdata/sigv4").absolutePath
 tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest>().configureEach {
-    environment(
-        "PHOTOS_SIGV4_FIXTURES",
-        rootDir.resolve("testdata/sigv4").absolutePath,
-    )
+    environment("PHOTOS_SIGV4_FIXTURES", sigv4Fixtures)
+}
+tasks.withType<Test>().configureEach {
+    environment("PHOTOS_SIGV4_FIXTURES", sigv4Fixtures)
 }
 
 // Four databases because there are four schemas (§3): the per-album shard and its thumbnail

@@ -15,6 +15,7 @@ import kotlin.uuid.Uuid
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.files.Path
 import net.stho.photos.IngestAbort
+import net.stho.photos.catalog.testDrivers
 import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.catalog.FakeZone
 import net.stho.photos.catalog.META_PREFIX
@@ -70,7 +71,7 @@ class IngestCycleTest {
             )
             val probe = FakeProbe(identifiers)
             val backend = FakeBackend(identifiers)
-            return CatalogSync(zoneClient(zone.engine), cacheRoot).use { catalog ->
+            return CatalogSync(zoneClient(zone.engine), cacheRoot, testDrivers).use { catalog ->
                 Ingest(
                     config = config,
                     s3 = zoneClient(zone.engine),
@@ -78,6 +79,7 @@ class IngestCycleTest {
                     pipeline = FakePipeline(ids, workRoot),
                     classifier = MediaClassifier(probe, backend),
                     ids = ids,
+                    drivers = testDrivers,
                 ).use { it.run() }
             }
         }
@@ -88,7 +90,7 @@ class IngestCycleTest {
             for (key in zone.keys.filter { it.startsWith(META_PREFIX) }) {
                 val file = Path(scratch, "read.db")
                 write(file, assertNotNull(zone.data(key)))
-                val shard = file.readShard()
+                val shard = file.readShard(testDrivers)
                 if (shard.info.name == named) return shard
             }
             error("no album named $named in the zone")

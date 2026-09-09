@@ -38,7 +38,7 @@ class RebuildScaleTest {
         assertEquals(34_607, shards.sumOf { it.photos.size })
 
         val path = Path(temporaryDirectory("scale"), "merged.db")
-        val writer = CatalogWriter(path)
+        val writer = CatalogWriter(path, testDrivers)
 
         val started = TimeSource.Monotonic.markNow()
         val summary = writer.rebuild(shards)
@@ -79,9 +79,9 @@ class RebuildScaleTest {
     @Test
     fun readsStayIndexedAtFullScale() {
         val path = Path(temporaryDirectory("scale-read"), "merged.db")
-        CatalogWriter(path).use { it.rebuild(realisticLibrary()) }
+        CatalogWriter(path, testDrivers).use { it.rebuild(realisticLibrary()) }
 
-        val reader = CatalogReader(path)
+        val reader = CatalogReader(path, testDrivers)
         val neuseeland = assertNotNull(reader.allAlbums().firstOrNull { it.name == "Neuseeland" })
 
         val started = TimeSource.Monotonic.markNow()

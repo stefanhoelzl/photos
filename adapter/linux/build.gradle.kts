@@ -135,6 +135,10 @@ val flockDefFile: File = layout.buildDirectory.get().asFile.resolve("photosflock
 
 kotlin {
     jvmToolchain(libs.versions.jdk.get().toInt())
+    // Both runtimes here are Linux; what differs is Kotlin/Native-with-cinterop versus the
+    // JVM. That is a source set, not a second module -- and Gradle resolves per target, so
+    // `:app:cli` never sees the JVM variant and `:app:desktop` never sees cinterop.
+    jvm()
     linuxX64 {
         compilations.getByName("main").cinterops.create("photosdbus") {
             definitionFile.set(dbusDefFile)
@@ -154,6 +158,11 @@ kotlin {
             // Files, not bytes: the carver reads a whole CR2 and the transcode is handed back
             // as a path. kotlinx-io is what the domain already uses for both.
             implementation(libs.kotlinx.io.core)
+            implementation(libs.sqldelight.driver.native)
+        }
+        jvmMain.dependencies {
+            implementation(project(":domain"))
+            implementation(libs.sqldelight.driver.jdbc)
         }
         linuxX64Test.dependencies {
             implementation(kotlin("test"))

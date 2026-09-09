@@ -1,9 +1,10 @@
 package net.stho.photos.catalog
 
-import co.touchlab.sqliter.JournalMode
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
 import kotlinx.io.files.Path
+import net.stho.photos.ports.Journal
+import net.stho.photos.ports.SqlDrivers
 import net.stho.photos.catalog.syncstate.Shard_state
 import net.stho.photos.catalog.syncstate.SyncStateDatabase
 import net.stho.photos.storage.ETag
@@ -24,10 +25,15 @@ private val shardStateAdapter = Shard_state.Adapter(
  *
  * One connection, owned by the [CatalogSync] that guards it — like every other connection here.
  */
-internal class SyncState(path: Path, private val clock: Clock) : AutoCloseable {
+internal class SyncState(
+    path: Path,
+    drivers: SqlDrivers,
+    private val clock: Clock,
+) : AutoCloseable {
 
     private val driver = path.openDriver(
-        SyncStateDatabase.Schema, creating = true, journalMode = JournalMode.WAL,
+        drivers,
+        SyncStateDatabase.Schema, creating = true, journal = Journal.WAL,
     )
     private val queries = SyncStateDatabase(driver, shardStateAdapter).syncStateQueries
 

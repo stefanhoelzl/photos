@@ -26,8 +26,8 @@ class ShardTest {
 
     private fun roundTrip(shard: Shard): Shard {
         val path = Path(temporaryDirectory("shard"), "${shard.info.id}.db")
-        shard.writeTo(path)
-        return path.readShard()
+        shard.writeTo(path, testDrivers)
+        return path.readShard(testDrivers)
     }
 
     @Test
@@ -116,20 +116,20 @@ class ShardTest {
         val shard = futureShard(directory)
         val path = Path(directory, "${shard.info.id}.db")
 
-        val failure = assertFailsWith<ShardFailure.UnsupportedVersion> { path.readShard() }
+        val failure = assertFailsWith<ShardFailure.UnsupportedVersion> { path.readShard(testDrivers) }
         assertEquals(SHARD_SCHEMA_VERSION + 1, failure.found)
         assertEquals(SHARD_SCHEMA_VERSION, failure.supported)
-        assertEquals(SHARD_SCHEMA_VERSION + 1, path.shardSchemaVersion())
+        assertEquals(SHARD_SCHEMA_VERSION + 1, path.shardSchemaVersion(testDrivers))
     }
 
     @Test
     fun aShardAtTheCurrentVersionReadsNormally() {
         val shard = album("Now")
         val path = Path(temporaryDirectory("current"), "${shard.info.id}.db")
-        shard.writeTo(path)
+        shard.writeTo(path, testDrivers)
 
-        assertEquals(SHARD_SCHEMA_VERSION, path.shardSchemaVersion())
-        assertEquals("Now", path.readShard().info.name)
+        assertEquals(SHARD_SCHEMA_VERSION, path.shardSchemaVersion(testDrivers))
+        assertEquals("Now", path.readShard(testDrivers).info.name)
     }
 
     /** §3's probe: what a shard says about itself even when it is too new to read. */
@@ -137,7 +137,7 @@ class ShardTest {
     fun aShardTooNewToReadIsStillIdentifiable() {
         val directory = temporaryDirectory("probe")
         val shard = futureShard(directory)
-        val probe = Path(directory, "${shard.info.id}.db").probeShard()
+        val probe = Path(directory, "${shard.info.id}.db").probeShard(testDrivers)
 
         assertEquals(shard.info.id, probe.albumId)
         assertEquals("From The Future", probe.sourcePath)
@@ -151,9 +151,9 @@ class ShardTest {
     @Test
     fun aDatabaseThatIsNotAShardIsRejected() {
         val path = Path(temporaryDirectory("not-a-shard"), "unrelated.db")
-        emptyMap<Uuid, ByteArray>().packThumbnails(into = path)
+        emptyMap<Uuid, ByteArray>().packThumbnails(into = path, drivers = testDrivers)
 
-        assertFailsWith<ShardFailure.MissingAlbumInfo> { path.readShard() }
+        assertFailsWith<ShardFailure.MissingAlbumInfo> { path.readShard(testDrivers) }
     }
 
     @Test

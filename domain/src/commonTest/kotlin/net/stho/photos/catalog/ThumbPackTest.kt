@@ -25,14 +25,14 @@ class ThumbPackTest {
 
     private fun pack(thumbnails: Map<Uuid, ByteArray>, label: String = "pack"): Path {
         val path = Path(temporaryDirectory(label), "thumbs.db")
-        thumbnails.packThumbnails(into = path)
+        thumbnails.packThumbnails(into = path, drivers = testDrivers)
         return path
     }
 
     @Test
     fun thumbnailsRoundTripByteForByte() {
         val thumbnails = (0 until 20).associate { Uuid.random() to jpeg(it) }
-        val restored = ThumbPack(pack(thumbnails)).unpack()
+        val restored = ThumbPack(pack(thumbnails), testDrivers).unpack()
 
         assertEquals(thumbnails.size, restored.size)
         for ((id, bytes) in thumbnails) assertContentEquals(bytes, restored[id])
@@ -42,7 +42,7 @@ class ThumbPackTest {
     fun oneThumbnailCanBeReadWithoutUnpackingTheAlbum() {
         val thumbnails = (0 until 50).associate { Uuid.random() to jpeg(it) }
         val wanted = thumbnails.keys.minBy(Uuid::toString)
-        val pack = ThumbPack(pack(thumbnails, "single"))
+        val pack = ThumbPack(pack(thumbnails, "single"), testDrivers)
 
         assertContentEquals(thumbnails.getValue(wanted), pack.thumbnail(wanted))
         assertNull(pack.thumbnail(Uuid.random()))
@@ -51,13 +51,13 @@ class ThumbPackTest {
     @Test
     fun idsCanBeListedWithoutTheirBytes() {
         val thumbnails = (0 until 10).associate { Uuid.random() to jpeg(it) }
-        assertEquals(thumbnails.keys, ThumbPack(pack(thumbnails, "ids")).ids())
+        assertEquals(thumbnails.keys, ThumbPack(pack(thumbnails, "ids"), testDrivers).ids())
     }
 
     /** A container owns no photos. */
     @Test
     fun anEmptyPackIsLegal() {
-        val pack = ThumbPack(pack(emptyMap(), "empty"))
+        val pack = ThumbPack(pack(emptyMap(), "empty"), testDrivers)
         assertTrue(pack.unpack().isEmpty())
         assertTrue(pack.ids().isEmpty())
     }
@@ -73,8 +73,8 @@ class ThumbPackTest {
         val directory = temporaryDirectory("deterministic")
         val first = Path(directory, "first.db")
         val second = Path(directory, "second.db")
-        thumbnails.packThumbnails(into = first)
-        thumbnails.packThumbnails(into = second)
+        thumbnails.packThumbnails(into = first, drivers = testDrivers)
+        thumbnails.packThumbnails(into = second, drivers = testDrivers)
 
         assertContentEquals(first.readBytes(), second.readBytes())
     }

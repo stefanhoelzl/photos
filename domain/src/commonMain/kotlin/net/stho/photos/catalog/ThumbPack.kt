@@ -3,6 +3,7 @@ package net.stho.photos.catalog
 import kotlin.uuid.Uuid
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
+import net.stho.photos.ports.SqlDrivers
 import net.stho.photos.catalog.thumb.Thumb
 import net.stho.photos.catalog.thumb.ThumbPackDatabase
 import net.stho.photos.catalog.thumb.ThumbQueries
@@ -24,7 +25,7 @@ private val thumbAdapter = Thumb.Adapter(idAdapter = uuidAdapter)
  *
  * Like a shard, a pack is a file — §6 keeps them permanently, so there is nothing to serialise.
  */
-public class ThumbPack(private val path: Path) {
+public class ThumbPack(private val path: Path, private val drivers: SqlDrivers) {
 
     /** Every thumbnail in the pack. For a whole grid, which is the usual case. */
     public fun unpack(): Map<Uuid, ByteArray> =
@@ -37,7 +38,7 @@ public class ThumbPack(private val path: Path) {
     public fun ids(): Set<Uuid> = read { it.selectIds().executeAsList().toSet() }
 
     private inline fun <T> read(block: (ThumbQueries) -> T): T {
-        val driver = path.openDriver(ThumbPackDatabase.Schema, creating = false)
+        val driver = path.openDriver(drivers, ThumbPackDatabase.Schema, creating = false)
         try {
             return block(ThumbPackDatabase(driver, thumbAdapter).thumbQueries)
         } finally {
@@ -53,9 +54,9 @@ public class ThumbPack(private val path: Path) {
  * depends on that — blobs are immutable and get a fresh uuid anyway — but it makes two packs
  * comparable when a test or a person needs to know whether anything actually changed.
  */
-public fun Map<Uuid, ByteArray>.packThumbnails(into: Path): ThumbPack {
+public fun Map<Uuid, ByteArray>.packThumbnails(into: Path, drivers: SqlDrivers): ThumbPack {
     SystemFileSystem.delete(into, mustExist = false)
-    val driver = into.openDriver(ThumbPackDatabase.Schema, creating = true)
+    val driver = into.openDriver(drivers, ThumbPackDatabase.Schema, creating = true)
     try {
         val database = ThumbPackDatabase(driver, thumbAdapter)
         database.transaction {
@@ -66,5 +67,5 @@ public fun Map<Uuid, ByteArray>.packThumbnails(into: Path): ThumbPack {
     } finally {
         driver.close()
     }
-    return ThumbPack(into)
+    return ThumbPack(into, drivers)
 }

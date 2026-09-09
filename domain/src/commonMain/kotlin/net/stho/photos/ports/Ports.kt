@@ -1,5 +1,8 @@
 package net.stho.photos.ports
 
+import app.cash.sqldelight.db.QueryResult
+import app.cash.sqldelight.db.SqlDriver
+import app.cash.sqldelight.db.SqlSchema
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.flow.SharedFlow
@@ -176,3 +179,40 @@ public interface Pipeline {
 
     public fun derive(item: MediaItem): Derivatives
 }
+
+/**
+ * How this platform opens a SQLite file (§3).
+ *
+ * A port for the second of the three reasons above: SQLDelight ships a driver per platform —
+ * SQLiter on Kotlin/Native, JDBC on the JVM — and they configure a database differently enough
+ * that neither can be named in shared code. What is *not* here is any query layer: SQLDelight's
+ * generated API is that, and this contract ends at handing back an open [SqlDriver].
+ *
+ * > An earlier draft made this `expect`/`actual` — `domain/build.gradle.kts` still predicts it.
+ * > It is a port instead so the repo has exactly one mechanism for a platform difference, and
+ * > because `expect`/`actual` binds per compilation target: a test could never substitute one.
+ *
+ * The two callers' needs differ, which is why [journal] is on the contract. A shard and a
+ * thumbnail pack are *objects* that get uploaded, so they are `DELETE` — WAL would leave half
+ * of one in a sidecar no PUT carries. The two on-device databases require `WAL`, and §4 is
+ * explicit about why: without it the 1–3 s rebuild blocks the album list that is on screen.
+ */
+public fun interface SqlDrivers {
+    /**
+     * Opens [path], which the caller has already created a directory for and checked the
+     * existence of — those rules are the catalog's, not a platform's.
+     *
+     * [creating] false means *read what is there*: the driver must not run the schema, and must
+     * not check `user_version` either, because the file may carry a `schema_version` this build
+     * has never seen (§3's forward-compatibility rule).
+     */
+    public fun open(
+        path: String,
+        schema: SqlSchema<QueryResult.Value<Unit>>,
+        creating: Boolean,
+        journal: Journal,
+    ): SqlDriver
+}
+
+/** The two journal modes §3 and §4 ask for, named without reference to either driver. */
+public enum class Journal { DELETE, WAL }

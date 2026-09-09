@@ -6,6 +6,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
+import net.stho.photos.ports.SqlDrivers
 import net.stho.photos.ShardFailure
 import net.stho.photos.ShardUnavailableFailure
 import net.stho.photos.storage.Body
@@ -55,6 +56,16 @@ public data class SyncReport(
 }
 
 /** What [CatalogSync.refresh] found: every shard now on disk, plus what the LIST implied. */
+/**
+ * How far a sync has got, for a caller that has a screen to keep honest.
+ *
+ * Deliberately not a `Flow`: this is called from inside the fetch loop and a caller either
+ * wants the number or does not.
+ */
+public fun interface ShardProgress {
+    public fun at(fetched: Int, total: Int)
+}
+
 public data class RefreshResult(
     public val shards: List<Shard>,
     public val report: SyncReport,
@@ -95,6 +106,7 @@ public class CatalogSync(
     public val s3: S3Client,
     /** Holds `sync_state.db`, `shards/`, `merged.db` and `blobs/` (§4). */
     public val cacheRoot: Path,
+    private val drivers: SqlDrivers,
     clock: Clock = Clock.System,
 ) : AutoCloseable {
 
@@ -113,7 +125,7 @@ public class CatalogSync(
 
     init {
         SystemFileSystem.createDirectories(shardsDirectory)
-        state = SyncState(Path(cacheRoot, "sync_state.db"), clock)
+        state = SyncState(Path(cacheRoot, "sync_state.db"), drivers, clock)
     }
 
     public val mergedPath: Path get() = Path(cacheRoot, "merged.db")
@@ -129,7 +141,8 @@ public class CatalogSync(
      * [AlbumInfo.thumbsId], so nothing in the zone can change without some shard's ETag moving
      * (§4).
      */
-    public suspend fun sync(): SyncReport = mutex.withLock { syncing() }
+    public suspend fun sync(onProgress: ShardProgress = ShardProgress { _, _ -> }): SyncReport =
+        mutex.withLock { syncing(onProgress) }
 
     /**
      * Everything [sync] does except the rebuild: LIST, diff, fetch, record ETags, and hand back
@@ -140,13 +153,14 @@ public class CatalogSync(
      * implementation of "what does the zone hold", exercised by both devices, so they cannot
      * drift in how they diff or in what a missing key means.
      */
-    public suspend fun refresh(): RefreshResult = mutex.withLock { refreshing() }
+    public suspend fun refresh(onProgress: ShardProgress = ShardProgress { _, _ -> }): RefreshResult =
+        mutex.withLock { refreshing(onProgress) }
 
     /** The single LIST, diffed against what is on disk. The whole sync plan (§4). */
     public suspend fun plan(): ShardDiff = mutex.withLock { planning() }
 
-    private suspend fun syncing(): SyncReport {
-        val refreshed = refreshing()
+    private suspend fun syncing(onProgress: ShardProgress): SyncReport {
+        val refreshed = refreshing(onProgress)
         if (!refreshed.changed) return refreshed.report
 
         val summary = ensureWriter().rebuild(refreshed.shards)
@@ -159,17 +173,22 @@ public class CatalogSync(
         )
     }
 
-    private suspend fun refreshing(): RefreshResult {
+    private suspend fun refreshing(onProgress: ShardProgress): RefreshResult {
         val diff = planning()
         val fetched = mutableListOf<Uuid>()
         var bytesFetched = 0L
 
+        // A first sync fetches every shard in the zone, which is measured in tens of seconds
+        // (§4). Reporting as it goes is what lets a caller show something other than an empty
+        // list -- the CLI passes nothing and is unaffected.
+        onProgress.at(0, diff.changed.size)
         for ((albumId, etag) in diff.changed) {
             bytesFetched += fetchShard(albumId)
             // Recorded only once the file has landed, so a crash leaves the state behind reality
             // rather than ahead of it — one re-download, not a missing album.
             state.record(albumId, etag)
             fetched += albumId
+            onProgress.at(fetched.size, diff.changed.size)
         }
 
         for (albumId in diff.deleted) {
@@ -255,11 +274,11 @@ public class CatalogSync(
         val unreadable = mutableListOf<ShardProbe>()
         for (file in files) {
             try {
-                shards += file.readShard()
+                shards += file.readShard(drivers)
             } catch (skipped: ShardFailure.UnsupportedVersion) {
                 // A probe that itself fails is left to throw: the album is then genuinely
                 // unidentifiable, and continuing would risk duplicating it.
-                unreadable += file.probeShard()
+                unreadable += file.probeShard(drivers)
             }
         }
         return DiskShards(shards, unreadable)
@@ -272,7 +291,7 @@ public class CatalogSync(
      * as a duplicate lives in exactly one place, and it has just been rebuilt.
      */
     private fun duplicateNames(): List<String> =
-        CatalogReader(mergedPath).use { reader -> reader.duplicateNames().map(DuplicateName::name) }
+        CatalogReader(mergedPath, drivers).use { reader -> reader.duplicateNames().map(DuplicateName::name) }
 
     /**
      * §4 says `merged.db` can be deleted at any moment and rebuilt. If it is deleted while this
@@ -282,7 +301,7 @@ public class CatalogSync(
      */
     private fun ensureWriter(): CatalogWriter {
         writer?.let { if (SystemFileSystem.exists(mergedPath)) return it else it.close() }
-        return CatalogWriter(mergedPath).also { writer = it }
+        return CatalogWriter(mergedPath, drivers).also { writer = it }
     }
 
     // --------------------------------------------------------------------- writing a shard back
@@ -301,7 +320,7 @@ public class CatalogSync(
     public suspend fun writeShard(shard: Shard, ifMatch: ETag?): ShardWriteResult = mutex.withLock {
         val albumId = shard.info.id
         val scratch = Path(shardsDirectory, "$albumId.part")
-        shard.writeTo(scratch)
+        shard.writeTo(scratch, drivers)
         try {
             when (val result = s3.put(albumId.shardKey, Body.File(scratch), ifMatch = ifMatch)) {
                 PutResult.StaleETag -> ShardWriteResult.StaleETag
@@ -323,7 +342,7 @@ public class CatalogSync(
     public suspend fun reload(albumId: Uuid): Shard = mutex.withLock {
         fetchShard(albumId)
         s3.head(albumId.shardKey)?.etag?.let { state.record(albumId, it) }
-        shardPath(albumId).readShard()
+        shardPath(albumId).readShard(drivers)
     }
 
     /** The ETag this device last saw for a shard, for `If-Match`. */

@@ -31,16 +31,16 @@ class CatalogSyncTest {
 
 
     private class Fixture(val zone: FakeZone, val cacheRoot: Path) {
-        val sync: CatalogSync = CatalogSync(zoneClient(zone.engine), cacheRoot)
+        val sync: CatalogSync = CatalogSync(zoneClient(zone.engine), cacheRoot, testDrivers)
 
         fun upload(shard: Shard, etag: String) {
             val scratch = Path(cacheRoot, "upload-${shard.info.id}.db")
-            shard.writeTo(scratch)
+            shard.writeTo(scratch, testDrivers)
             zone.put(shard.info.id.shardKey, scratch.readBytes(), etag)
             SystemFileSystem.delete(scratch)
         }
 
-        fun reader(): CatalogReader = CatalogReader(Path(cacheRoot, "merged.db"))
+        fun reader(): CatalogReader = CatalogReader(Path(cacheRoot, "merged.db"), testDrivers)
     }
 
     private fun fixture(label: String = "sync") = Fixture(FakeZone(), temporaryDirectory(label))
@@ -218,7 +218,7 @@ class CatalogSyncTest {
 
         fixture.sync.close()
         SystemFileSystem.delete(Path(fixture.cacheRoot, "merged.db"))
-        val reopened = CatalogSync(zoneClient(fixture.zone.engine), fixture.cacheRoot)
+        val reopened = CatalogSync(zoneClient(fixture.zone.engine), fixture.cacheRoot, testDrivers)
         val report = reopened.rebuildFromDisk()
 
         assertEquals(3, report.albums)
@@ -237,7 +237,7 @@ class CatalogSyncTest {
         fixture.sync.close()
         SystemFileSystem.delete(Path(fixture.cacheRoot, "sync_state.db"))
 
-        val second = CatalogSync(zoneClient(fixture.zone.engine), fixture.cacheRoot)
+        val second = CatalogSync(zoneClient(fixture.zone.engine), fixture.cacheRoot, testDrivers)
         val report = second.sync()
 
         assertEquals(3, report.fetchedShards.size)
@@ -272,6 +272,7 @@ class CatalogSyncTest {
         val sync = CatalogSync(
             S3Client(storage = testStorage, secretAccessKey = TEST_SECRET, http = HttpClient(engine)),
             temporaryDirectory("stale"),
+            testDrivers,
         )
 
         val result = sync.writeShard(album("Sommer"), ifMatch = ETag("old"))
@@ -287,6 +288,7 @@ class CatalogSyncTest {
         val sync = CatalogSync(
             S3Client(storage = testStorage, secretAccessKey = TEST_SECRET, http = HttpClient(engine)),
             cacheRoot,
+            testDrivers,
         )
         val shard = album("Sommer")
 
@@ -306,7 +308,7 @@ class CatalogSyncTest {
 
         assertTrue(result is ShardWriteResult.Written)
         assertTrue(SystemFileSystem.exists(fixture.sync.shardPath(shard.info.id)))
-        assertEquals(shard.info.name, fixture.sync.shardPath(shard.info.id).readShard().info.name)
+        assertEquals(shard.info.name, fixture.sync.shardPath(shard.info.id).readShard(testDrivers).info.name)
     }
 
     @Test

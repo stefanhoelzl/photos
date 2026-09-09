@@ -41,6 +41,7 @@ import net.stho.photos.pipeline.MediaItem
 import net.stho.photos.pipeline.OriginalSource
 import net.stho.photos.pipeline.SkippedFile
 import net.stho.photos.pipeline.withExtension
+import net.stho.photos.ports.SqlDrivers
 import net.stho.photos.ports.Ids
 import net.stho.photos.ports.Pipeline
 import net.stho.photos.storage.Body
@@ -69,6 +70,7 @@ public class Ingest(
     private val pipeline: Pipeline,
     private val classifier: MediaClassifier,
     private val ids: Ids,
+    private val drivers: SqlDrivers,
     private val clock: Clock = Clock.System,
 ) : AutoCloseable {
 
@@ -462,7 +464,7 @@ public class Ingest(
             val downloaded = Path(config.workRoot, "thumbs-$existingId.db")
             s3.download(existingId.blobKey, downloaded)
             val kept = album.keep.mapTo(mutableSetOf(), PhotoRow::id)
-            for ((id, jpeg) in ThumbPack(downloaded).unpack()) {
+            for ((id, jpeg) in ThumbPack(downloaded, drivers).unpack()) {
                 if (id in kept) thumbnails[id] = jpeg
             }
             downloaded.deleteQuietly()
@@ -472,7 +474,7 @@ public class Ingest(
 
         val id = ids.next()
         val packed = Path(config.workRoot, "pack-$id.db")
-        thumbnails.packThumbnails(into = packed)
+        thumbnails.packThumbnails(into = packed, drivers = drivers)
         upload(id.blobKey, Body.File(packed))
         packed.deleteQuietly()
         return id

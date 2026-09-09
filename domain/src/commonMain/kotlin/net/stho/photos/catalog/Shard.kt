@@ -4,6 +4,7 @@ import app.cash.sqldelight.adapter.primitive.IntColumnAdapter
 import kotlin.uuid.Uuid
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
+import net.stho.photos.ports.SqlDrivers
 import net.stho.photos.ShardFailure
 import net.stho.photos.catalog.shard.Album_info
 import net.stho.photos.catalog.shard.ShardDatabase
@@ -59,9 +60,9 @@ public data class ShardProbe(
  * stale rows impossible by construction (§2's single-owner rule). The file is removed first for
  * the same reason — a rewrite must not inherit a single row of the old one.
  */
-public fun Shard.writeTo(path: Path) {
+public fun Shard.writeTo(path: Path, drivers: SqlDrivers) {
     SystemFileSystem.delete(path, mustExist = false)
-    val driver = path.openDriver(ShardDatabase.Schema, creating = true)
+    val driver = path.openDriver(drivers, ShardDatabase.Schema, creating = true)
     try {
         val database = ShardDatabase(driver, albumInfoAdapter, shardPhotoAdapter)
         database.transaction {
@@ -98,7 +99,7 @@ public fun Shard.writeTo(path: Path) {
 }
 
 /** Reads the shard at this path. */
-public fun Path.readShard(): Shard = withShard { queries ->
+public fun Path.readShard(drivers: SqlDrivers): Shard = withShard(drivers) { queries ->
     val version = queries.schemaVersion()
     if (version > SHARD_SCHEMA_VERSION) {
         throw ShardFailure.UnsupportedVersion(found = version, supported = SHARD_SCHEMA_VERSION)
@@ -116,7 +117,7 @@ public fun Path.readShard(): Shard = withShard { queries ->
  * CLI learns which folder the album claims, leaves that folder alone, and so cannot re-upload it
  * as a duplicate (§3).
  */
-public fun Path.probeShard(): ShardProbe = withShard { queries ->
+public fun Path.probeShard(drivers: SqlDrivers): ShardProbe = withShard(drivers) { queries ->
     queries.selectProbe(::ShardProbe).executeAsOneOrNull() ?: throw ShardFailure.MissingAlbumInfo()
 }
 
@@ -125,7 +126,8 @@ public fun Path.probeShard(): ShardProbe = withShard { queries ->
  *
  * Lets a caller decide to skip a shard before paying to read it.
  */
-public fun Path.shardSchemaVersion(): Int = withShard(ShardQueries::schemaVersion)
+public fun Path.shardSchemaVersion(drivers: SqlDrivers): Int =
+    withShard(drivers, ShardQueries::schemaVersion)
 
 private fun ShardQueries.schemaVersion(): Int =
     selectSchemaVersion().executeAsOneOrNull() ?: throw ShardFailure.MissingAlbumInfo()
@@ -137,8 +139,8 @@ private fun ShardQueries.schemaVersion(): Int =
  * unrelated database. That is [ShardFailure.MissingAlbumInfo], not a raw SQLite error, so a
  * caller can tell "not a shard" from "SQLite is unwell".
  */
-private inline fun <T> Path.withShard(block: (ShardQueries) -> T): T {
-    val driver = openDriver(ShardDatabase.Schema, creating = false)
+private inline fun <T> Path.withShard(drivers: SqlDrivers, block: (ShardQueries) -> T): T {
+    val driver = openDriver(drivers, ShardDatabase.Schema, creating = false)
     try {
         if (!driver.hasTable("album_info")) throw ShardFailure.MissingAlbumInfo()
         return block(ShardDatabase(driver, albumInfoAdapter, shardPhotoAdapter).shardQueries)

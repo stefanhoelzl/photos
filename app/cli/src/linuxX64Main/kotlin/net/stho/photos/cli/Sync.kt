@@ -24,6 +24,7 @@ import net.stho.photos.adapter.linux.CImagingPipeline
 import net.stho.photos.adapter.linux.CImagingProbe
 import net.stho.photos.adapter.linux.DbusKeyring
 import net.stho.photos.adapter.linux.FlockRunLock
+import net.stho.photos.adapter.linux.NativeSqlDrivers
 import net.stho.photos.adapter.linux.XdgPaths
 import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.ingest.Credentials
@@ -161,7 +162,10 @@ internal class SyncCommand(private val console: Console = Console()) : CoreClikt
         val http = HttpClient(Curl) { retryStorageFailures() }
         try {
             val s3 = S3Client(storage = storage, secretAccessKey = password, http = http)
-            CatalogSync(s3, config.cacheRoot).use { catalog ->
+            // The composition root is the only place that knows which adapter satisfies which
+            // port (§7), and the SQL driver is now one of them.
+            val drivers = NativeSqlDrivers()
+            CatalogSync(s3, config.cacheRoot, drivers).use { catalog ->
                 Ingest(
                     config = config,
                     s3 = s3,
@@ -169,6 +173,7 @@ internal class SyncCommand(private val console: Console = Console()) : CoreClikt
                     pipeline = CImagingPipeline(config.workRoot.toString(), backend, ids = ids),
                     classifier = MediaClassifier(probe, backend),
                     ids = ids,
+                    drivers = drivers,
                 ).use { ingest ->
                     // Written as it happens, never buffered to the end: a 39-hour run has to be
                     // watchable, and legible in the journal while it is still going. The flow has

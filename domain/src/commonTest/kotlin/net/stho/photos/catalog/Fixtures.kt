@@ -1,7 +1,6 @@
 package net.stho.photos.catalog
 
 import app.cash.sqldelight.db.QueryResult
-import co.touchlab.sqliter.JournalMode
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -19,6 +18,7 @@ import kotlin.uuid.Uuid
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
+import net.stho.photos.ports.Journal
 import net.stho.photos.scratchRoot
 import kotlinx.io.readByteArray
 import net.stho.photos.catalog.merged.MergedDatabase
@@ -127,7 +127,7 @@ internal fun futureShard(
         addedAt = Instant.fromEpochSeconds(0),
         schemaVersion = version,
     ),
-).also { it.writeTo(Path(directory, "${it.info.id}.db")) }
+).also { it.writeTo(Path(directory, "${it.info.id}.db"), testDrivers) }
 
 private val temporaryDirectories = mutableListOf<Path>()
 
@@ -297,7 +297,7 @@ internal fun zoneClient(engine: MockEngine): S3Client =
  */
 internal fun explainQueryPlan(path: Path, sql: String): List<String> {
     val driver = path.openDriver(
-        MergedDatabase.Schema, creating = false, journalMode = JournalMode.WAL,
+        testDrivers, MergedDatabase.Schema, creating = false, journal = Journal.WAL,
     )
     try {
         return driver.executeQuery(

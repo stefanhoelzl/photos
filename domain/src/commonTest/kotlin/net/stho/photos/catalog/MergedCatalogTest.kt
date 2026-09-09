@@ -26,8 +26,8 @@ class MergedCatalogTest {
 
     private fun build(shards: List<Shard>, label: String = "merged"): Built {
         val path = Path(temporaryDirectory(label), "merged.db")
-        val summary = CatalogWriter(path).use { it.rebuild(shards) }
-        return Built(CatalogReader(path), summary, path)
+        val summary = CatalogWriter(path, testDrivers).use { it.rebuild(shards) }
+        return Built(CatalogReader(path, testDrivers), summary, path)
     }
 
     @Test
@@ -52,7 +52,7 @@ class MergedCatalogTest {
     @Test
     fun aRebuildReplacesRatherThanAccumulates() {
         val path = Path(temporaryDirectory("wholesale"), "merged.db")
-        CatalogWriter(path).use { writer ->
+        CatalogWriter(path, testDrivers).use { writer ->
             writer.rebuild(
                 listOf(
                     album("First", photos = (0 until 10).map { photo("a$it.jpg") }),
@@ -62,7 +62,7 @@ class MergedCatalogTest {
             writer.rebuild(listOf(album("Only", photos = listOf(photo("c.jpg")))))
         }
 
-        val reader = CatalogReader(path)
+        val reader = CatalogReader(path, testDrivers)
         assertEquals(listOf("Only"), reader.allAlbums().map(Album::name))
         assertEquals(1, reader.photoCount())
     }
@@ -74,11 +74,11 @@ class MergedCatalogTest {
 
         val first: List<Album>
         val second: List<Album>
-        CatalogWriter(path).use { writer ->
+        CatalogWriter(path, testDrivers).use { writer ->
             writer.rebuild(shards)
-            first = CatalogReader(path).allAlbums()
+            first = CatalogReader(path, testDrivers).allAlbums()
             writer.rebuild(shards.reversed())
-            second = CatalogReader(path).allAlbums()
+            second = CatalogReader(path, testDrivers).allAlbums()
         }
 
         assertEquals(first, second)
@@ -148,7 +148,7 @@ class MergedCatalogTest {
     fun theOrderingIndexIsActuallyUsed() {
         val shard = album("Big", photos = (0 until 50).map { photo("IMG_$it.jpg") })
         val path = Path(temporaryDirectory("plan"), "merged.db")
-        CatalogWriter(path).use { it.rebuild(listOf(shard)) }
+        CatalogWriter(path, testDrivers).use { it.rebuild(listOf(shard)) }
 
         val plan = explainQueryPlan(
             path,
