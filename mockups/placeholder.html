@@ -2,28 +2,74 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#0b0d10;--ink:#e9edf2;--dim:#8b96a5;--accent:#0a84ff;--warn:#ff9f0a}
-body{background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;padding:32px 24px 80px}
+/* ---- theme tokens.  Dark is the design's default; light is a full second scheme.
+   Two things deliberately do NOT follow the theme: the phone bezel, which is a device,
+   and any surface a photograph sits on -- media stays on black in both themes, which is
+   what every photo viewer does and what keeps the images the brightest thing on screen. ---- */
+:root{
+  --page:#0b0d10; --ink:#e9edf2; --dim:#8b96a5; --accent:#0a84ff; --warn:#ff9f0a;
+  --card:#141a22; --card-line:#26313d; --card-ink:#c7d1dd;
+  --bezel-line:#2c333c; --title:#fff;
+  --surface:#000; --surface-2:#1c1c1e; --line:#22262c; --thumb-bg:#1a1a1a;
+  --sheet:#16191e; --overlay:rgba(38,42,48,.92); --overlay-line:#333a44; --dimmer:rgba(0,0,0,.45);
+  --fill:rgba(255,255,255,.09); --fill-line:rgba(255,255,255,.16);
+  --gold:#ffd60a; --error:#ff453a;
+  --ms-bg:#1d2530; --ms-ink:#8fb4dd; --ms-line:#2f3d4d;
+  --ph-a:#191d23; --ph-b:#1f242b; --accent-dim:#3d5a7d;
+  --media-bg:#000;                      /* both themes */
+  --toast-bg:#2b3038; --toast-ink:#e9edf2; --toast-line:rgba(255,255,255,.10); --toast-strong:#fff;
+  --map-a:#1b2733; --map-b:#101820; --map-c:#0d141b; --map-land:#25333f;
+  --map-lbl:rgba(0,0,0,.6); --map-lbl-ink:#e9edf2;
+  --ms-e2:#c3a6e6; --ms-e3:#e6b98f; --ms-f:#8fd6c0; --ms-g:#d99ab4;
+  /* chrome that sits ON a photograph. It follows the theme too: the viewer's ground is the
+     app surface, as iOS Photos does it -- white in light, black in dark. */
+  --over-ink:#fff; --over-scrim:rgba(0,0,0,.55);
+  --over-fill:rgba(255,255,255,.10); --over-fill-line:rgba(255,255,255,.22);
+  --fs-top:rgba(0,0,0,.55); --fs-bot:rgba(0,0,0,.85); --fsbar-ink:#d8dee6;
+}
+:root[data-resolved="light"]{
+    --page:#eceef2; --ink:#14171c; --dim:#5f6875; --accent:#0a63d6; --warn:#8a5a00;
+    --card:#fff; --card-line:#d6dbe2; --card-ink:#39424e;
+    --bezel-line:#b7bec8; --title:#0b0d10;
+    --surface:#fff; --surface-2:#f1f2f5; --line:#e3e6ea; --thumb-bg:#e5e8ec;
+    --sheet:#fff; --overlay:rgba(250,250,252,.95); --overlay-line:#dfe3e9; --dimmer:rgba(0,0,0,.28);
+    --fill:rgba(0,0,0,.055); --fill-line:rgba(0,0,0,.13);
+    --gold:#8a6d00; --error:#c62d22;
+    --ms-bg:#e6ebf2; --ms-ink:#39587f; --ms-line:#ccd5e0;
+    --ph-a:#e7eaee; --ph-b:#dee2e8; --accent-dim:#a3b8d4;
+    --toast-bg:#fff; --toast-ink:#14171c; --toast-line:rgba(0,0,0,.14); --toast-strong:#0b0d10;
+    --map-a:#dce6ee; --map-b:#e8eef3; --map-c:#eff4f7; --map-land:#d5dfcd;
+    --map-lbl:rgba(255,255,255,.88); --map-lbl-ink:#14171c;
+    --ms-e2:#6a459c; --ms-e3:#8a5313; --ms-f:#17705a; --ms-g:#a03260;
+    --over-ink:#14171c; --over-scrim:rgba(255,255,255,.78);
+    --over-fill:rgba(0,0,0,.06); --over-fill-line:rgba(0,0,0,.16);
+    --fs-top:rgba(255,255,255,.72); --fs-bot:rgba(255,255,255,.9); --fsbar-ink:#3d4551;
+  }
+body{background:var(--page);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;padding:32px 24px 80px}
 h1{font-size:26px;font-weight:650;letter-spacing:-.02em;margin-bottom:6px}
+.topbar{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.themetgl{font:inherit;font-size:12px;font-weight:600;color:var(--ink);background:var(--card);
+ border:1px solid var(--card-line);border-radius:8px;padding:6px 11px;cursor:pointer}
+.themetgl:hover{border-color:var(--dim)}
 .sub{color:var(--dim);margin-bottom:8px;max-width:860px}
 .facts{color:var(--dim);font-size:12.5px;margin-bottom:14px;max-width:860px}
 .facts b{color:var(--ink);font-weight:600}
-.chg{background:#141a22;border:1px solid #26313d;border-left:3px solid var(--accent);border-radius:8px;padding:12px 14px;margin:0 0 30px;max-width:860px;font-size:12.5px;color:#c7d1dd}
-.chg b{color:#fff}.chg ul{margin:6px 0 0 18px}.chg li{margin:2px 0}
+.chg{background:var(--card);border:1px solid var(--card-line);border-left:3px solid var(--accent);border-radius:8px;padding:12px 14px;margin:0 0 30px;max-width:860px;font-size:12.5px;color:var(--card-ink)}
+.chg b{color:var(--title)}.chg ul{margin:6px 0 0 18px}.chg li{margin:2px 0}
 .wrap{display:flex;flex-wrap:wrap;gap:34px 28px;align-items:flex-start}
 .item{width:300px}
 .cap{margin-top:12px}
 .cap h3{font-size:13.5px;font-weight:640}
 .cap p{font-size:12px;color:var(--dim);margin-top:3px}
-.phone{width:300px;height:620px;background:#000;border-radius:44px;padding:10px;box-shadow:0 0 0 1.5px #2c333c,0 18px 44px rgba(0,0,0,.6);position:relative}
-.screen{width:100%;height:100%;background:#000;border-radius:35px;overflow:hidden;position:relative;display:flex;flex-direction:column}
+.phone{width:300px;height:620px;background:#000;border-radius:44px;padding:10px;box-shadow:0 0 0 1.5px var(--bezel-line),0 18px 44px rgba(0,0,0,.6);position:relative}
+.screen{width:100%;height:100%;background:var(--surface);border-radius:35px;overflow:hidden;position:relative;display:flex;flex-direction:column}
 .island{position:absolute;top:12px;left:50%;transform:translateX(-50%);width:86px;height:24px;background:#000;border-radius:14px;z-index:40}
 .status{height:44px;flex:0 0 44px;display:flex;align-items:flex-end;justify-content:space-between;padding:0 22px 5px;font-size:11.5px;font-weight:640;z-index:30}
 .sysicons{display:inline-flex;align-items:center;gap:5px}
 .nav{padding:2px 16px 8px;flex:0 0 auto}
 .nav .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .barrow{display:flex;align-items:center;justify-content:space-between;min-height:34px;margin-bottom:4px}
-.big{font-size:26px;font-weight:700;letter-spacing:-.025em;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.big{font-size:26px;font-weight:700;letter-spacing:-.025em;color:var(--title);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
 .subline{font-size:11px;color:var(--dim);padding-top:2px}
 .navicons{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto}
 /* Circular bar button. Tinted on list screens, white variant (.w) where chrome
@@ -32,102 +78,152 @@ h1{font-size:26px;font-weight:650;letter-spacing:-.02em;margin-bottom:6px}
    translucency adapts. Colour is reserved for meaning, never decoration. */
 .gbtn{width:32px;height:32px;flex:0 0 32px;border-radius:50%;display:inline-flex;align-items:center;
  justify-content:center;color:var(--ink);font-size:16px;
- background:rgba(255,255,255,.09);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
- box-shadow:inset 0 0 0 .5px rgba(255,255,255,.16)}
+ background:var(--fill);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+ box-shadow:inset 0 0 0 .5px var(--fill-line)}
 /* .clear variant: over media, higher transparency + a dimming scrim behind */
-.gbtn.w{color:#fff;background:rgba(255,255,255,.10);
- box-shadow:inset 0 0 0 .5px rgba(255,255,255,.22),0 1px 6px rgba(0,0,0,.45)}
-.gbtn.tint,.gbtn.w.tint{color:#ffd60a}   /* semantic: active state — this IS the key photo */
-.gbtn.destructive{color:#ff453a}
-.back{color:#fff;font-size:14px;display:flex;align-items:center;gap:3px}
-.search{margin:8px 16px 6px;background:#1c1c1e;border-radius:10px;padding:7px 10px;color:#8e8e93;font-size:13px;display:flex;gap:7px;align-items:center}
+.gbtn.w{color:var(--over-ink);background:var(--over-fill);
+ box-shadow:inset 0 0 0 .5px var(--over-fill-line),0 1px 6px rgba(0,0,0,.25)}
+.gbtn.tint,.gbtn.w.tint{color:var(--gold)}   /* semantic: active state — this IS the key photo */
+.gbtn.destructive{color:var(--error)}
+.back{color:var(--over-ink);font-size:14px;display:flex;align-items:center;gap:3px}
+.search{margin:8px 16px 6px;background:var(--surface-2);border-radius:10px;padding:7px 10px;color:var(--dim);font-size:13px;display:flex;gap:7px;align-items:center}
 .body{flex:1;overflow:hidden;position:relative}
 .scroll{position:absolute;inset:0;overflow:hidden}
 .alist{padding:0 16px 8px}
-.arow{display:flex;gap:12px;align-items:center;padding:7px 0;border-bottom:.5px solid #22262c}
-.arow img{width:54px;height:54px;border-radius:8px;object-fit:cover;flex:0 0 54px;background:#222}
+.arow{display:flex;gap:12px;align-items:center;padding:7px 0;border-bottom:.5px solid var(--line)}
+.arow img{width:54px;height:54px;border-radius:8px;object-fit:cover;flex:0 0 54px;background:var(--thumb-bg)}
 .arow .t{flex:1;min-width:0}
 .arow .n{font-size:14px;font-weight:520;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .arow .m{font-size:11.5px;color:var(--dim);margin-top:1px;display:flex;gap:6px;align-items:center}
-.chev{color:#5b636e;font-size:15px}
-.folder{color:#8b96a5;display:inline-flex;vertical-align:-.15em}
+.chev{color:var(--dim);font-size:15px}
+.folder{color:var(--dim);display:inline-flex;vertical-align:-.15em}
 .sechdr{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;padding:12px 16px 4px}
 .grid{display:grid;gap:2px;padding:0 2px}
 .g4{grid-template-columns:repeat(4,1fr)}.g2{grid-template-columns:repeat(2,1fr)}
-.grid img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:#1a1a1a}
+.grid img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:var(--thumb-bg)}
 .sel{position:relative}
 .sel img{filter:brightness(.62)}
 .sel .tick{position:absolute;right:4px;bottom:4px;width:19px;height:19px;border-radius:50%;
  background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;
- box-shadow:0 0 0 1.5px rgba(255,255,255,.85)}
-.dragpath{position:absolute;left:8%;top:34%;width:66%;height:22%;border:2px dashed rgba(255,255,255,.5);border-radius:10px;pointer-events:none}
-.pinch{position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);background:rgba(20,22,26,.92);backdrop-filter:blur(8px);border:1px solid #333a44;border-radius:12px;padding:8px 14px;font-size:11.5px;color:#cfd8e3;z-index:20;text-align:center}
-.pinch b{display:block;font-size:13px;color:#fff;margin-bottom:2px}
-.fs{position:absolute;inset:0;background:#000;display:flex;align-items:center;justify-content:center}
+ box-shadow:0 0 0 1.5px var(--surface)}
+.dragpath{position:absolute;left:8%;top:34%;width:66%;height:22%;border:2px dashed var(--over-fill-line);border-radius:10px;pointer-events:none}
+.pinch{position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);background:var(--overlay);backdrop-filter:blur(8px);border:1px solid var(--overlay-line);border-radius:12px;padding:8px 14px;font-size:11.5px;color:var(--ink);z-index:20;text-align:center}
+.pinch b{display:block;font-size:13px;color:var(--title);margin-bottom:2px}
+.fs{position:absolute;inset:0;background:var(--surface);display:flex;align-items:center;justify-content:center}
 .fs img{max-width:100%;max-height:100%;object-fit:contain}
-.fsbar{position:absolute;left:0;right:0;bottom:0;padding:10px 16px 22px;background:linear-gradient(transparent,rgba(0,0,0,.85));display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#d8dee6}
-.fstop{position:absolute;left:0;right:0;top:44px;padding:6px 16px 14px;background:linear-gradient(rgba(0,0,0,.55),transparent);display:flex;justify-content:space-between;align-items:center;z-index:10;color:#fff}
+.fsbar{position:absolute;left:0;right:0;bottom:0;padding:10px 16px 22px;background:linear-gradient(transparent,var(--fs-bot));display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--fsbar-ink)}
+.fstop{position:absolute;left:0;right:0;top:44px;padding:6px 16px 14px;background:linear-gradient(var(--fs-top),transparent);display:flex;justify-content:space-between;align-items:center;z-index:10;color:#fff}
 .filmstrip{position:absolute;left:0;right:0;bottom:52px;display:flex;gap:3px;padding:0 8px;z-index:9}
 .filmstrip img{width:30px;height:30px;object-fit:cover;border-radius:3px;opacity:.5}
-.filmstrip img.on{opacity:1;outline:1.5px solid #fff}
-.badge{display:inline-flex;align-items:center;gap:4px;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);border-radius:20px;padding:4px 9px;font-size:11px;font-weight:560}
-.map{position:absolute;inset:0;background:linear-gradient(160deg,#1b2733,#101820 60%,#0d141b)}
-.land{position:absolute;background:#25333f;border-radius:44% 56% 52% 48%/48% 44% 56% 52%}
+.filmstrip img.on{opacity:1;outline:1.5px solid var(--over-ink)}
+.badge{display:inline-flex;align-items:center;gap:4px;background:var(--over-scrim);color:var(--over-ink);backdrop-filter:blur(6px);border-radius:20px;padding:4px 9px;font-size:11px;font-weight:560}
+.map{position:absolute;inset:0;background:linear-gradient(160deg,var(--map-a),var(--map-b) 60%,var(--map-c))}
+.land{position:absolute;background:var(--map-land);border-radius:44% 56% 52% 48%/48% 44% 56% 52%}
 .pin{position:absolute;transform:translate(-50%,-100%);z-index:5}
 .pin img{width:38px;height:38px;border-radius:9px;object-fit:cover;border:2.5px solid #fff;box-shadow:0 3px 10px rgba(0,0,0,.6)}
-.pin .lbl{font-size:9.5px;text-align:center;margin-top:2px;background:rgba(0,0,0,.6);border-radius:4px;padding:1px 4px;white-space:nowrap;max-width:78px;overflow:hidden;text-overflow:ellipsis}
+.pin .lbl{font-size:9.5px;text-align:center;margin-top:2px;background:var(--map-lbl);color:var(--map-lbl-ink);border-radius:4px;padding:1px 4px;white-space:nowrap;max-width:78px;overflow:hidden;text-overflow:ellipsis}
 .cluster{position:absolute;transform:translate(-50%,-50%);width:44px;height:44px;border-radius:50%;background:rgba(10,132,255,.92);display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:680;border:2px solid rgba(255,255,255,.85)}
 .cluster.sm{width:32px;height:32px;font-size:11px}
-.dot{position:absolute;width:11px;height:11px;border-radius:50%;background:#0a84ff;border:2px solid #fff;transform:translate(-50%,-50%)}
-.mapchip{position:absolute;top:52px;left:50%;transform:translateX(-50%);background:rgba(20,22,26,.92);backdrop-filter:blur(10px);border:1px solid #333a44;border-radius:18px;padding:6px 13px;font-size:11.5px;z-index:20;white-space:nowrap}
+.dot{position:absolute;width:11px;height:11px;border-radius:50%;background:var(--accent);border:2px solid #fff;transform:translate(-50%,-50%)}
+.mapchip{position:absolute;top:52px;left:50%;transform:translateX(-50%);background:var(--overlay);backdrop-filter:blur(10px);border:1px solid var(--overlay-line);color:var(--ink);border-radius:18px;padding:6px 13px;font-size:11.5px;z-index:20;white-space:nowrap}
 .sec{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;padding:16px 16px 6px}
-.cell{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:.5px solid #22262c;font-size:13.5px;gap:10px}
+.cell{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:.5px solid var(--line);font-size:13.5px;gap:10px}
 .cell .v{color:var(--dim);font-size:12.5px}
-.srow{display:flex;align-items:center;gap:10px;padding:8px 16px;border-bottom:.5px solid #22262c}
+.srow{display:flex;align-items:center;gap:10px;padding:8px 16px;border-bottom:.5px solid var(--line)}
 .srow img{width:38px;height:38px;border-radius:7px;object-fit:cover;flex:0 0 38px}
 .srow .t{flex:1;min-width:0}
 .srow .n{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .srow .m{font-size:11px;color:var(--dim)}
-.iconbtn{width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.08);display:inline-flex;align-items:center;justify-content:center;flex:0 0 32px;font-size:15px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14)}
-.iconbtn.red{color:#ff453a}   /* destructive — the one place colour is required */
-.bar{height:6px;background:#22262c;border-radius:3px;overflow:hidden;margin:8px 16px 2px}
+.iconbtn{width:32px;height:32px;border-radius:50%;background:var(--fill);display:inline-flex;align-items:center;justify-content:center;flex:0 0 32px;font-size:15px;box-shadow:inset 0 0 0 .5px var(--fill-line)}
+.iconbtn.red{color:var(--error)}   /* destructive — the one place colour is required */
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:8px 16px 2px}
 .bar i{display:block;height:100%;background:var(--accent)}
 /* bottom sheet */
-.sheet{position:absolute;left:0;right:0;bottom:0;background:#16191e;border-radius:18px 18px 0 0;box-shadow:0 -8px 30px rgba(0,0,0,.6);z-index:30;border-top:.5px solid #2b323b}
-.grab{width:38px;height:5px;border-radius:3px;background:#3c444e;margin:8px auto 4px}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--sheet);border-radius:18px 18px 0 0;box-shadow:0 -8px 30px rgba(0,0,0,.6);z-index:30;border-top:.5px solid var(--line)}
+.grab{width:38px;height:5px;border-radius:3px;background:var(--dim);margin:8px auto 4px}
 .sheethdr{display:flex;align-items:center;justify-content:space-between;padding:2px 16px 10px}
 .sheethdr .ttl{font-size:15px;font-weight:640}
-.dimmer{position:absolute;inset:0;background:rgba(0,0,0,.45);z-index:25}
+.dimmer{position:absolute;inset:0;background:var(--dimmer);z-index:25}
 .alert{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:232px;z-index:35;
- background:rgba(38,42,48,.92);backdrop-filter:blur(24px);border-radius:16px;overflow:hidden;
- box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14),0 12px 40px rgba(0,0,0,.6)}
+ background:var(--overlay);backdrop-filter:blur(24px);border-radius:16px;overflow:hidden;
+ box-shadow:inset 0 0 0 .5px var(--fill-line),0 12px 40px rgba(0,0,0,.35)}
 .alert .ah{padding:16px 16px 10px;text-align:center}
 .alert .at{font-size:14px;font-weight:640}
 .alert .as{font-size:11.5px;color:var(--dim);margin-top:3px;line-height:1.4}
-.alert .opt{display:flex;align-items:center;gap:9px;padding:10px 14px;border-top:.5px solid rgba(255,255,255,.10);font-size:13.5px}
+.alert .opt{display:flex;align-items:center;gap:9px;padding:10px 14px;border-top:.5px solid var(--line);font-size:13.5px}
 .alert .opt img{width:26px;height:26px;border-radius:5px;object-fit:cover}
 .alert .opt .sub{font-size:10.5px;color:var(--dim)}
-.alert .chk{display:flex;align-items:flex-start;gap:9px;padding:11px 14px;border-top:.5px solid rgba(255,255,255,.10);font-size:12.5px;text-align:left}
+.alert .chk{display:flex;align-items:flex-start;gap:9px;padding:11px 14px;border-top:.5px solid var(--line);font-size:12.5px;text-align:left}
 .alert .box{width:17px;height:17px;flex:0 0 17px;border-radius:4px;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:11px;margin-top:1px}
 .alert .warn{font-size:10.5px;color:var(--warn);margin-top:3px;line-height:1.35}
-.alert .field{margin:2px 14px 10px;background:rgba(255,255,255,.09);border-radius:8px;padding:8px 10px;font-size:13.5px;text-align:left;
- box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14)}
-.alert .cancel{text-align:center;padding:11px;border-top:.5px solid rgba(255,255,255,.10);font-size:13.5px;color:var(--dim)}
+.alert .field{margin:2px 14px 10px;background:var(--fill);border-radius:8px;padding:8px 10px;font-size:13.5px;text-align:left;
+ box-shadow:inset 0 0 0 .5px var(--fill-line)}
+.alert .cancel{text-align:center;padding:11px;border-top:.5px solid var(--line);font-size:13.5px;color:var(--dim)}
 .mini{display:flex;align-items:center;gap:10px;padding:2px 16px 14px}
 .mini .ring{width:26px;height:26px;flex:0 0 26px}
-</style></head><body>
-<h1>Photo album viewer — UI mockups</h1>
+.ms{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.04em;padding:1px 6px;border-radius:5px;
+ margin-right:7px;vertical-align:1px;background:var(--ms-bg);color:var(--ms-ink);box-shadow:inset 0 0 0 .5px var(--ms-line)}
+.ms.e2{color:var(--ms-e2)}.ms.e3{color:var(--ms-e3)}.ms.f{color:var(--ms-f)}.ms.g{color:var(--ms-g)}
+.ph{background:repeating-linear-gradient(115deg,var(--ph-a),var(--ph-a) 9px,var(--ph-b) 9px,var(--ph-b) 18px)}
+.grid .ph{width:100%;aspect-ratio:1;display:block}
+.arow .ph{width:54px;height:54px;border-radius:8px;flex:0 0 54px}
+/* toast: Material 3 snackbar, app-level host, anchored bottom */
+.toast{position:absolute;left:12px;right:12px;bottom:14px;z-index:28;display:flex;align-items:flex-start;gap:10px;
+ padding:11px 13px;border-radius:11px;background:var(--toast-bg);color:var(--toast-ink);font-size:12px;line-height:1.45;
+ box-shadow:0 8px 26px rgba(0,0,0,.28),inset 0 0 0 .5px var(--toast-line)}
+.toast b{color:var(--toast-strong);font-weight:620}
+.toast .ico{flex:0 0 auto;opacity:.85;margin-top:1px}
+.toast .act{margin-left:auto;flex:0 0 auto;color:var(--accent);font-weight:620;font-size:12px;align-self:center}
+/* long message: action drops to its own row, Material 3's two-line-with-action form */
+.toast.err{border-left:3px solid var(--error);
+ background:color-mix(in srgb, var(--error) 10%, var(--toast-bg))}
+.toast.err .ico,.toast.err b{color:var(--error);opacity:1}
+.toast.stack{flex-wrap:wrap}
+.toast.stack .msg{flex:1 1 auto;min-width:0}
+.toast.stack .act{flex:0 0 auto;width:100%;text-align:right;margin:6px 0 0;align-self:auto}
+.busy{opacity:.5}
+.qbar{height:3px;background:var(--line);border-radius:2px;overflow:hidden;margin:6px 16px 0}
+.qbar i{display:block;height:100%;background:var(--accent-dim)}
+</style>
+<script>
+/* Theme resolution for this mockup sheet only. The app itself has no such control: it
+   follows the system theme, and Settings offers no appearance row. This exists so both
+   schemes can be reviewed without changing the OS. */
+(function(){
+  var KEY='photos-mock-theme', mq=window.matchMedia('(prefers-color-scheme: light)');
+  var pref='system'; try{ var v=localStorage.getItem(KEY); if(v==='light'||v==='dark') pref=v; }catch(e){}
+  function apply(){
+    var r = pref==='system' ? (mq.matches?'light':'dark') : pref;
+    document.documentElement.setAttribute('data-resolved', r);
+    var b=document.getElementById('themebtn');
+    if(b) b.textContent = pref==='system' ? ('Theme: system \u00b7 '+r) : ('Theme: '+pref);
+  }
+  window.__cycleTheme=function(){
+    pref = pref==='system' ? 'light' : (pref==='light' ? 'dark' : 'system');
+    try{ pref==='system' ? localStorage.removeItem(KEY) : localStorage.setItem(KEY,pref); }catch(e){}
+    apply();
+  };
+  mq.addEventListener('change', function(){ if(pref==='system') apply(); });
+  apply();
+  document.addEventListener('DOMContentLoaded', apply);
+})();
+</script></head><body>
+<div class="topbar"><h1>Photo album viewer — UI mockups</h1>
+<button class="themetgl" id="themebtn" onclick="__cycleTheme()">Theme: system</button></div>
 <p class="sub"><b>Synthetic placeholder tiles and generic album names</b> — the committed variant, carrying no personal photos.</p>
 <p class="facts"><b>Layout and content, not chrome.</b> These were drawn before §6 settled on Compose Multiplatform with Material 3; what they fix is what is on each screen and how it is reached, not the shape of a button.</p>
+<p class="facts"><b>Both colour schemes are the app’s</b> — it follows the system theme and has no appearance setting. The toggle above exists only on this sheet, so both can be reviewed without changing the OS. Media stays on black in either scheme, and so does any chrome sitting on a photograph.</p>
 <p class="facts">Illustrative library: <b>239 top-level albums</b> · 288 leaf albums · ~33.5k photos · 550 videos · ~120 GB · ~25% GPS-tagged · 187 Live Photos</p>
-<div class="chg"><b>This revision applies your six changes:</b>
+<div class="chg"><b>Revised by the milestone-E design interview.</b> Every screen carries the
+milestone that builds it — <b>E.1</b> the read-only app on Linux, <b>E.2</b> offline albums,
+<b>E.3</b> iOS, <b>F</b> map, <b>G</b> upload — and these decisions changed what is drawn:
 <ul>
-<li><b>Search tab removed</b> — it duplicated the album-list search field</li>
-<li><b>Default sort is now date</b> (newest first; 281 of 290 albums have a date range, 9 don't)</li>
-<li><b>One list view</b> for albums and containers — no more tile grid for sub-albums</li>
-<li><b>Upload is a bottom sheet</b>, minimizable to a progress pill</li>
-<li><b>No settings tab, no tab bar at all</b> — gear + map icons in the nav bar</li>
-<li><b>Storage rows carry two icon-only buttons</b>: clear and download</li>
+<li><b>2-column density shows upscaled pack thumbs</b>, not previews — the grid becomes a pure local read at every density, so it works offline and needs no per-tile loading state</li>
+<li><b>Every album's thumbnail pack is fetched</b> in the background after the shards; an album whose pack has not landed shows placeholders, and is never disabled</li>
+<li><b>Settings gains per-album offline selection</b> (E.2) — §6 no longer says there is no way to prepare for a flight</li>
+<li><b>Sort is one icon that cycles</b> date↓ → date↑ → name; the subtitle already names the state</li>
+<li><b>Errors are a toast</b> naming status and cause, with duration by kind — a 403 waits for you, a dropped network clears itself; the Settings sync row is the durable record</li>
+<li><b>Set-as-cover moved to G</b>, making E read-only in fact; <b>share moved to E.3</b>, being platform interop</li>
 </ul></div>
 <div class="wrap" id="wrap"></div>
 <script>
@@ -162,6 +258,7 @@ const I={
  lock:   svg('<rect x="4.5" y="10.5" width="15" height="10" rx="2.2"/><path d="M8 10.5V7.8a4 4 0 018 0v2.7"/>'),
  face:   svg('<path d="M4 8.5V6.2A2.2 2.2 0 016.2 4h2.3M15.5 4h2.3A2.2 2.2 0 0120 6.2v2.3M20 15.5v2.3a2.2 2.2 0 01-2.2 2.2h-2.3M8.5 20H6.2A2.2 2.2 0 014 17.8v-2.3"/><path d="M9 10.2v1.4M15 10.2v1.4M12 10.5v3.1h-1M9.4 16a4 4 0 005.2 0"/>'),
  grid:   svg('<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>'),
+ play:   svg('<path d="M8.5 5.5l10 6.5-10 6.5z" fill="currentColor" stroke="none"/>'),
  list:   svg('<path d="M8 6.5h12M8 12h12M8 17.5h12"/><circle cx="4" cy="6.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="4" cy="17.5" r="1.3" fill="currentColor" stroke="none"/>'),
 };
 const gb=(ic,cls)=>`<span class="gbtn ${cls||''}">${ic}</span>`;
@@ -174,10 +271,26 @@ const hdr=(title,sub,icons,back)=>`<div class="nav">
   ${sub?`<div class="subline">${sub}</div>`:''}</div>`;
 
 const st=`<div class="status"><span>9:41</span><span class="sysicons">${I.wifi}${I.batt}<span>100%</span></span></div>`;
+const MS={
+  'Album list \u2014 no tab bar':'E.1','Album list \u2014 packs arriving':'E.1',
+  'Album list \u2014 sync failed':'E.1','Album list \u2014 offline':'E.1','Container album \u2014 identical list':'E.1',
+  'Album grid \u2014 4 columns':'E.1','Album grid \u2014 pack pending':'E.1',
+  'Pinched to 2 columns':'E.1','Fullscreen viewer \u2014 still':'E.1',
+  'Fullscreen viewer \u2014 video':'E.1','First run \u2014 setup':'E.1',
+  'First run \u2014 connecting':'E.1','Settings \u2014 E.1, no storage yet':'E.1','Log out':'E.1',
+  'Settings \u2014 account, storage, offline albums':'E.2',
+  'Fullscreen viewer \u2014 Live state':'E.3','Face ID \u2014 once per app launch':'E.3',
+  'Albums \u2014 map representation':'F','Album \u2014 map representation':'F',
+  'Set as album cover \u2014 parent choice':'G',
+  'Upload 1 \u2014 pick from the gallery':'G','Upload 2 \u2014 name and options':'G',
+  'Upload 3 \u2014 bottom sheet':'G','Upload 4 \u2014 minimized':'G',
+};
+const msClass=m=>({'E.2':'e2','E.3':'e3','F':'f','G':'g'}[m]||'');
 function phone(inner,title,desc){
   const d=document.createElement('div'); d.className='item';
+  const m=MS[title], chip=m?`<span class="ms ${msClass(m)}">${m}</span>`:'';
   d.innerHTML=`<div class="phone"><div class="island"></div><div class="screen">${inner}</div></div>
-  <div class="cap"><h3>${title}</h3><p>${desc}</p></div>`;
+  <div class="cap"><h3>${chip}${title}</h3><p>${desc}</p></div>`;
   W.appendChild(d);
 }
 const arow=a=>`<div class="arow"><img src="${a.cover}">
@@ -186,39 +299,84 @@ const arow=a=>`<div class="arow"><img src="${a.cover}">
  ${a.children?'<span class="chev">›</span>':''}</div>`;
 
 /* 1 album list */
-phone(`${st}${hdr('Albums','239 albums · sorted by date, newest first',gb(I.gear)+gb(I.map)+gb(I.sort)+gb(I.up),false)}
+phone(`${st}${hdr('Albums','239 albums · sorted by date, newest first',gb(I.gear)+gb(I.sort),false)}
  <div class="search">${I.search} Search albums</div>
  <div class="body"><div class="scroll"><div class="alist">${D.albums.map(arow).join('')}</div></div></div>`,
  'Album list — no tab bar',
- 'Gear, map and sort \u2014 the three global actions. No hidden \u201c\u2026\u201d menu anywhere in the app: every icon does one visible thing.');
+  'E.1 carries gear and sort only \u2014 F adds the map icon, G adds upload, so nothing on screen is ever dead. <b>Sort is one icon that cycles</b> date\u2193 \u2192 date\u2191 \u2192 name, and the subtitle names the current state, so no menu is needed. Pull down to sync; there is no refresh icon.');
+
+/* 1b album list — packs still arriving */
+const phrow=a=>`<div class="arow"><span class="ph"></span>
+ <div class="t"><div class="n">${esc(a.name)}</div>
+ <div class="m"><span>${a.count.toLocaleString()} photos</span>${a.years?`<span>· ${a.years}</span>`:''}</div></div></div>`;
+phone(`${st}${hdr('Albums','239 albums · fetching thumbnails 34/288',gb(I.gear)+gb(I.sort),false)}
+ <div class="qbar"><i style="width:12%"></i></div>
+ <div class="search">${I.search} Search albums</div>
+ <div class="body"><div class="scroll"><div class="alist">${D.albums.slice(0,3).map(arow).join('')}${D.albums.slice(3,8).map(phrow).join('')}</div></div></div>`,
+ 'Album list \u2014 packs arriving',
+ 'The full list appears as soon as the shards land (~12 MB, a few seconds). Every album\u2019s thumbnail pack is then fetched behind it \u2014 ~0.3 GB in all \u2014 and a row whose pack has not arrived shows a placeholder cover. <b>Nothing is ever disabled:</b> tapping one opens it and promotes its pack to the head of the queue.');
+
+/* 1c album list — sync failed */
+phone(`${st}${hdr('Albums','239 albums · sorted by date, newest first',gb(I.gear)+gb(I.sort),false)}
+ <div class="search">${I.search} Search albums</div>
+ <div class="body"><div class="scroll"><div class="alist">${D.albums.slice(0,6).map(arow).join('')}</div></div>
+  <div class="toast stack err"><span class="ico">${I.lock}</span>
+   <span class="msg"><b>Sync failed: 403 Forbidden</b><br>Log out and check the password.</span>
+   <span class="act">Settings</span></div></div>`,
+ 'Album list \u2014 sync failed',
+ '\u00a71 forbids opaque errors, so the status and the cause are both named. A toast rather than a banner: it never reflows the list and never blocks \u2014 the catalog and every thumbnail are on disk, so a failed sync must not stop you browsing. <b>A 403 needs a person, so this one stays until dismissed</b> and carries an action to the sync row.');
+
+/* 1d album list — transient failure */
+phone(`${st}${hdr('Albums','239 albums · sorted by date, newest first',gb(I.gear)+gb(I.sort),false)}
+ <div class="search">${I.search} Search albums</div>
+ <div class="body"><div class="scroll"><div class="alist">${D.albums.slice(0,6).map(arow).join('')}</div></div>
+  <div class="toast"><span class="ico">${I.wifi}</span>
+   <span><b>No network</b><br>Showing the catalog as of 2 days ago.</span></div></div>`,
+ 'Album list \u2014 offline',
+ '<b>Duration by kind.</b> Offline, timeout and DNS clear themselves, so their toast auto-dismisses after a few seconds and carries no action \u2014 there is nothing for you to do. Everything on this screen still works: the whole catalog and every thumbnail are on disk. Because a toast is transient, <b>the Settings sync row is the durable record</b>.');
 
 /* 2 container — same list view */
-phone(`${st}${hdr('Iceland','8 sub-albums · 412 photos',gb(I.gear)+gb(I.map)+gb(I.sort)+gb(I.up),true)}
+phone(`${st}${hdr('Iceland','8 sub-albums · 412 photos',gb(I.gear)+gb(I.sort),true)}
  <div class="body"><div class="scroll"><div class="alist">${D.kalifornien.map(arow).join('')}</div></div></div>`,
  'Container album — identical list',
- 'Same row layout as the top level. Gear is present on every screen; sort is the only screen-specific action. No download action anywhere \u2014 caching happens by browsing (decision 29).');
+ 'Same row layout as the top level \u2014 \u00a72\u2019s album-has-sub-albums-XOR-photos rule is what lets one list serve both. Gear is on every screen; sort is the only screen-specific action. Browsing is still what caches a photo; the one place to ask for an album ahead of time is Settings, in E.2.');
 
 /* 3 grid */
 const g=D.grid.photos.filter(Boolean);
-phone(`${st}${hdr('Coast Road 2019',D.grid.count.toLocaleString()+' photos · 2019',gb(I.gear)+gb(I.map)+gb(I.sort)+gb(I.up),true)}
+phone(`${st}${hdr('Coast Road 2019',D.grid.count.toLocaleString()+' photos · 2019',gb(I.gear)+gb(I.sort),true)}
  <div class="body"><div class="scroll"><div class="grid g4">${g.slice(0,48).map(p=>`<img src="${p}">`).join('')}</div></div></div>`,
  'Album grid — 4 columns',
- '256px JPEG thumbs from thumbs/&lt;album&gt;.db \u2014 one request opens the whole grid, offline. The map icon switches this album to its map representation and back.');
+   '256px JPEG thumbs read from packs/&lt;thumbs-uuid&gt;.db on disk \u2014 <b>no network at all</b>, because every album\u2019s pack is fetched during sync. F adds the map icon back; G adds upload.');
+
+/* 3b grid — pack pending */
+phone(`${st}${hdr('Coast Road 2019',D.grid.count.toLocaleString()+' photos · 2019',gb(I.gear)+gb(I.sort),true)}
+ <div class="body"><div class="scroll"><div class="grid g4">${Array.from({length:48},()=>'<span class="ph"></span>').join('')}</div></div></div>`,
+ 'Album grid \u2014 pack pending',
+ 'Opened before its pack arrived. The tile count comes from <code>photo_count</code> in the merged DB, which is exactly what distinguishes this from \u00a710\u2019s zero-photo album \u2014 that one shows no tiles at all. Tapping in here moved this album to the front of the download queue.');
 
 /* 4 pinch */
-phone(`${st}${hdr('Coast Road 2019',D.grid.count.toLocaleString()+' photos · 2019',gb(I.gear)+gb(I.map)+gb(I.sort)+gb(I.up),true)}
+phone(`${st}${hdr('Coast Road 2019',D.grid.count.toLocaleString()+' photos · 2019',gb(I.gear)+gb(I.sort),true)}
  <div class="body"><div class="scroll"><div class="grid g2">${g.slice(0,12).map(p=>`<img src="${p}">`).join('')}</div></div>
- <div class="pinch"><b>Pinch to change density</b>2 cols → fetching 2048px previews<br>for the 6 visible tiles</div></div>`,
+   <div class="pinch"><b>Pinch \u00b7 ctrl+scroll to change density</b>2 cols \u2192 the same 256px thumbs,<br>upscaled. No fetch, no network.</div></div>`,
  'Pinched to 2 columns',
- 'Below 4 columns the 256px thumb is too soft, so the preview tier is swapped in for visible tiles only. A custom animated layout: Compose provides no interactive layout transition.');
+   '<b>Upscaled pack thumbs, not previews.</b> \u00a75 left this open and the interview closed it: fetching 385 KB per tile would make the grid the one screen needing network, a loading state and a prefetch pipeline. Softness is the price; the grid stays a pure local read at every density. Still a custom animated layout \u2014 ctrl+scroll on desktop, pinch on iOS.');
 
 /* 5 fullscreen */
 phone(`${st}<div class="body"><div class="fs"><img src="${D.hero}"></div>
- <div class="fstop"><div class="navicons">${gb(I.chevL,"w")}</div><div class="navicons">${gb(I.gear,"w")}${gb(I.share,"w")}${gb(I.coverOn,"w tint")}</div></div>
+   <div class="fstop"><div class="navicons">${gb(I.chevL,"w")}</div><div class="navicons">${gb(I.gear,"w")}</div></div>
  <div class="filmstrip">${g.slice(2,11).map((p,i)=>`<img class="${i===4?'on':''}" src="${p}">`).join('')}</div>
  <div class="fsbar"><span>14 Apr 2019 · 11:12</span><span class="badge">${I.down} Original 3.4 MB</span></div></div>`,
  'Fullscreen viewer — still',
- 'Chrome: back, then gear, share and set-as-cover. The star is <b>filled and gold here because this photo IS the album\u2019s key photo</b> \u2014 tint marking an active state, the one thing decision 85 allows colour for.');
+   'E.1 chrome is back and gear only. <b>Set-as-cover moved to G</b> \u2014 it rewrites the album shard with If-Match, and E is meant to be read-only; <b>share moved to E.3</b>, being UIActivityViewController interop only a device exercises. Swiping loads the 2048px preview, \u00b13 either side prefetched and cancelled on leaving the album.');
+
+/* 5b fullscreen — video */
+phone(`${st}<div class="body"><div class="fs"><img src="${g[7]}"></div>
+ <div class="fstop"><div class="navicons">${gb(I.chevL,"w")}</div><div class="navicons">${gb(I.gear,"w")}</div></div>
+ <div style="position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);width:64px;height:64px;border-radius:50%;background:rgba(0,0,0,.45);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;color:#fff;font-size:30px;z-index:11;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.3)">${I.play}</div>
+ <div class="filmstrip">${g.slice(12,21).map((p,i)=>`<img class="${i===4?'on':''}" src="${p}">`).join('')}</div>
+ <div class="fsbar"><span>3 Jul 2021 · 0:42</span><span class="badge">${I.down} Original 18.6 MB</span></div></div>`,
+ 'Fullscreen viewer \u2014 video',
+ 'The poster is the photo\u2019s own 2048px preview; the badge sizes the HEVC transcode a tap fetches, not the camera\u2019s file \u2014 video originals stay on the laptop (\u00a75). <b>Playback is real on Linux</b>, through libvlc: \u00a77\u2019s no-host-dependencies rule binds the shipped CLI, not a development surface. iOS swaps one adapter for AVPlayer in a UIKitView.');
 
 /* 6 live photo */
 phone(`${st}<div class="body"><div class="fs"><img src="${D.live}"></div>
@@ -271,9 +429,9 @@ phone(`${st}<div class="body"><div class="fs"><img src="${D.hero}" style="opacit
 const settingsBody=`
   <div class="sec">Account</div>
   <div class="cell"><span>Storage URL</span><span class="v" style="text-align:right;max-width:150px">de-s3.storage.bunnycdn.com<br>/my-photos</span></div>
-  <div class="cell"><span>Password<div style="font-size:11px;color:#8b96a5;font-weight:400">unlocked with Face ID each launch</div></span><span class="v">••••••••••••</span></div>
-  <div style="padding:2px 16px 10px;font-size:11px;color:#8b96a5">To change either, log out and set up again.</div>
-  <div class="cell"><span style="color:#ff453a">Log out</span><span class="v"></span></div>
+  <div class="cell"><span>Password<div style="font-size:11px;color:var(--dim);font-weight:400">unlocked with Face ID each launch</div></span><span class="v">••••••••••••</span></div>
+  <div style="padding:2px 16px 10px;font-size:11px;color:var(--dim)">To change either, log out and set up again.</div>
+  <div class="cell"><span style="color:var(--error)">Log out</span><span class="v"></span></div>
   <div class="sec">Storage</div>
   <div class="cell"><span>Cached previews</span><span class="v">3.2 GB</span></div>
   <div class="cell"><span>Catalog + thumbnails</span><span class="v">0.31 GB · always kept</span></div>
@@ -281,36 +439,77 @@ const settingsBody=`
   <div class="sec">Sync</div>
   <div class="cell"><span>Last sync</span><span class="v">2 min ago</span></div>
   <div class="cell"><span>Albums</span><span class="v">239 · 33,582 photos</span></div>
-  <div class="sec">Albums · 288</div>
-  ${D.storage.map((s,i)=>{const c=i<3;return `<div class="srow"><img src="${s.cover}">
-    <div class="t"><div class="n">${esc(s.name)}</div><div class="m">${c?s.mb+' MB cached':'nothing cached'}</div></div>
-    ${c?`<span class="iconbtn red">${I.trash}</span>`:''}</div>`}).join('')}
+    <div class="sec">Albums · 288 <span style="text-transform:none;letter-spacing:0">— download to keep offline</span></div>
+    ${D.storage.map((s,i)=>{
+    const state=i===0?'offline':(i===1?'downloading':(i<4?'cached':'none'));
+    const meta={offline:s.mb+' MB · kept offline',downloading:'downloading · 214/1,755',
+                cached:s.mb+' MB cached',none:'nothing cached'}[state];
+    const btn=state==='offline'?`<span class="iconbtn" style="color:var(--gold)">${I.check}</span>`
+             :state==='downloading'?`<span class="iconbtn busy">${I.down}</span>`
+             :`<span class="iconbtn">${I.down}</span>`;
+    const clear=state==='none'?'':`<span class="iconbtn red">${I.trash}</span>`;
+    return `<div class="srow"><img src="${s.cover}">
+    <div class="t"><div class="n">${esc(s.name)}</div><div class="m">${meta}</div></div>
+    ${btn}${clear}</div>`}).join('')}
  `;
 
 /* 9 settings incl. storage */
 phone(`${st}${hdr('Settings','',null,true)}
- <div class="body"><div class="scroll">${settingsBody}</div></div>`,
- 'Settings — account, storage, sync',
- 'One screen. Account first (storage URL, password, Log out — all read-only), then storage totals and sync, then the 288-album list last. One button per album: clear, shown only where something is cached.');
+ <div class="body"><div class="scroll" style="top:-268px">${settingsBody}</div></div>`,
+   'Settings \u2014 account, storage, offline albums',
+   'One screen. Account first (all read-only), then storage totals and sync, then the 288-album list. <b>Two buttons per album now:</b> download keeps it offline \u2014 gold check once it is, dimmed while downloading \u2014 and clear appears wherever anything is cached. This replaces \u00a76\u2019s old line that there was no way to prepare for a flight.');
+
+/* 9b settings — E.1 */
+phone(`${st}${hdr('Settings','',null,true)}
+ <div class="body"><div class="scroll">
+  <div class="sec">Account</div>
+  <div class="cell"><span>Storage URL</span><span class="v" style="text-align:right;max-width:150px">de-s3.storage.bunnycdn.com<br>/my-photos</span></div>
+  <div class="cell"><span>Password<div style="font-size:11px;color:var(--dim);font-weight:400">stored in the desktop keyring</div></span><span class="v">••••••••••••</span></div>
+  <div style="padding:2px 16px 10px;font-size:11px;color:var(--dim)">To change either, log out and set up again.</div>
+  <div class="cell"><span style="color:var(--error)">Log out</span><span class="v"></span></div>
+  <div class="sec">Sync</div>
+  <div class="cell"><span>Last sync</span><span class="v">2 min ago</span></div>
+  <div class="cell"><span>Albums</span><span class="v">239 · 33,582 photos</span></div>
+  <div class="cell"><span>Catalog + thumbnails</span><span class="v">0.31 GB · always kept</span></div>
+ </div></div>`,
+ 'Settings \u2014 E.1, no storage yet',
+ 'What E.1 actually ships: account, sync, log out. <b>No storage section and no album list</b>, because caching is plain browse-to-cache with nothing to manage \u2014 the totals, the per-album rows and both buttons arrive with E.2, the milestone that gives them something to do. Log out still clears everything.');
 
 /* first run — setup */
 phone(`${st}${hdr('Set up','connect to your storage zone',null,false)}
  <div class="body"><div class="scroll">
   <div class="sec">Storage URL</div>
-  <div class="alert" style="position:static;transform:none;width:auto;margin:0 16px;background:rgba(255,255,255,.06)">
+  <div class="alert" style="position:static;transform:none;width:auto;margin:0 16px;background:var(--fill)">
    <div class="field" style="margin:10px 12px;font-size:12.5px">https://de-s3.storage.bunnycdn.com/my-photos</div></div>
-  <div style="padding:2px 16px 0;font-size:11px;color:#8b96a5">Host gives the endpoint and signing region; the path segment is the zone name, which is also the access key ID.</div>
+  <div style="padding:2px 16px 0;font-size:11px;color:var(--dim)">Host gives the endpoint and signing region; the path segment is the zone name, which is also the access key ID.</div>
   <div class="sec">Password</div>
-  <div class="alert" style="position:static;transform:none;width:auto;margin:0 16px;background:rgba(255,255,255,.06)">
+  <div class="alert" style="position:static;transform:none;width:auto;margin:0 16px;background:var(--fill)">
    <div class="field" style="margin:10px 12px;display:flex;justify-content:space-between;align-items:center">
     <span>••••••••••••</span><span style="opacity:.8">${I.lock}</span></div></div>
-  <div style="padding:2px 16px 0;font-size:11px;color:#8b96a5">Stored in the Keychain and unlocked with Face ID each time the app opens.</div>
-  <div style="margin:14px 16px;padding:9px 11px;border-radius:9px;background:rgba(10,132,255,.13);font-size:11.5px;color:#c7d1dd;display:flex;gap:8px">
+  <div style="padding:2px 16px 0;font-size:11px;color:var(--dim)">Stored in the Keychain and unlocked with Face ID each time the app opens.</div>
+  <div style="margin:14px 16px;padding:9px 11px;border-radius:9px;background:color-mix(in srgb, var(--accent) 14%, transparent);font-size:11.5px;color:var(--card-ink);display:flex;gap:8px">
    ${I.key}<span><b>photos.example.com</b> — Proton Pass fills this from the QuickType bar, via Associated Domains.</span></div>
   <div class="cell" style="justify-content:center;color:var(--accent)">Connect</div>
  </div></div>`,
  'First run — setup',
- 'One storage URL and one password \u2014 Proton Pass fills them in a single pass, because the app declares <code>webcredentials:photos.example.com</code>. The write password is optional: skip it on a browse-only device.');
+   'One storage URL and one password \u2014 the URL carries endpoint, signing region and zone name, which on bunny.net is also the access key ID. <b>Stored through the same Keyring port the CLI uses</b>: the Secret Service on Linux, so <code>photos-cli login</code> configures the app too, and the Keychain under Face ID on iOS. No edit path \u2014 the app is either set up or it is not.');
+
+/* 10b first run — connecting */
+phone(`${st}${hdr('Set up','connect to your storage zone',null,false)}
+ <div class="body"><div class="scroll">
+  <div class="sec">Storage URL</div>
+  <div class="alert" style="position:static;transform:none;width:auto;margin:0 16px;background:var(--fill)">
+   <div class="field" style="margin:10px 12px;font-size:12.5px;opacity:.55">https://de-s3.storage.bunnycdn.com/my-photos</div></div>
+  <div class="sec">Password</div>
+  <div class="alert" style="position:static;transform:none;width:auto;margin:0 16px;background:var(--fill)">
+   <div class="field" style="margin:10px 12px;display:flex;justify-content:space-between;align-items:center;opacity:.55">
+    <span>••••••••••••</span><span style="opacity:.8">${I.lock}</span></div></div>
+  <div class="cell busy" style="justify-content:center;color:var(--accent);margin-top:16px">Connecting…</div>
+  <div class="bar"><i style="width:63%"></i></div>
+  <div style="padding:5px 16px 0;font-size:11px;color:var(--dim);text-align:center">182 of 288 shards · building the catalog next</div>
+ </div></div>`,
+ 'First run \u2014 connecting',
+ 'Connect disables itself and carries the progress rather than pushing a separate loading screen \u2014 the wait sits on the action that caused it. It blocks only on the shards (~12 MB) and the 0.39 s rebuild; the album list appears after that, and the thumbnail packs stream in behind it.');
 
 /* write key — Face ID */
 phone(`${st}<div class="body"><div class="scroll"><div class="alist">${D.albums.slice(0,4).map(arow).join('')}</div></div>
@@ -336,7 +535,7 @@ phone(`${st}${hdr('Settings','',null,true)}
    <div class="as">Removes the saved keys and everything cached for <b>my-photos</b>, and returns you to setup.</div></div>
   <div class="chk" style="border-top:none;padding-top:2px">
    <div class="warn" style="color:var(--dim)">3.2 GB cached previews · local catalog · saved keys.<br><b style="color:var(--warn)">Nothing in the storage zone is changed.</b></div></div>
-  <div class="opt" style="justify-content:center;color:#ff453a">Log out</div>
+  <div class="opt" style="justify-content:center;color:var(--error)">Log out</div>
   <div class="cancel">Cancel</div>
  </div></div>`,
  'Log out',
@@ -358,7 +557,7 @@ phone(`${st}${hdr('Choose photos','from your iPhone library',null,true)}
        ? `<div class="sel"><img src="${p}"><span class="tick">${I.check}</span></div>`
        : `<img src="${p}">`).join('')}
    <div class="dragpath"></div></div>
-  <div style="padding:8px 16px;font-size:11px;color:#8b96a5">Drag across thumbnails to select a range — UICollectionView’s multiple-selection interaction (iOS 13+).</div>
+  <div style="padding:8px 16px;font-size:11px;color:var(--dim)">Drag across thumbnails to select a range — UICollectionView’s multiple-selection interaction (iOS 13+).</div>
  </div></div>`,
  'Upload 1 — pick from the gallery',
  'Reached by the upload icon; the album you were in becomes the parent. A custom browser over PHAssetCollection, not PHPicker — PHPicker cannot list or name albums, which the prefill needs.');
@@ -388,9 +587,9 @@ phone(`${st}${hdr('Albums','',gb(I.gear)+gb(I.map)+gb(I.sort)+gb(I.up),false)}
    <div class="cell"><span>Originals</span><span class="v">98/214 · 641 MB</span></div>
    <div class="cell"><span>2048px previews</span><span class="v">queued</span></div>
    <div class="cell"><span>Thumbnails</span><span class="v">queued</span></div>
-   <div class="cell"><span>Album shard<div style="font-size:11px;color:#8b96a5;font-weight:400">written last, after every object verifies</div></span><span class="v">—</span></div>
+   <div class="cell"><span>Album shard<div style="font-size:11px;color:var(--dim);font-weight:400">written last, after every object verifies</div></span><span class="v">—</span></div>
    <div class="bar"><i style="width:46%"></i></div>
-   <div style="padding:6px 16px 16px;font-size:11.5px;color:#8b96a5">Background upload · cellular allowed<br>Safe to lock the phone or leave the app</div>
+   <div style="padding:6px 16px 16px;font-size:11.5px;color:var(--dim)">Background upload · cellular allowed<br>Safe to lock the phone or leave the app</div>
   </div></div>`,
  'Upload 3 — bottom sheet',
  'A sheet, not a pushed screen. Order matters: the album shard is written <b>last</b>, only after every object is uploaded and verified \u2014 so an interrupted upload never leaves a catalog pointing at objects that do not exist.');
@@ -402,7 +601,7 @@ phone(`${st}${hdr('Albums','',gb(I.gear)+gb(I.map)+gb(I.sort)+gb(I.up),false)}
   <div class="sheet">
    <div class="mini"><span class="ring" style="color:var(--ink);opacity:.85">${I.up}</span>
     <div style="flex:1"><div style="font-size:12.5px;font-weight:560">Uploading “Hiking Sep 26”</div>
-     <div style="font-size:11px;color:#8b96a5">Resumed after relaunch · 98/214 · 46%</div></div>
+     <div style="font-size:11px;color:var(--dim)">Resumed after relaunch · 98/214 · 46%</div></div>
     <span style="color:var(--ink);font-size:15px;opacity:.7;transform:rotate(180deg);display:inline-flex">${I.chevD}</span></div>
    <div class="bar" style="margin:0 0 0 0;border-radius:0"><i style="width:46%"></i></div>
   </div></div>`,
@@ -410,7 +609,7 @@ phone(`${st}${hdr('Albums','',gb(I.gear)+gb(I.map)+gb(I.sort)+gb(I.up),false)}
  'Collapsed to a progress pill so browsing continues during a 641 MB upload. On relaunch the app re-attaches to the background session, diffs its manifest and re-queues what is missing \u2014 silently, no prompt.');
 }).catch(e=>{
   const w=document.getElementById('wrap');
-  w.innerHTML='<div style="background:#2a1416;border:1px solid #6b2b30;border-left:3px solid #ff453a;border-radius:8px;padding:16px 18px;max-width:820px;color:#ffd9db;font:13px/1.6 monospace"><b style="color:#ff8a8f">Mockup failed to render</b><br><br>'+String(e && e.message || e)+'<br><br><span style="color:#c9a">Hard-reload the page (the data file may be cached).</span></div>';
+  w.innerHTML='<div style="background:#2a1416;border:1px solid #6b2b30;border-left:3px solid var(--error);border-radius:8px;padding:16px 18px;max-width:820px;color:#ffd9db;font:13px/1.6 monospace"><b style="color:#ff8a8f">Mockup failed to render</b><br><br>'+String(e && e.message || e)+'<br><br><span style="color:#c9a">Hard-reload the page (the data file may be cached).</span></div>';
   console.error(e);
 });
 window.addEventListener('error',ev=>{
