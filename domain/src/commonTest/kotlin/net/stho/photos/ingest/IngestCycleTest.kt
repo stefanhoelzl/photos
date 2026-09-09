@@ -15,7 +15,8 @@ import kotlin.uuid.Uuid
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.files.Path
 import net.stho.photos.IngestAbort
-import net.stho.photos.catalog.testDrivers
+import net.stho.photos.catalog.AlbumInfo
+import net.stho.photos.catalog.AlbumState
 import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.catalog.FakeZone
 import net.stho.photos.catalog.META_PREFIX
@@ -26,7 +27,10 @@ import net.stho.photos.catalog.futureShard
 import net.stho.photos.catalog.readBytes
 import net.stho.photos.catalog.readShard
 import net.stho.photos.catalog.shardKey
+import net.stho.photos.catalog.writeTo
+import net.stho.photos.derivative.DerivativeSpec
 import net.stho.photos.catalog.temporaryDirectory
+import net.stho.photos.catalog.testDrivers
 import net.stho.photos.catalog.zoneClient
 import net.stho.photos.model.MediaType
 import net.stho.photos.model.PhotoRow
@@ -94,6 +98,14 @@ class IngestCycleTest {
             error("no album named $named in the zone")
         }
 
+        /** Overwrite a shard in the zone, the way another writer would have. */
+        fun writeShard(shard: Shard) {
+            val scratch = temporaryDirectory("ingest-write")
+            val file = Path(scratch, "write.db")
+            shard.writeTo(file)
+            zone.put(shard.info.id.shardKey, file.readBytes(), "etag-${'$'}{Uuid.random()}")
+        }
+
         fun blobKeys(): List<String> = zone.keys.filter { it.startsWith("blob/") }
 
         fun metaKeys(): List<String> = zone.keys.filter { it.startsWith(META_PREFIX) }
@@ -102,6 +114,70 @@ class IngestCycleTest {
     private fun cycle(label: String): Cycle = Cycle(label).also {
         for (path in listOf("Rauhöd/a.jpg", "Rauhöd/b.jpg", "Neuseeland/c.jpg")) {
             it.library.file(path)
+        }
+    }
+
+    // ------------------------------------------------------------------------------- re-encoding
+
+    /**
+     * §5's re-derive meeting §3's identity rule.
+     *
+     * Re-encoding is expressed as "drop every row, upload every file", because that reuses the
+     * paths that already delete blobs and derive files. Done naively that mints fresh row ids —
+     * and `photo.id` is what `cover_photo_id` points at and what the thumbnail pack keys by, so
+     * a cover set on the phone would quietly resolve to nothing the moment the laptop pulled
+     * the album.
+     *
+     * The pull is where this is reachable today: with `ENCODING_VERSION` at 1 an *encoded*
+     * album cannot legally sit below the profile — the schema's second CHECK forbids version 0
+     * there — so a phone album at `uploaded` is the only thing the re-derive path currently
+     * fires for. The carry-over is the same code either way.
+     */
+    @Test
+    fun aPulledAlbumKeepsItsRowIdentityAndItsCover() = runTest {
+        val cycle = Cycle("reencode")
+
+        val photos = listOf(cycle.library.row("a.jpg"), cycle.library.row("b.jpg"))
+        val phone = Shard(
+            info = AlbumInfo(
+                id = Uuid.random(),
+                name = "FromPhone",
+                sourcePath = null,
+                thumbsId = null,
+                state = AlbumState.UPLOADED,
+                encodingVersion = 0,
+                coverPhotoId = photos[1].id,
+                addedAt = fixtureAddedAt,
+            ),
+            photos = photos,
+        )
+        for (row in photos) {
+            cycle.zone.put(assertNotNull(row.imageId).blobKey, ByteArray(64) { 0x41 }, "e")
+        }
+        cycle.writeShard(phone)
+
+        cycle.run()
+
+        val after = cycle.shard("FromPhone")
+        assertEquals(AlbumState.ENCODED, after.info.state)
+        assertEquals(DerivativeSpec.ENCODING_VERSION, after.info.encodingVersion)
+        assertEquals(
+            photos.map(PhotoRow::id).toSet(),
+            after.photos.map(PhotoRow::id).toSet(),
+            "a re-derived photo is the same photo",
+        )
+        assertEquals(
+            photos[1].id,
+            after.info.coverPhotoId,
+            "the cover points at a row id, so it must survive the re-derive",
+        )
+        // §2: new UUIDs rather than a rewritten blob, and the phone's originals are gone.
+        assertTrue(
+            phone.objectIds.toSet().intersect(after.objectIds.toSet()).isEmpty(),
+            "re-encoding mints new blobs",
+        )
+        for (id in phone.objectIds) {
+            assertFalse(cycle.zone.contains(id.blobKey), "the phone's blob should be deleted")
         }
     }
 

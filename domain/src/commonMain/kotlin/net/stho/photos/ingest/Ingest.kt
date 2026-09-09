@@ -22,6 +22,7 @@ import net.stho.photos.IgnoreRulesUnreadableFailure
 import net.stho.photos.IngestAbort
 import net.stho.photos.catalog.AlbumInfo
 import net.stho.photos.catalog.AlbumState
+import net.stho.photos.derivative.DerivativeSpec
 import net.stho.photos.catalog.BLOB_PREFIX
 import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.catalog.SHARD_SCHEMA_VERSION
@@ -291,17 +292,30 @@ public class Ingest(
             return
         }
 
+        // §3: `photo.id` is row identity and must survive re-encoding — it is what
+        // `cover_photo_id` points at and what the thumbnail pack keys by. Re-deriving an album
+        // produces fresh rows, so the identity has to be carried across explicitly, matched by
+        // the file each row came from. Without this a profile bump would silently clear every
+        // custom cover in the library.
+        val carried = if (!album.reencoding) produced else {
+            val previous = album.drop.associateBy(PhotoRow::diskFilename)
+            produced.map { made ->
+                val before = previous[made.row.diskFilename] ?: return@map made
+                Produced(made.row.copy(id = before.id), made.thumbnail, made.uploadedBytes)
+            }
+        }
+
         try {
-            val rows = album.keep + produced.map(Produced::row)
-            val thumbsId = packThumbnails(album, produced, rows)
-            val shard = Shard(albumInfo(album, thumbsId), rows)
+            val rows = album.keep + carried.map(Produced::row)
+            val thumbsId = packThumbnails(album, carried, rows)
+            val shard = Shard(albumInfo(album, thumbsId, rows), rows)
 
             val etag = if (album.isNew) null else etags[album.id]
             when (catalog.writeShard(shard, ifMatch = etag)) {
                 is ShardWriteResult.Written -> Unit
                 // §2: someone else wrote it. Re-read, re-decide against what actually landed, and
                 // try once more — a blind retry would overwrite their work.
-                ShardWriteResult.StaleETag -> if (!rewriteAfterConflict(album, produced)) {
+                ShardWriteResult.StaleETag -> if (!rewriteAfterConflict(album, carried)) {
                     report.contendedAlbums += album.sourcePath
                     return
                 }
@@ -477,7 +491,7 @@ public class Ingest(
         return id
     }
 
-    private fun albumInfo(album: AlbumPlan, thumbsId: Uuid?): AlbumInfo {
+    private fun albumInfo(album: AlbumPlan, thumbsId: Uuid?, rows: List<PhotoRow>): AlbumInfo {
         val existing = album.existing?.info
         return AlbumInfo(
             id = album.id,
@@ -486,8 +500,10 @@ public class Ingest(
             sourcePath = album.sourcePath,
             // A cover pointing at a photo that is gone would resolve to nothing; §3's default
             // (the album's earliest photo) is correct again once it is cleared.
+            // Checked against the rows actually being written, not against the kept ones: a
+            // re-encoded album keeps nothing and carries every identity forward instead.
             coverPhotoId = existing?.coverPhotoId
-                ?.takeIf { cover -> album.keep.any { it.id == cover } },
+                ?.takeIf { cover -> rows.any { it.id == cover } },
             thumbsId = thumbsId,
             // §3 stores whole seconds, so a value that has been through a shard and one that has
             // not compare equal.
@@ -510,6 +526,11 @@ public class Ingest(
             sourcePath = album.sourcePath,
             name = album.name,
             parent = album.parent,
+            // What we just wrote is at the current profile, whatever the shard we collided with
+            // said. Inheriting their version would leave the album permanently below it, and it
+            // would be re-derived on every run from here on.
+            state = AlbumState.ENCODED,
+            encodingVersion = DerivativeSpec.ENCODING_VERSION,
         )
         val shard = Shard(info, theirs + mine)
         val result = catalog.writeShard(shard, ifMatch = catalog.etag(album.id))

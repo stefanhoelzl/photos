@@ -89,7 +89,7 @@ an estimate.
 
 ```sh
 Scripts/build-native.sh          # once: imaging stack, sqlite, openssl, curl, dbus
-./gradlew build                  # 308 tests
+./gradlew build                  # 309 tests
 ./gradlew :app:cli:linkReleaseExecutableLinuxX64
 ./gradlew :tests:cli:e2e         # 14 scenarios against the shipped binary — opt-in
 ```

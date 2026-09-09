@@ -1201,6 +1201,17 @@ what the zone contains; the other two decide nothing at all.
   the blobs it owned through the path that already deletes blobs. Bump the constant and the
   library drains to the new profile over as many runs as it takes, one album per commit. No
   separate pass, no second verb, nothing to remember to run.
+
+  **`photo.id` is carried across the re-derive**, matched by the file each row came from.
+  Without that the drop-and-re-upload shape would mint fresh identities, and §3's rule that a
+  re-encoded photograph is the same photograph would be false — `cover_photo_id` would resolve
+  to nothing and every custom cover in the library would clear on the first profile bump.
+
+  > At `ENCODING_VERSION = 1` this path is dormant for laptop-owned albums: the schema's second
+  > CHECK forbids an `encoded` album at version 0, so no legal shard can sit below the current
+  > profile yet. What exercises the same code today is the pull, which re-derives a phone album
+  > at version 0 on its way to `encoded`. The first bump to 2 is what wakes it for everything
+  > else.
 - **One sync at a time**, enforced by an `flock` on a file in the cache directory. The first
   import is several hours and the timer fires hourly, so without it the two overlap repeatedly:
   both derive and upload the same files, and the loser's blobs sit in the zone with nothing
