@@ -1201,14 +1201,19 @@ renegotiate.
 
 **C · Derivative pipeline** *(needs the domain's EXIF and derivative contracts, extracted from B)*
 Thumbs, previews, video transcode, CR2 extraction, Live-Photo pairing, `.photosignore`
-filtering, and the Linux `ImageBackend` adapter. Verified by running over the real library and
-checking output against previously measured sizes and counts (see `INGEST.md`) — any large
-deviation means the pipeline is wrong. `photos-scan` is that check, made repeatable.
+filtering, and the Linux `ImageBackend` adapter. Verified by unit tests over synthesised
+images — every operation, every orientation, the CR2 carve, the colour conversions and the
+Live-Photo pairing rule — and by `:tools:smoke`, which drives the whole native stack through
+the configuration that actually ships.
 
-> `photos-scan` is deliberately not a subcommand of the shipped binary: the figures it compares
-> against were measured from one particular library, and compiling those into a tool this
-> document presents as reusable is the mixing of concerns `INGEST.md` exists to prevent. It is
-> built from source when the pipeline changes, and never installed.
+> **What that no longer covers, stated plainly.** An earlier draft added a dev-only harness
+> that ran the pipeline over the real library and compared per-tier counts and sizes against
+> the figures in `INGEST.md`. It is not part of this design. So the aggregate properties those
+> figures describe — a thumbnail averaging ~11.6 KB, a preview ~285 KB across 34,607 photos —
+> are **not checked by anything automated**. A change that leaves every unit test green while
+> shifting the output distribution, a quality constant or a resize path, would not be caught
+> here; it would surface as an unexpected bill, or not at all. The figures in `INGEST.md`
+> remain the reference, and comparing against them is a manual act.
 
 > C is not dependency-free. `ImageBackend`, `ExifTags`, `MediaType` and `PhotoRow` are contracts
 > both the catalog and the pipeline own, so they sit in the domain below both.

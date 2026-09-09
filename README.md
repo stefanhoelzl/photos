@@ -37,7 +37,7 @@ by the compiler rather than by discipline.
 | `CNativeImaging` / `CImaging` | the native stack and the C shim over it | done |
 | `PhotosPipeline` | **C** — thumbs, previews, transcode, CR2, pairing | done |
 | `PhotosLibrary` | walking `$LIBRARY_ROOT`, and `.photosignore` | done |
-| `photos-scan` | C's acceptance harness. Dev-only: it compares against one library's figures, so it does not ship | done |
+| `photos-scan` | C's acceptance harness, Swift-only. **Not ported** — see DESIGN §10 for what that gives up | — |
 | `native-smoke` | the only thing that can exercise the musl build | done |
 | `PhotosIngest` | **D** — reconciliation, deletion, pull, sweep | done |
 | `PhotosCLI` | **D** — the shipped `photos-cli` binary | done |
