@@ -119,8 +119,9 @@ class IngestCycleTest {
         assertFalse(report.hasProblems)
 
         assertEquals(2, cycle.metaKeys().size)
-        // Per photo: the original and the 2048px preview. Per album: one thumbnail pack.
-        assertEquals(3 * 2 + 2, cycle.blobKeys().size)
+        // Per photo: one viewing image, and nothing else -- the zone holds no originals.
+        // Per album: one thumbnail pack.
+        assertEquals(3 + 2, cycle.blobKeys().size)
 
         // Every shard says which folder it came from, which is the only thing reconnecting a
         // directory to its album next run.

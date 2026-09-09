@@ -57,9 +57,9 @@ internal fun photo(
     height = 3000,
     bytes = 3_145_728,
     mediaType = mediaType,
-    originalId = Uuid.random(),
+    imageId = Uuid.random(),
+    liveStillId = if (mediaType == MediaType.LIVE_PHOTO) Uuid.random() else null,
     liveVideoId = if (mediaType == MediaType.LIVE_PHOTO) Uuid.random() else null,
-    previewId = Uuid.random(),
     videoId = if (mediaType == MediaType.VIDEO) Uuid.random() else null,
 )
 

@@ -65,8 +65,8 @@ class ShardTest {
         assertNull(photo.latitude)
         assertNull(photo.width)
         assertNull(photo.bytes)
-        assertNull(photo.originalId)
-        assertNull(photo.previewId)
+        assertNull(photo.imageId)
+        assertNull(photo.liveStillId)
     }
 
     /**
@@ -162,9 +162,9 @@ class ShardTest {
         val shard = album("Sommer", photos = listOf(live))
 
         val ids = shard.objectIds.toSet()
-        assertTrue(assertNotNull(live.originalId) in ids)
+        assertTrue(assertNotNull(live.imageId) in ids)
         assertTrue(assertNotNull(live.liveVideoId) in ids)
-        assertTrue(assertNotNull(live.previewId) in ids)
+        assertTrue(assertNotNull(live.liveStillId) in ids)
         assertTrue(assertNotNull(shard.info.thumbsId) in ids)
         assertEquals(4, ids.size)
     }

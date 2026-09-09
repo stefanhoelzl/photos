@@ -255,8 +255,8 @@ class CatalogSyncTest {
 
         fixture.sync.sync()
 
-        // 2 originals + 2 previews + 1 live MOV + 1 thumbnail pack
-        assertEquals(6, fixture.sync.referencedObjectIds().size)
+        // 2 viewing images + 1 live still + 1 live MOV + 1 thumbnail pack
+        assertEquals(5, fixture.sync.referencedObjectIds().size)
         assertEquals(shard.objectIds.toSet(), fixture.sync.referencedObjectIds())
     }
 

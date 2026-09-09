@@ -154,8 +154,7 @@ private fun leaf(name: String, parent: Uuid?, photos: Int, base: Instant): Shard
             height = 3000,
             bytes = 3_145_728,
             mediaType = MediaType.PHOTO,
-            originalId = Uuid.random(),
-            previewId = Uuid.random(),
+            imageId = Uuid.random(),
         )
     },
 )

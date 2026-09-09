@@ -9,6 +9,8 @@ import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.write
 import net.stho.photos.catalog.AlbumInfo
+import net.stho.photos.catalog.AlbumState
+import net.stho.photos.derivative.DerivativeSpec
 import net.stho.photos.catalog.SHARD_SCHEMA_VERSION
 import net.stho.photos.catalog.Shard
 import net.stho.photos.catalog.ShardProbe
@@ -23,7 +25,6 @@ import net.stho.photos.model.PhotoRow
 import net.stho.photos.pipeline.Derivatives
 import net.stho.photos.pipeline.MediaFormat
 import net.stho.photos.pipeline.MediaItem
-import net.stho.photos.pipeline.OriginalSource
 import net.stho.photos.pipeline.PipelineEvent
 import net.stho.photos.pipeline.VideoInfo
 import net.stho.photos.pipeline.withExtension
@@ -104,53 +105,62 @@ internal class LibraryFixture(label: String = "library") {
         parent: Uuid? = null,
         thumbsId: Uuid? = Uuid.random(),
         bytes: Long = 64,
+        state: AlbumState = AlbumState.ENCODED,
+        encodingVersion: Int = DerivativeSpec.ENCODING_VERSION,
+        sourcePath: String? = path,
     ): Shard = Shard(
         info = AlbumInfo(
             id = id,
             name = path.substringAfterLast('/'),
             parent = parent,
-            sourcePath = path,
+            sourcePath = sourcePath,
             thumbsId = thumbsId,
+            state = state,
+            encodingVersion = encodingVersion,
             addedAt = fixtureAddedAt,
             schemaVersion = SHARD_SCHEMA_VERSION,
         ),
         photos = photos.map { row(it, bytes) },
     )
 
-    /** A still: the blob in the zone *is* the file on disk, so its size is checkable. */
-    fun row(name: String, bytes: Long = 64): PhotoRow = PhotoRow(
+    /**
+     * A still. [sourceBytes] is what the assertion checks against the directory entry; `bytes`
+     * describes the derived image in the zone and is nothing on disk should equal.
+     */
+    fun row(name: String, sourceBytes: Long = 64): PhotoRow = PhotoRow(
         id = Uuid.random(),
         filename = name,
-        bytes = bytes,
+        bytes = 4_096,
+        sourceBytes = sourceBytes,
         mediaType = MediaType.PHOTO,
-        originalId = Uuid.random(),
-        previewId = Uuid.random(),
+        imageId = Uuid.random(),
     )
 
     /**
-     * A video row: named after the transcode, sized after the transcode, with the camera's
-     * filename kept as the source. There is no original in the zone, so nothing on disk should
-     * equal `bytes` and the assertion must leave it alone.
+     * A video row: named after the transcode, with the camera's filename kept as the source.
+     * `bytes` is the transcode; [sourceBytes] is the file on disk, so unlike the tier this
+     * replaced the assertion *does* cover it.
      */
-    fun videoRow(source: String, bytes: Long = 999_999): PhotoRow = PhotoRow(
+    fun videoRow(source: String, sourceBytes: Long = 41_000): PhotoRow = PhotoRow(
         id = Uuid.random(),
         filename = source.withExtension("mp4"),
         sourceFilename = source,
-        bytes = bytes,
+        bytes = 999_999,
+        sourceBytes = sourceBytes,
         mediaType = MediaType.VIDEO,
-        previewId = Uuid.random(),
+        imageId = Uuid.random(),
         videoId = Uuid.random(),
     )
 
-    /** A carved CR2: `.jpg` in the zone, `.CR2` on disk. */
-    fun rawRow(source: String, bytes: Long = 1_600_000): PhotoRow = PhotoRow(
+    /** A carved CR2: `.heic` in the zone, `.CR2` on disk. */
+    fun rawRow(source: String, sourceBytes: Long = 22_000): PhotoRow = PhotoRow(
         id = Uuid.random(),
-        filename = source.withExtension("jpg"),
+        filename = source.withExtension("heic"),
         sourceFilename = source,
-        bytes = bytes,
+        bytes = 400_000,
+        sourceBytes = sourceBytes,
         mediaType = MediaType.PHOTO,
-        originalId = Uuid.random(),
-        previewId = Uuid.random(),
+        imageId = Uuid.random(),
     )
 }
 
@@ -181,40 +191,48 @@ internal class FakePipeline(private val ids: Ids, private val workRoot: Path) : 
     override fun derive(item: MediaItem): Derivatives {
         val size = SystemFileSystem.metadataOrNull(Path(item.path))?.size ?: 0
         val thumbnail = "thumbnail:${item.filename}".encodeToByteArray()
-        val preview = "preview:${item.filename}".encodeToByteArray()
+        val image = "image:${item.filename}".encodeToByteArray()
         val id = ids.next()
 
         return when (val kind = item.kind) {
             MediaItem.Kind.Still -> Derivatives(
-                row = row(id, item.filename, bytes = size, mediaType = MediaType.PHOTO),
+                row = row(
+                    id, item.filename,
+                    bytes = image.size.toLong(),
+                    sourceBytes = size,
+                    mediaType = MediaType.PHOTO,
+                ),
                 tags = ExifTags(),
                 thumbnail = thumbnail,
-                preview = preview,
-                original = OriginalSource.File(item.path),
+                image = image,
             )
 
             MediaItem.Kind.Raw -> {
-                val carved = "carved:${item.filename}".encodeToByteArray()
                 Derivatives(
                     row = row(
-                        id, item.filename.withExtension("jpg"),
+                        id, item.filename.withExtension("heic"),
                         sourceFilename = item.filename,
-                        bytes = carved.size.toLong(),
+                        bytes = image.size.toLong(),
+                        sourceBytes = size,
                         mediaType = MediaType.PHOTO,
                     ),
                     tags = ExifTags(),
                     thumbnail = thumbnail,
-                    preview = preview,
-                    original = OriginalSource.Bytes(carved),
+                    image = image,
                 )
             }
 
             is MediaItem.Kind.LivePhoto -> Derivatives(
-                row = row(id, item.filename, bytes = size, mediaType = MediaType.LIVE_PHOTO),
+                row = row(
+                    id, item.filename,
+                    bytes = image.size.toLong(),
+                    sourceBytes = size,
+                    mediaType = MediaType.LIVE_PHOTO,
+                ),
                 tags = ExifTags(),
                 thumbnail = thumbnail,
-                preview = preview,
-                original = OriginalSource.File(item.path),
+                image = image,
+                liveStill = item.path,
                 liveVideo = kind.video,
             )
 
@@ -227,12 +245,12 @@ internal class FakePipeline(private val ids: Ids, private val workRoot: Path) : 
                         id, item.filename.withExtension("mp4"),
                         sourceFilename = item.filename,
                         bytes = transcoded.size.toLong(),
+                        sourceBytes = size,
                         mediaType = MediaType.VIDEO,
                     ),
                     tags = ExifTags(),
                     thumbnail = thumbnail,
-                    preview = preview,
-                    original = OriginalSource.None,
+                    image = image,
                     video = destination.toString(),
                 )
             }
@@ -244,6 +262,7 @@ internal class FakePipeline(private val ids: Ids, private val workRoot: Path) : 
         filename: String,
         sourceFilename: String? = null,
         bytes: Long,
+        sourceBytes: Long,
         mediaType: MediaType,
     ): PhotoRow = PhotoRow(
         id = id,
@@ -253,6 +272,7 @@ internal class FakePipeline(private val ids: Ids, private val workRoot: Path) : 
         width = 320,
         height = 240,
         bytes = bytes,
+        sourceBytes = sourceBytes,
         mediaType = mediaType,
     )
 }

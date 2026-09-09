@@ -158,7 +158,7 @@ internal class ZoneExpectations {
             for (row in shard.photos) {
                 if (!seen.add(row.mediaType)) continue
                 checkThumbnail(scenario, shard, row)
-                row.previewId?.let { checkPreview(scenario, row, it) }
+                row.imageId?.let { checkImage(scenario, row, it) }
                 row.videoId?.let { checkVideo(scenario, row, it) }
             }
         }
@@ -185,22 +185,22 @@ internal class ZoneExpectations {
         }
     }
 
-    private suspend fun checkPreview(scenario: Scenario, row: PhotoRow, previewId: Uuid) {
-        val file = Path(scenario.scratch, "preview-${Uuid.random()}.heic")
-            .write(scenario.s3.fetch(previewId))
+    private suspend fun checkImage(scenario: Scenario, row: PhotoRow, imageId: Uuid) {
+        val file = Path(scenario.scratch, "image-${Uuid.random()}.heic")
+            .write(scenario.s3.fetch(imageId))
         if (CImagingProbe().sniff(file.toString()) != MediaFormat.HEIF) {
             throw DerivativeWrong(
-                "the preview", row.filename, "libheif + x265",
+                "the viewing image", row.filename, "libheif + x265",
                 "a HEIF file", "sniffed as ${CImagingProbe().sniff(file.toString())}",
             )
         }
         val size = imageDimensions(file.toString())
         val longEdge = maxOf(size.width, size.height)
         // Never upscaled (§5), so a small source stays small -- the ceiling is what is asserted.
-        if (longEdge > DerivativeSpec.PREVIEW_LONG_EDGE) {
+        if (longEdge > DerivativeSpec.IMAGE_LONG_EDGE) {
             throw DerivativeWrong(
-                "the preview", row.filename, "libheif + x265 + swscale",
-                "long edge at most ${DerivativeSpec.PREVIEW_LONG_EDGE}", "long edge $longEdge",
+                "the viewing image", row.filename, "libheif + x265 + swscale",
+                "long edge at most ${DerivativeSpec.IMAGE_LONG_EDGE}", "long edge $longEdge",
             )
         }
     }

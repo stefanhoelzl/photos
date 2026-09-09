@@ -22,7 +22,6 @@ import net.stho.photos.fixtures.withScratchDirectory
 import net.stho.photos.fixtures.write
 import net.stho.photos.model.MediaType
 import net.stho.photos.pipeline.MediaItem
-import net.stho.photos.pipeline.OriginalSource
 
 /** Every pixel this image holds, for tests that compare two buffers. */
 internal fun PixelImage.pixelBytes(): ByteArray =
@@ -83,11 +82,11 @@ class ThumbnailTest {
 class PreviewTest {
 
     @Test
-    fun previewsKeepAspectAndAreNeverUpscaled() {
-        // Below the tier: must come back untouched. 25 of 120 sampled library photos are already
-        // under 2048px, and inventing pixels for them would inflate the tier.
+    fun viewingImagesKeepAspectAndAreNeverUpscaled() {
+        // Below the cap: must come back untouched. 17.3% of the library is already at or below
+        // 3200px, and inventing pixels for those would only inflate the tier.
         syntheticImage(800, 600).use { small ->
-            small.resizedFitting(DerivativeSpec.PREVIEW_LONG_EDGE, allowUpscale = false).use {
+            small.resizedFitting(DerivativeSpec.IMAGE_LONG_EDGE, allowUpscale = false).use {
                 assertEquals(800, it.width)
                 assertEquals(600, it.height)
             }
@@ -95,9 +94,9 @@ class PreviewTest {
 
         // Above the tier: scaled to the long edge, aspect preserved.
         syntheticImage(4096, 2048).use { large ->
-            large.resizedFitting(DerivativeSpec.PREVIEW_LONG_EDGE, allowUpscale = false).use {
-                assertEquals(DerivativeSpec.PREVIEW_LONG_EDGE, it.width)
-                assertEquals(DerivativeSpec.PREVIEW_LONG_EDGE / 2, it.height)
+            large.resizedFitting(DerivativeSpec.IMAGE_LONG_EDGE, allowUpscale = false).use {
+                assertEquals(DerivativeSpec.IMAGE_LONG_EDGE, it.width)
+                assertEquals(DerivativeSpec.IMAGE_LONG_EDGE / 2, it.height)
             }
         }
     }
@@ -210,24 +209,28 @@ class EncodingTest {
 class PipelineTest {
 
     @Test
-    fun aStillYieldsBothTiersAndKeepsItsOriginal() = withScratchDirectory("still") { directory ->
-        val path = Path(directory, "photo.jpg").write(syntheticJpeg(3000, 2000))
+    fun aStillYieldsAThumbnailAndAViewingImage() = withScratchDirectory("still") { directory ->
+        // Above the cap, so the ceiling is actually exercised rather than passed through.
+        val path = Path(directory, "photo.jpg").write(syntheticJpeg(4000, 2000))
 
         val derived = CImagingPipeline(workDirectory = directory.toString())
             .derive(MediaItem(path.toString(), MediaItem.Kind.Still, byteCount = 123))
 
         assertEquals(Dimensions(256, 256), derived.thumbnail.imageDimensions())
-        val preview = derived.preview.imageDimensions()
-        assertEquals(DerivativeSpec.PREVIEW_LONG_EDGE, maxOf(preview.width, preview.height))
+        val image = derived.image.imageDimensions()
+        assertEquals(DerivativeSpec.IMAGE_LONG_EDGE, maxOf(image.width, image.height))
 
         // Dimensions come from the decoded pixels, not from EXIF, because EXIF can be absent or
-        // can describe an embedded thumbnail instead of the photograph.
-        assertEquals(3000, derived.row.width)
+        // can describe an embedded thumbnail instead of the photograph -- and they describe the
+        // photograph, not the capped image, so they survive the cap changing.
+        assertEquals(4000, derived.row.width)
         assertEquals(2000, derived.row.height)
-        assertEquals(123L, derived.row.bytes)
+        // `bytes` is the derived image; `sourceBytes` is the file the walk measured (§7).
+        assertEquals(derived.image.size.toLong(), derived.row.bytes)
+        assertEquals(123L, derived.row.sourceBytes)
         assertEquals(MediaType.PHOTO, derived.row.mediaType)
         assertNull(derived.video)
-        assertEquals(OriginalSource.File(path.toString()), derived.original)
+        assertNull(derived.liveStill)
     }
 
     @Test

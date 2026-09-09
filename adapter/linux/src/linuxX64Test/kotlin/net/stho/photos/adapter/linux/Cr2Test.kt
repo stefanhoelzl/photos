@@ -13,7 +13,6 @@ import net.stho.photos.fixtures.withScratchDirectory
 import net.stho.photos.fixtures.wrappedInCr2
 import net.stho.photos.fixtures.write
 import net.stho.photos.pipeline.MediaItem
-import net.stho.photos.pipeline.OriginalSource
 
 /** Carving the embedded JPEG out of a CR2 — decision 2. */
 class Cr2Test {
@@ -89,14 +88,11 @@ class Cr2Test {
         val derived = CImagingPipeline(workDirectory = directory.toString())
             .derive(MediaItem(path.toString(), MediaItem.Kind.Raw, byteCount = 0))
 
-        // §3: a developed CR2's original_id points at the JPEG, not the RAW — so the pipeline
-        // must hand back synthesised bytes rather than the file on disk.
-        val original = derived.original
-        assertTrue(original is OriginalSource.Bytes, "a raw's original should be carved data")
-        assertTrue(original.value.isNotEmpty())
+        // §3: the row describes what is in the zone, which for a CR2 is a HEIC derived from the
+        // JPEG carved out of it — never the RAW, which stays on the laptop.
+        assertTrue(derived.image.isNotEmpty(), "a raw should still produce a viewing image")
         assertEquals(Dimensions(256, 256), derived.thumbnail.imageDimensions())
-        // The row is named and sized after what is in the zone: the carved JPEG.
-        assertEquals("IMG_7353.jpg", derived.row.filename)
+        assertEquals("IMG_7353.heic", derived.row.filename)
         assertEquals("IMG_7353.CR2", derived.row.sourceFilename)
     }
 }

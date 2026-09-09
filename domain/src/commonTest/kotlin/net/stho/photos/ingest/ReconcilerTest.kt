@@ -12,6 +12,7 @@ import kotlin.test.assertTrue
 import kotlin.uuid.Uuid
 import kotlinx.io.files.Path
 import net.stho.photos.catalog.AlbumInfo
+import net.stho.photos.catalog.AlbumState
 import net.stho.photos.catalog.SHARD_SCHEMA_VERSION
 import net.stho.photos.catalog.Shard
 import net.stho.photos.catalog.ShardProbe
@@ -256,13 +257,13 @@ class ReconcilerTest {
     }
 
     /**
-     * After a pull, `IMG_1234.CR2` is gone and `IMG_1234.jpg` is what is on disk. The row has to
-     * survive that, or the next run deletes it and uploads the JPEG as new.
+     * After a pull, `IMG_1234.CR2` is gone and the zone's own name is what is on disk. The row
+     * has to survive that, or the next run deletes it and uploads the file again as new.
      */
     @Test
     fun aRowMatchesItsZoneNameTooSoAPulledAlbumStillReconciles() {
         val library = LibraryFixture()
-        library.file("Kalifornien/IMG_1234.jpg", bytes = 1_600_000)
+        library.file("Kalifornien/IMG_1234.heic", bytes = 22_000)
         val shard = library.shard("Kalifornien", photos = emptyList())
             .copy(photos = listOf(library.rawRow(source = "IMG_1234.CR2")))
 
@@ -358,12 +359,23 @@ class ReconcilerTest {
         assertFalse(first.hasWork)
     }
 
-    private fun phoneAlbum(library: LibraryFixture, name: String): Shard = Shard(
+    /**
+     * A phone album that has finished uploading: `uploaded`, at encoding version 0, with no
+     * `source_path` because nothing has claimed it yet. The only state the CLI pulls from.
+     */
+    private fun phoneAlbum(
+        library: LibraryFixture,
+        name: String,
+        state: AlbumState = AlbumState.UPLOADED,
+        sourcePath: String? = null,
+    ): Shard = Shard(
         info = AlbumInfo(
             id = Uuid.random(),
             name = name,
-            sourcePath = null,
+            sourcePath = sourcePath,
             thumbsId = Uuid.random(),
+            state = state,
+            encodingVersion = 0,
             addedAt = fixtureAddedAt,
         ),
         photos = listOf(library.row("p.jpg")),

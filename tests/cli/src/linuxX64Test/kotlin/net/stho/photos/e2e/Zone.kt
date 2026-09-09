@@ -85,22 +85,20 @@ internal class GivenAlbum(private val name: String) {
 
     internal suspend fun materialise(s3: S3Client, scratch: Path) {
         val rows = photos.map { photo ->
-            val original = syntheticJpeg(photo.width, photo.height)
-            val originalId = Uuid.random()
-            val previewId = Uuid.random()
-            s3.put(originalId.blobKey, Body.Bytes(original))
+            val imageId = Uuid.random()
             // A real HEIC, for the same reason the thumbnail pack is real: a forged zone that a
             // shape assertion can tell apart from a genuine one is a fixture that proves nothing.
-            s3.put(previewId.blobKey, Body.Bytes(syntheticHeic(photo.width, photo.height)))
+            val image = syntheticHeic(photo.width, photo.height)
+            s3.put(imageId.blobKey, Body.Bytes(image))
             PhotoRow(
                 id = Uuid.random(),
                 filename = photo.filename,
                 width = photo.width,
                 height = photo.height,
-                bytes = original.size.toLong(),
+                bytes = image.size.toLong(),
+                sourceBytes = image.size.toLong(),
                 mediaType = MediaType.PHOTO,
-                originalId = originalId,
-                previewId = previewId,
+                imageId = imageId,
             )
         }
         // A forged shard carries a thumbnail pack, because a real one always does: the album

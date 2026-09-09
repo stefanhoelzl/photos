@@ -211,7 +211,7 @@ class ToPhotoRowTest {
 
     @Test
     fun aFullTagSetBecomesAFullRow() {
-        val previewId = Uuid.random()
+        val imageId = Uuid.random()
         val row = tags(
             "DateTimeOriginal" to text("2013:07:04 18:12:11"),
             "GPSLatitude" to real(47.99), "GPSLatitudeRef" to text("N"),
@@ -219,7 +219,7 @@ class ToPhotoRowTest {
             "PixelXDimension" to int(4000),
             "PixelYDimension" to int(3000),
             "Orientation" to int(6),
-        ).toPhotoRow(id = Uuid.random(), filename = "IMG_0042.jpg", bytes = 3_145_728, previewId = previewId)
+        ).toPhotoRow(id = Uuid.random(), filename = "IMG_0042.jpg", bytes = 3_145_728, imageId = imageId)
 
         assertEquals("IMG_0042.jpg", row.filename)
         assertEquals(1_372_961_531L, assertNotNull(row.takenAt).epochSeconds)
@@ -227,7 +227,7 @@ class ToPhotoRowTest {
         assertEquals(3000, row.width, "transposed by orientation 6")
         assertEquals(4000, row.height)
         assertEquals(3_145_728L, row.bytes)
-        assertEquals(previewId, row.previewId)
+        assertEquals(imageId, row.imageId)
     }
 
     @Test
