@@ -3,3 +3,9 @@ mockups/index.html
 .build/
 .tools/
 .swiftpm/
+
+# Gradle
+build/
+.gradle/
+.kotlin/
+local.properties
