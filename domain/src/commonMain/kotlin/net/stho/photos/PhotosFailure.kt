@@ -207,6 +207,20 @@ public sealed class IngestAbort(message: String) : PhotosFailure(message) {
     ) : IngestAbort(describeMismatches(mismatches))
 
     /**
+     * The cache directory cannot be locked at all — not "another run holds it", which is a
+     * deferral, but "this cannot be attempted": the directory is unwritable, or gone.
+     *
+     * It lives here rather than in the adapter that raises it because `PhotosFailure` is sealed,
+     * and Kotlin requires direct subclasses in the same module and package. Without it an adapter
+     * has nowhere to put a tier-one failure and would have to throw something the domain cannot
+     * name — which is the same boundary problem `MediaUnreadable` solves for the per-item tier.
+     */
+    public class CacheUnusable(
+        public val path: String,
+        public val detail: String,
+    ) : IngestAbort("cannot lock $path: $detail")
+
+    /**
      * A shard too new to read whose two stable columns could not be read either, so the folder it
      * claims is unknowable. Continuing would risk uploading that folder as a second album (§3).
      */

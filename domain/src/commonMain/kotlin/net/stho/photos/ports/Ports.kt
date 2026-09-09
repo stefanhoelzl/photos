@@ -113,8 +113,23 @@ public interface Paths {
  * different exit paths.
  */
 public interface RunLock {
-    /** Returns null when another run holds the lock; throws when the lock cannot be attempted. */
-    public fun acquire(): LockHandle?
+    /**
+     * Takes the lock, or says who has it. Never waits: a run that queued behind another would
+     * be an hourly timer piling up, which is the thing the lock exists to prevent.
+     *
+     * Returning a *result* rather than null is what lets §7's refusal name the holder — "another
+     * sync is already running (pid 1234)" rather than a bare "already running". The pid is the
+     * only thing that makes the message actionable, so it belongs on the contract rather than on
+     * one implementation.
+     */
+    public fun acquire(): LockAttempt
+}
+
+public sealed interface LockAttempt {
+    public data class Acquired(val handle: LockHandle) : LockAttempt
+
+    /** [pid] is null when the holder's lock file could not be read — rare, and not fatal. */
+    public data class HeldBy(val pid: Int?) : LockAttempt
 }
 
 public interface LockHandle : AutoCloseable

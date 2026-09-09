@@ -100,11 +100,43 @@ val dbusDefFile: File = layout.buildDirectory.get().asFile.resolve("photosdbus.d
     )
 }
 
+/**
+ * `flock`, which Kotlin/Native does not bind (§7's run lock).
+ *
+ * `platform.posix` has `struct flock` — the fcntl record-lock type — but not the `flock()` call,
+ * and cinterop imports nothing from a header it reaches through the target's own sysroot rather
+ * than an explicit `-I`. So the one function the run lock is built on is declared here, in the
+ * def's C body, where it is compiled into the interop stubs like any other declaration.
+ *
+ * fcntl record locks are not a substitute: they are released when *any* descriptor to the file
+ * is closed, which is precisely the fragility §7 chose flock to avoid.
+ */
+val flockDefFile: File = layout.buildDirectory.get().asFile.resolve("photosflock.def").apply {
+    parentFile.mkdirs()
+    writeText(
+        """
+        ---
+        #include <sys/file.h>
+
+        /* The run lock takes an exclusive lock and never waits, so the operation is not a
+           parameter: a run that queued behind another would start the moment it finished, with
+           a plan built from a library it re-walked anyway. */
+        static inline int photos_flock_exclusive_nowait(int fd) {
+            return flock(fd, LOCK_EX | LOCK_NB);
+        }
+
+        """.trimIndent(),
+    )
+}
+
 kotlin {
     jvmToolchain(libs.versions.jdk.get().toInt())
     linuxX64 {
         compilations.getByName("main").cinterops.create("photosdbus") {
             definitionFile.set(dbusDefFile)
+        }
+        compilations.getByName("main").cinterops.create("photosflock") {
+            definitionFile.set(flockDefFile)
         }
         compilations.getByName("main").cinterops.create("photosimaging") {
             definitionFile.set(defFileOnDisk)
