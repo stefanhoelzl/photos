@@ -3,21 +3,6 @@ package net.stho.photos.pipeline
 import net.stho.photos.exif.ExifTags
 import net.stho.photos.model.PhotoRow
 
-/** Where a photo's uploadable original comes from. */
-public sealed interface OriginalSource {
-    /**
-     * The file as it sits in the library, uploaded byte-for-byte. §10's UNSIGNED-PAYLOAD means
-     * nothing reads it first.
-     */
-    public data class File(public val path: String) : OriginalSource
-
-    /** Synthesised: the JPEG carved out of a CR2, with the CR2's EXIF grafted in. */
-    public data class Bytes(public val value: ByteArray) : OriginalSource
-
-    /** Video. §5 keeps originals on the laptop, so there is nothing to upload. */
-    public data object None : OriginalSource
-}
-
 /**
  * Everything the pipeline produces for one item.
  *
@@ -29,11 +14,20 @@ public data class Derivatives(
     public val tags: ExifTags,
     /** 256×256 JPEG, sRGB, no metadata. */
     public val thumbnail: ByteArray,
-    /** 2048px-long-edge HEIC, source profile intact. */
-    public val preview: ByteArray,
-    public val original: OriginalSource,
+    /**
+     * The 3200px-long-edge HEIC a reader displays, source profile intact.
+     *
+     * There is no companion original: the zone stopped holding those when it stopped being an
+     * archive (§5), so this is the only still image the album owns.
+     */
+    public val image: ByteArray,
     /** The 1080p-ceiling HEVC transcode, owned by the caller once returned. */
     public val video: String? = null,
+    /**
+     * A Live Photo's source still, uploaded byte-for-byte so its `content.identifier` survives
+     * to pair with [liveVideo]. Null for everything else (§5).
+     */
+    public val liveStill: String? = null,
     /** A Live Photo's paired MOV, uploaded as-is so `PHLivePhotoView` gets what it expects. */
     public val liveVideo: String? = null,
 )
@@ -50,7 +44,7 @@ public sealed interface PipelineEvent {
     ) : PipelineEvent
 
     public data class Thumbnailed(override val path: String, public val bytes: Int) : PipelineEvent
-    public data class Previewed(override val path: String, public val bytes: Int) : PipelineEvent
+    public data class Imaged(override val path: String, public val bytes: Int) : PipelineEvent
 
     /** Emitted per transcoded second, so a 4K video does not sit at one counter for minutes. */
     public data class Transcoding(

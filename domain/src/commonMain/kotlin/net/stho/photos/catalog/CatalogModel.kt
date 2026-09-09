@@ -2,6 +2,7 @@ package net.stho.photos.catalog
 
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
+import net.stho.photos.derivative.DerivativeSpec
 import net.stho.photos.model.PhotoRow
 
 /**
@@ -14,8 +15,13 @@ import net.stho.photos.model.PhotoRow
  * **2** — `photo.source_filename` added, and `photo.bytes` redefined to describe the blob a tap
  * fetches rather than the file on disk (§3). The bump is not merely about the new column: a
  * version-1 reader would read `bytes` as something it is not.
+ *
+ * **3** — the two-tier rewrite. `photo.original_id` and `photo.preview_id` collapse into a
+ * single `image_id`, since the zone no longer holds originals at all; `photo.source_bytes` and
+ * `photo.content_hash` replace the byte check that used to ride on `bytes`; and `album_info`
+ * gains `state` and `encoding_version`. A version-2 reader would find no image to display.
  */
-public const val SHARD_SCHEMA_VERSION: Int = 2
+public const val SHARD_SCHEMA_VERSION: Int = 3
 
 /**
  * An album's own record — the single row of a shard's `album_info` table.
@@ -43,6 +49,19 @@ public data class AlbumInfo(
     public val coverPhotoId: Uuid? = null,
     /** The blob holding this album's packed thumbnails, or null before one exists. */
     public val thumbsId: Uuid? = null,
+    /**
+     * Where this album is in its lifecycle, and so who owns it (§7). A laptop-made album is
+     * born [AlbumState.ENCODED]; only the phone ever writes the other two.
+     */
+    public val state: AlbumState = AlbumState.ENCODED,
+    /**
+     * Which encoding profile produced this album's image blobs, or 0 for "as uploaded, never
+     * encoded here". `sync` re-derives any album below [DerivativeSpec.ENCODING_VERSION].
+     *
+     * The schema forbids the two ways this can contradict [state]: `ENCODED` at 0, or either
+     * other state above 0.
+     */
+    public val encodingVersion: Int = DerivativeSpec.ENCODING_VERSION,
     /**
      * Stored to whole-second resolution, so a value that has been through a shard and one that
      * has not compare equal. Callers minting one from a clock truncate it first.
@@ -80,6 +99,10 @@ public data class Shard(
     public val info: AlbumInfo,
     public val photos: List<PhotoRow> = emptyList(),
 ) {
+    /** Whether this album's images are below the profile this build writes, so need re-deriving. */
+    public val needsReencode: Boolean
+        get() = info.encodingVersion < DerivativeSpec.ENCODING_VERSION
+
     /** Every blob the album owns, thumbnail pack included. */
     public val objectIds: List<Uuid>
         get() = photos.flatMap(PhotoRow::objectIds) + listOfNotNull(info.thumbsId)

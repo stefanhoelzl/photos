@@ -40,36 +40,64 @@ public object DerivativeSpec {
      */
     public const val THUMBNAIL_QUALITY: Int = 75
 
-    // ---------------------------------------------------------------- previews
+    // ---------------------------------------------------------------- the viewing image
 
     /**
-     * 2048px on the **long** edge, aspect preserved: the fullscreen viewer is the one
-     * contain-fit surface in the app, so a preview's shape has to survive.
-     */
-    public const val PREVIEW_LONG_EDGE: Int = 2048
-
-    /**
-     * Never upscale. 25 of 120 sampled photos were already under 2048px and were re-encoded at
-     * native size — that was part of the methodology behind the recorded 12.35 GB, and
-     * inventing pixels would only inflate it.
-     */
-    public const val PREVIEW_UPSCALES: Boolean = false
-
-    /**
-     * libheif lossy quality for the HEIC preview.
+     * The profile that produced an album's image blobs.
      *
-     * Derived by PSNR-matching against a 2048px JPEG q84 baseline, measured over 100 photos
-     * spread across the real library:
-     * ```
-     *     JPEG q84 baseline   38.81 dB   427.3 KB/photo
-     *     HEIC q45            37.91 dB   222.7 KB     below the baseline
-     *     HEIC q50            39.01 dB   285.1 KB  ←  lowest that matches
-     *     HEIC q55            40.64 dB   407.3 KB
-     * ```
-     * Following the stated method rather than the recorded number costs nothing in measured
-     * fidelity and saves ~2.5 GB. If fullscreen ever looks soft, 55 is the conservative step.
+     * Stored per album as `album_info.encoding_version`; `sync` re-derives any album below the
+     * value this build carries. **0 is reserved** for "as uploaded, never encoded here", which
+     * is what a phone-uploaded album holds until the laptop claims it (§7), so profiles number
+     * from 1.
+     *
+     * Bump this and every album re-encodes on the next run, one album per commit, draining
+     * over as many runs as it takes. That is the whole migration mechanism: there is no
+     * separate pass and no second verb.
      */
-    public const val PREVIEW_QUALITY: Int = 50
+    public const val ENCODING_VERSION: Int = 1
+
+    /**
+     * 3200px on the **long** edge, aspect preserved.
+     *
+     * This is a *viewing* tier, not an archive: the laptop library holds the originals, and
+     * nothing in the zone is one. So the size is set by the largest screen that will ever
+     * display it rather than by what the camera captured — 2.4× pinch zoom on a 3× iPhone,
+     * and a 1.2× upscale on a 4K desktop panel.
+     *
+     * Measured against the real library: the median original is 3264px on the long edge and
+     * 69% exceed 3200px, holding 88% of the bytes. Capping there takes the still-image tier
+     * from ~100 GiB to ~14 GiB.
+     */
+    public const val IMAGE_LONG_EDGE: Int = 3200
+
+    /**
+     * Never upscale. 17.3% of the library is already at or below the cap and is re-encoded at
+     * native size; inventing pixels would only inflate the tier.
+     */
+    public const val IMAGE_UPSCALES: Boolean = false
+
+    /**
+     * libheif lossy quality for the viewing image.
+     *
+     * **Chosen by eye on 1:1 crops, not by PSNR**, because HEVC intra artifacts are structured
+     * rather than noise-like and PSNR does not see them the way a person does. The ladder was
+     * judged on already-delivered 2000px files — faces and hair, compressed once already by
+     * the photographer, which is the hardest case for visible loss:
+     * ```
+     *     q30    62 KiB   16% of source   33.8 dB
+     *     q45   168 KiB   44%             37.6 dB   ←  chosen
+     *     q60   302 KiB   78%             40.4 dB
+     *     q70   397 KiB  103%             41.2 dB
+     * ```
+     * Note where that ladder stops paying: above roughly q60 the encoder is spending bytes
+     * reproducing the source JPEG's own artifacts, and PSNR plateaus at ~41 dB because the
+     * reference is itself lossy.
+     *
+     * Over the representative 150-file sample this stores **13.7% of source bytes, 424 KiB
+     * per photo**. If fullscreen ever looks soft, 50 is the conservative step — and bumping
+     * [ENCODING_VERSION] alongside it is what makes the library follow.
+     */
+    public const val IMAGE_QUALITY: Int = 45
 
     // ---------------------------------------------------------------- video
 
@@ -107,11 +135,11 @@ public object DerivativeSpec {
     public val THUMBNAIL_COLOR: ColorHandling = ColorHandling.CONVERT_TO_SRGB
 
     /**
-     * Previews are never colour-converted; whatever profile the source carried is embedded
-     * unchanged. ~8–9% of the library is Display P3, and fullscreen is exactly where gamut is
-     * on show.
+     * The viewing image is never colour-converted; whatever profile the source carried is
+     * embedded unchanged. ~8–9% of the library is Display P3, and fullscreen is exactly where
+     * gamut is on show.
      */
-    public val PREVIEW_COLOR: ColorHandling = ColorHandling.PASS_THROUGH
+    public val IMAGE_COLOR: ColorHandling = ColorHandling.PASS_THROUGH
 
     public enum class ColorHandling { CONVERT_TO_SRGB, PASS_THROUGH }
 

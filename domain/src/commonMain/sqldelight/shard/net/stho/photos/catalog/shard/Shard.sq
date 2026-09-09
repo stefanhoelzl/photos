@@ -1,6 +1,7 @@
 import kotlin.Int;
 import kotlin.time.Instant;
 import kotlin.uuid.Uuid;
+import net.stho.photos.catalog.AlbumState;
 import net.stho.photos.model.MediaType;
 
 -- The shard schema, DESIGN §3, one album per file at `meta/<album-uuid>.db`.
@@ -21,8 +22,19 @@ CREATE TABLE IF NOT EXISTS album_info (
   source_path    TEXT,
   cover_photo_id TEXT AS Uuid,
   thumbs_id      TEXT AS Uuid,
+  -- Where this album is in its lifecycle (§7). Text rather than a number because nothing
+  -- computes with it -- every rule is an equality test -- so it may as well read as itself in
+  -- a shell, which is the same reason the rest of these are real typed columns.
+  state            TEXT AS AlbumState NOT NULL,
+  -- Which encoding profile produced this album's image blobs. 0 means "as uploaded, never
+  -- encoded here"; profiles number from 1 (DerivativeSpec.ENCODING_VERSION).
+  encoding_version INTEGER AS Int NOT NULL,
   added_at       INTEGER AS Instant NOT NULL,
-  schema_version INTEGER AS Int NOT NULL
+  schema_version INTEGER AS Int NOT NULL,
+  CHECK (state IN ('uploading', 'uploaded', 'encoded')),
+  -- The two columns cannot disagree about whether the laptop has encoded this album: an
+  -- 'encoded' album at version 0, or an 'uploaded' one at version 1, are both unwritable.
+  CHECK ((state = 'encoded') = (encoding_version > 0))
 );
 
 CREATE TABLE IF NOT EXISTS photo (
@@ -35,10 +47,26 @@ CREATE TABLE IF NOT EXISTS photo (
   width           INTEGER AS Int,
   height          INTEGER AS Int,
   bytes           INTEGER,
+  -- The size of the file on disk, as distinct from `bytes` above, which is the blob. This is
+  -- what the change assertion compares against the directory entry -- free, since the scan
+  -- reads it anyway, and unlike the old check it covers every row rather than only those
+  -- whose blob happened to be the file (§7).
+  source_bytes    INTEGER,
+  -- Recorded at ingest, where the file is read to derive from, and never verified on a
+  -- schedule: a full pass is ~100 GiB of reads. A forensic record for investigating a
+  -- suspected problem, not a monitor (§7).
+  content_hash    TEXT,
   media_type      INTEGER AS MediaType NOT NULL,
-  original_id     TEXT AS Uuid,
+  -- The one image a reader displays. While an album is 'uploading' or 'uploaded' this is the
+  -- phone's full-quality upload; once 'encoded' it is the 3200px HEIC. The meaning does not
+  -- change with state, so a reader that knows nothing about `state` still renders correctly
+  -- -- it merely fetches something heavier (§3).
+  image_id        TEXT AS Uuid,
+  -- The source still of a Live Photo, kept byte-for-byte and only for pairs. `PHLivePhotoView`
+  -- matches a still to its MOV by Apple's `content.identifier`, which re-encoding strips -- so
+  -- the one case that needs an untouched original still gets one. 187 pairs library-wide (§5).
+  live_still_id   TEXT AS Uuid,
   live_video_id   TEXT AS Uuid,
-  preview_id      TEXT AS Uuid,
   video_id        TEXT AS Uuid
 );
 
@@ -46,13 +74,15 @@ CREATE INDEX IF NOT EXISTS ix_photo_taken ON photo(taken_at);
 
 insertAlbumInfo:
 INSERT INTO album_info (
-  id, album_id, name, parent, source_path, cover_photo_id, thumbs_id, added_at, schema_version
-) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?);
+  id, album_id, name, parent, source_path, cover_photo_id, thumbs_id,
+  state, encoding_version, added_at, schema_version
+) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- Columns are named rather than starred: `schema_version` promises a reader keeps working when
 -- a *newer* writer adds a column, and `SELECT *` would break that promise by shifting indices.
 selectAlbumInfo:
-SELECT album_id, name, parent, source_path, cover_photo_id, thumbs_id, added_at, schema_version
+SELECT album_id, name, parent, source_path, cover_photo_id, thumbs_id,
+       state, encoding_version, added_at, schema_version
 FROM album_info WHERE id = 1;
 
 -- What a shard says about itself even when it is too new to read: only §3's two permanently
@@ -67,10 +97,10 @@ SELECT schema_version FROM album_info WHERE id = 1;
 insertPhoto:
 INSERT INTO photo (
   id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
-  media_type, original_id, live_video_id, preview_id, video_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  source_bytes, content_hash, media_type, image_id, live_still_id, live_video_id, video_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectPhotos:
 SELECT id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
-       media_type, original_id, live_video_id, preview_id, video_id
+       source_bytes, content_hash, media_type, image_id, live_still_id, live_video_id, video_id
 FROM photo;

@@ -17,7 +17,6 @@ import net.stho.photos.exif.toPhotoRow
 import net.stho.photos.model.MediaType
 import net.stho.photos.pipeline.Derivatives
 import net.stho.photos.pipeline.MediaItem
-import net.stho.photos.pipeline.OriginalSource
 import net.stho.photos.pipeline.PipelineEvent
 import net.stho.photos.pipeline.withExtension
 import net.stho.photos.ports.Ids
@@ -63,11 +62,12 @@ public class CImagingPipeline(
         try {
             val kind = item.kind
             val result = when (kind) {
-                MediaItem.Kind.Still -> deriveStill(item, OriginalSource.File(item.path))
+                MediaItem.Kind.Still -> deriveStill(item)
                 MediaItem.Kind.Raw -> deriveRaw(item)
-                is MediaItem.Kind.LivePhoto -> deriveStill(item, OriginalSource.File(item.path)).let {
+                is MediaItem.Kind.LivePhoto -> deriveStill(item).let {
                     it.copy(
                         row = it.row.copy(mediaType = MediaType.LIVE_PHOTO),
+                        liveStill = item.path,
                         liveVideo = kind.video,
                     )
                 }
@@ -83,29 +83,27 @@ public class CImagingPipeline(
 
     // ---------------------------------------------------------------- stills
 
-    private fun deriveStill(item: MediaItem, original: OriginalSource): Derivatives {
+    private fun deriveStill(item: MediaItem): Derivatives {
         val tags = tagsOrEmpty(item.path)
-        return PixelImage.decode(item.path, DerivativeSpec.PREVIEW_LONG_EDGE).use { decoded ->
-            finishStill(item, tags, decoded, original, MediaType.PHOTO)
+        return PixelImage.decode(item.path, DerivativeSpec.IMAGE_LONG_EDGE).use { decoded ->
+            finishStill(item, tags, decoded, MediaType.PHOTO)
         }
     }
 
     private fun deriveRaw(item: MediaItem): Derivatives {
         val tags = tagsOrEmpty(item.path)
         val extraction = carveEmbeddedJpeg(item.path)
-        return PixelImage.decodeJpeg(extraction.jpeg, DerivativeSpec.PREVIEW_LONG_EDGE).use { decoded ->
-            // §3: the row describes what is in the zone. What is in the zone is the carved
-            // JPEG — so that is the name and that is the size, and the CR2's own name is kept
-            // as `sourceFilename` so reconciliation can still find the file on disk.
+        return PixelImage.decodeJpeg(extraction.jpeg, DerivativeSpec.IMAGE_LONG_EDGE).use { decoded ->
+            // §3: the row describes what is in the zone. What is in the zone is a HEIC derived
+            // from the carved JPEG — so that is the name, and the CR2's own name is kept as
+            // `sourceFilename` so reconciliation can still find the file on disk.
             finishStill(
                 item = item,
                 tags = tags,
                 decoded = decoded,
-                original = OriginalSource.Bytes(extraction.jpeg),
                 mediaType = MediaType.PHOTO,
-                filename = item.filename.withExtension("jpg"),
+                filename = item.filename.withExtension("heic"),
                 sourceFilename = item.filename,
-                bytes = extraction.jpeg.size.toLong(),
             )
         }
     }
@@ -114,11 +112,9 @@ public class CImagingPipeline(
         item: MediaItem,
         tags: ExifTags,
         decoded: PixelImage,
-        original: OriginalSource,
         mediaType: MediaType,
         filename: String? = null,
         sourceFilename: String? = null,
-        bytes: Long? = null,
     ): Derivatives {
         // Orientation is already applied — libjpeg's caller bakes it, libheif applies irot
         // itself, and the video path bakes the display matrix — so the decoded buffer's own
@@ -126,8 +122,8 @@ public class CImagingPipeline(
         if (decoded.hasAlpha) decoded.flattenAlpha(DerivativeSpec.ALPHA_BACKGROUND)
         progress.tryEmit(PipelineEvent.Decoded(item.path, decoded.width, decoded.height))
 
-        val preview = makePreview(decoded)
-        progress.tryEmit(PipelineEvent.Previewed(item.path, preview.size))
+        val image = makeImage(decoded)
+        progress.tryEmit(PipelineEvent.Imaged(item.path, image.size))
         val thumbnail = makeThumbnail(decoded)
         progress.tryEmit(PipelineEvent.Thumbnailed(item.path, thumbnail.size))
 
@@ -135,7 +131,8 @@ public class CImagingPipeline(
             id = ids.next(),
             filename = filename ?: item.filename,
             sourceFilename = sourceFilename,
-            bytes = bytes ?: item.byteCount,
+            bytes = image.size.toLong(),
+            sourceBytes = item.byteCount,
             mediaType = mediaType,
         ).copy(
             // The decoded *source* is the authority, not the decoded buffer: shrink-on-load
@@ -147,17 +144,17 @@ public class CImagingPipeline(
             height = decoded.sourceHeight,
         )
 
-        return Derivatives(row, tags, thumbnail, preview, original)
+        return Derivatives(row, tags, thumbnail, image)
     }
 
-    /** 2048px long edge, aspect preserved, never upscaled, source ICC carried through. */
-    private fun makePreview(decoded: PixelImage): ByteArray =
+    /** 3200px long edge, aspect preserved, never upscaled, source ICC carried through. */
+    private fun makeImage(decoded: PixelImage): ByteArray =
         decoded.resizedFitting(
-            longEdge = DerivativeSpec.PREVIEW_LONG_EDGE,
-            allowUpscale = DerivativeSpec.PREVIEW_UPSCALES,
+            longEdge = DerivativeSpec.IMAGE_LONG_EDGE,
+            allowUpscale = DerivativeSpec.IMAGE_UPSCALES,
         ).use { resized ->
-            resized.applyColorHandling(DerivativeSpec.PREVIEW_COLOR)
-            resized.encodedHeic(quality = DerivativeSpec.PREVIEW_QUALITY, threads = encoderThreads)
+            resized.applyColorHandling(DerivativeSpec.IMAGE_COLOR)
+            resized.encodedHeic(quality = DerivativeSpec.IMAGE_QUALITY, threads = encoderThreads)
         }
 
     /** 256×256 centre crop, converted to sRGB, no profile embedded. */
@@ -177,8 +174,8 @@ public class CImagingPipeline(
             if (poster.hasAlpha) poster.flattenAlpha(DerivativeSpec.ALPHA_BACKGROUND)
             progress.tryEmit(PipelineEvent.Decoded(item.path, poster.width, poster.height))
 
-            val preview = makePreview(poster)
-            progress.tryEmit(PipelineEvent.Previewed(item.path, preview.size))
+            val image = makeImage(poster)
+            progress.tryEmit(PipelineEvent.Imaged(item.path, image.size))
             val thumbnail = makeThumbnail(poster)
             progress.tryEmit(PipelineEvent.Thumbnailed(item.path, thumbnail.size))
 
@@ -201,13 +198,14 @@ public class CImagingPipeline(
 
             // §3 again: the zone holds the transcode, not the camera's file, so the row is
             // named and sized after the transcode. The source name survives in
-            // `sourceFilename` — which is also what tells §7's byte-size assertion to leave
-            // this row alone, since there is nothing on disk it should equal.
+            // `sourceFilename` so reconciliation can find the file on disk, and `sourceBytes`
+            // now carries the check that used to ride on `bytes` (§7).
             val row = tags.toPhotoRow(
                 id = ids.next(),
                 filename = item.filename.withExtension("mp4"),
                 sourceFilename = item.filename,
                 bytes = SystemFileSystem.metadataOrNull(output)?.size,
+                sourceBytes = item.byteCount,
                 mediaType = MediaType.VIDEO,
             ).copy(
                 width = poster.width,
@@ -215,8 +213,8 @@ public class CImagingPipeline(
                 height = poster.height,
             )
 
-            // §3: a video has a video_id and a preview_id poster, but no original_id.
-            Derivatives(row, tags, thumbnail, preview, OriginalSource.None, video = output.toString())
+            // §3: a video has a video_id and an image_id poster, and no still of its own.
+            Derivatives(row, tags, thumbnail, image, video = output.toString())
         }
     }
 

@@ -25,6 +25,8 @@ private val albumInfoAdapter = Album_info.Adapter(
     parentAdapter = uuidAdapter,
     cover_photo_idAdapter = uuidAdapter,
     thumbs_idAdapter = uuidAdapter,
+    stateAdapter = albumStateAdapter,
+    encoding_versionAdapter = IntColumnAdapter,
     added_atAdapter = instantAdapter,
     schema_versionAdapter = IntColumnAdapter,
 )
@@ -35,9 +37,9 @@ private val shardPhotoAdapter = ShardPhoto.Adapter(
     widthAdapter = IntColumnAdapter,
     heightAdapter = IntColumnAdapter,
     media_typeAdapter = mediaTypeAdapter,
-    original_idAdapter = uuidAdapter,
+    image_idAdapter = uuidAdapter,
+    live_still_idAdapter = uuidAdapter,
     live_video_idAdapter = uuidAdapter,
-    preview_idAdapter = uuidAdapter,
     video_idAdapter = uuidAdapter,
 )
 
@@ -73,6 +75,8 @@ public fun Shard.writeTo(path: Path, drivers: SqlDrivers) {
                 source_path = info.sourcePath,
                 cover_photo_id = info.coverPhotoId,
                 thumbs_id = info.thumbsId,
+                state = info.state,
+                encoding_version = info.encodingVersion,
                 added_at = info.addedAt,
                 schema_version = info.schemaVersion,
             )
@@ -86,10 +90,12 @@ public fun Shard.writeTo(path: Path, drivers: SqlDrivers) {
                 width = photo.width,
                 height = photo.height,
                 bytes = photo.bytes,
+                source_bytes = photo.sourceBytes,
+                content_hash = photo.contentHash,
                 media_type = photo.mediaType,
-                original_id = photo.originalId,
+                image_id = photo.imageId,
+                live_still_id = photo.liveStillId,
                 live_video_id = photo.liveVideoId,
-                preview_id = photo.previewId,
                 video_id = photo.videoId,
             )
         }

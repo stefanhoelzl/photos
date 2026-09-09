@@ -24,7 +24,7 @@ public enum class MediaType(public val code: Int) {
  *
  * [id] is row identity and nothing else: it is what `coverPhotoId` points at and what the
  * thumbnail pack keys by, so it survives a derivative being re-encoded — which mints a new
- * [previewId] but leaves the photo the same photo (§3).
+ * [imageId] but leaves the photo the same photo (§3).
  *
  * Lives in the domain rather than beside the storage code because the pipeline produces these
  * and the catalog stores them; a type both sides own belongs below both.
@@ -43,9 +43,7 @@ public data class PhotoRow(
      * `IMG_1234.jpg`, `VID_0001.MOV` beside `VID_0001.mp4`. Null for the great majority of
      * rows, where the blob simply *is* the file on disk.
      *
-     * A hint for reconciliation, like `AlbumInfo.sourcePath` — never an identity. It is also
-     * what says whether [bytes] can be checked against the directory entry: only a row whose
-     * original is the disk file byte-for-byte can be (§7).
+     * A hint for reconciliation, like `AlbumInfo.sourcePath` — never an identity.
      */
     public val sourceFilename: String? = null,
     /**
@@ -60,20 +58,48 @@ public data class PhotoRow(
     public val width: Int? = null,
     public val height: Int? = null,
     /**
-     * The size of the blob a tap fetches — the original for a still or Live Photo, the carved
-     * JPEG for a CR2, the transcode for a video (§3). Not the source file's size.
+     * The size of the blob a tap fetches: the viewing image for a still, the transcode for a
+     * video (§3). Not the source file's size — see [sourceBytes].
      */
     public val bytes: Long? = null,
+    /**
+     * The size of the file on disk at ingest.
+     *
+     * This is what the change assertion compares against the directory entry, and it is free
+     * for the same reason its predecessor was: the scan reads the entry anyway. Unlike the old
+     * check — which could only run where the blob happened to *be* the file — this holds for
+     * every row, video and carved RAW included, because it describes the source rather than
+     * the upload (§7).
+     */
+    public val sourceBytes: Long? = null,
+    /**
+     * Digest of the source file, recorded at ingest where the file is already being read.
+     *
+     * Deliberately never verified on a schedule: a full pass is ~100 GiB of reads against a
+     * timer that fires hourly. It is a forensic record for investigating a file already
+     * suspected of having changed, not a monitor (§7).
+     */
+    public val contentHash: String? = null,
     public val mediaType: MediaType = MediaType.PHOTO,
     /**
-     * The original as uploaded. Absent for video (originals stay on the laptop). For a
-     * developed RAW this points at the JPEG extracted from the CR2, not the RAW (§5).
+     * The one image a reader displays: the 3200px HEIC, and for a video its poster still.
+     *
+     * There is no separate original. The zone is not an archive — the laptop library is — so
+     * every image here is a derivative sized for the largest screen that will show it (§5).
+     * While an album is still `uploading` or `uploaded` this points at the phone's
+     * full-quality upload instead, which is what `encoding_version` distinguishes.
      */
-    public val originalId: Uuid? = null,
+    public val imageId: Uuid? = null,
+    /**
+     * A Live Photo's source still, byte-for-byte, when [mediaType] is [MediaType.LIVE_PHOTO].
+     *
+     * The one place an untouched original survives in the zone. `PHLivePhotoView` pairs a still
+     * with its MOV by Apple's `content.identifier`, which re-encoding strips — so rather than
+     * doing the maker-note surgery §5 set out to avoid, the 187 photos that need one keep one.
+     */
+    public val liveStillId: Uuid? = null,
     /** The paired MOV, when [mediaType] is [MediaType.LIVE_PHOTO]. */
     public val liveVideoId: Uuid? = null,
-    /** 2048px HEIC. Also the poster still for a video. */
-    public val previewId: Uuid? = null,
     /** 1080p HEVC transcode, for video. */
     public val videoId: Uuid? = null,
 ) {
@@ -84,16 +110,17 @@ public data class PhotoRow(
     public val diskFilename: String get() = sourceFilename ?: filename
 
     /**
-     * Whether [bytes] can be checked against the directory entry. True only when the original
-     * was uploaded byte-for-byte, which excludes video (no original at all) and carved RAW
-     * (the blob is the extracted JPEG).
+     * Whether this row records a source size to check the directory entry against.
+     *
+     * Every row written by this build does. The guard is for rows read back from a shard an
+     * older writer produced, where the column is absent.
      */
-    public val byteCountIsCheckable: Boolean get() = originalId != null && sourceFilename == null
+    public val byteCountIsCheckable: Boolean get() = sourceBytes != null
 
     /**
      * Every blob this row owns. What deleting the album removes, and what the orphan sweep
      * counts as referenced.
      */
     public val objectIds: List<Uuid>
-        get() = listOfNotNull(originalId, liveVideoId, previewId, videoId)
+        get() = listOfNotNull(imageId, liveStillId, liveVideoId, videoId)
 }

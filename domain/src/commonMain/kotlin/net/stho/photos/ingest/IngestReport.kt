@@ -40,6 +40,11 @@ public data class IngestReport(
     public val orphanedAlbums: List<Uuid> = emptyList(),
     public val sweptBlobs: Int = 0,
     public val sweptBytes: Long = 0,
+    /**
+     * Phone uploads abandoned before they finished: still [AlbumState.UPLOADING] past the
+     * sweep's floor, so the presigned PUTs they were using have expired (§8).
+     */
+    public val abandonedUploads: Int = 0,
     /** Unreferenced but younger than the sweep's age floor, so possibly still uploading. */
     public val youngUnreferencedBlobs: Int = 0,
     public val sweepSkipped: String? = null,

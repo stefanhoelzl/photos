@@ -3,6 +3,7 @@ package net.stho.photos.ingest
 import kotlin.uuid.Uuid
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
+import net.stho.photos.catalog.AlbumState
 import net.stho.photos.catalog.Shard
 import net.stho.photos.catalog.ShardProbe
 import net.stho.photos.library.LibraryContents
@@ -42,6 +43,16 @@ public data class AlbumPlan(
      * so the loose files are not ingested and the children go up normally.
      */
     public val mixedFileCount: Int,
+    /**
+     * Whether this album's images are below the profile this build writes, so every row is
+     * re-derived from the file on disk rather than only the unclaimed ones.
+     *
+     * Expressed through the ordinary machinery: [uploads] becomes every file and [drop] every
+     * existing row, so the album is rebuilt and its old blobs deleted by the paths that already
+     * do those things. The flag exists so the report can say "re-encoded" rather than reporting
+     * a full album as deleted and re-added.
+     */
+    public val reencoding: Boolean = false,
 ) {
     public val isNew: Boolean get() = existing == null
 
@@ -52,7 +63,8 @@ public data class AlbumPlan(
     public val needsWrite: Boolean
         get() {
             val info = existing?.info ?: return true
-            return uploads.isNotEmpty() ||
+            return reencoding ||
+                uploads.isNotEmpty() ||
                 drop.isNotEmpty() ||
                 info.name != name ||
                 info.parent != parent ||
@@ -67,13 +79,19 @@ public data class AlbumDeletion(
 )
 
 /**
- * A shard the laptop has never owned: the phone made it. Archive-only (§7) — copied down and
- * claimed, never rewritten beyond `source_path`.
+ * A shard the phone made and finished uploading: [AlbumState.UPLOADED].
+ *
+ * The pull claims it, copies it into the library, re-encodes it and only then writes
+ * [AlbumState.ENCODED]. A shard that already carries a `source_path` was claimed by a run that
+ * did not finish, and [sourcePath] is that same path, so the retry resumes into the directory
+ * it half-filled rather than starting a second copy beside it (§7).
  */
 public data class PullPlan(
     public val shard: Shard,
     /** Where it will land, relative to `$LIBRARY_ROOT`. */
     public val sourcePath: String,
+    /** Whether a previous run already wrote `source_path`, so this is a resume. */
+    public val claimed: Boolean = false,
 )
 
 /** A file whose size disagrees with the row describing it. */
@@ -137,8 +155,12 @@ public class Reconciler(
         unreadable: List<ShardProbe> = emptyList(),
     ): IngestPlan {
         // Shards a *previous* run of this tool wrote, keyed by the folder they claim.
+        // Only albums the laptop owns. A shard still `uploading` or `uploaded` may carry a
+        // `source_path` — the pull claims before it downloads — but it is not an ordinary album
+        // yet, and treating it as one would read its half-filled directory as deletions (§7).
         val byPath = buildMap {
             for (shard in shards) {
+                if (shard.info.state != AlbumState.ENCODED) continue
                 val path = shard.info.sourcePath?.normalisedPath()
                 if (path.isNullOrEmpty()) continue
                 put(path, shard)
@@ -187,8 +209,11 @@ public class Reconciler(
             // do not, and are named in the report.
             val files = if (hasChildren) emptyList() else ownFiles
 
+            // Below the current profile: every row is re-derived from the file on disk, so
+            // nothing counts as already claimed and every file is an upload.
+            val reencoding = existing?.needsReencode == true
             val rows = existing?.photos.orEmpty()
-            val claimedNames = buildSet {
+            val claimedNames = if (reencoding) emptySet() else buildSet {
                 for (row in rows) {
                     add(row.filename)
                     add(row.diskFilename)
@@ -210,14 +235,23 @@ public class Reconciler(
                     continue
                 }
                 keep += row
-                // Only a row whose original *is* the file on disk can be size-checked: a video
-                // has no original in the zone and a carved RAW's blob is the JPEG.
+                // `sourceBytes` describes the file rather than the upload, so unlike its
+                // predecessor this holds for every row — video and carved RAW included. The
+                // guard is only for rows an older writer left without one (§7).
                 if (!sourceThere || !row.byteCountIsCheckable) continue
-                val recorded = row.bytes ?: continue
+                val recorded = row.sourceBytes ?: continue
                 val found = SystemFileSystem.metadataOrNull(source)?.size ?: continue
                 if (found != recorded) {
                     mismatches += ByteMismatch(path, row.diskFilename, recorded, found)
                 }
+            }
+
+            // The old rows and the blobs they own go, and the re-derived ones replace them.
+            // Deleting them is what the ordinary `drop` path already does, so re-encoding needs
+            // no delete path of its own.
+            if (reencoding) {
+                drop += keep
+                keep.clear()
             }
 
             albums += AlbumPlan(
@@ -232,6 +266,7 @@ public class Reconciler(
                 keep = keep,
                 drop = drop,
                 mixedFileCount = if (hasChildren) ownFiles.size else 0,
+                reencoding = reencoding,
             )
         }
 
@@ -244,15 +279,19 @@ public class Reconciler(
             }
             .map { (path, shard) -> AlbumDeletion(shard, path) }
 
-        // Albums with no `source_path` were made by the phone. §7's pull is archive-only: copy
-        // them down, claim them, and from then on they are ordinary albums.
+        // `uploaded` means the phone has finished and nothing has encoded it yet — the only
+        // state the CLI pulls from. `uploading` is skipped: it is still in flight. A shard that
+        // already names a path was claimed by a run that did not finish, so it resumes there.
         val reserved = (albumPaths + byPath.keys).toMutableSet()
         val pulls = mutableListOf<PullPlan>()
-        for (shard in shards.filter { it.info.sourcePath.isNullOrEmpty() }.sortedBy { it.info.id.toString() }) {
-            val path = availablePath(shard, reserved)
+        for (shard in shards.filter { it.info.state == AlbumState.UPLOADED }
+            .sortedBy { it.info.id.toString() }) {
+            val claimed = shard.info.sourcePath?.normalisedPath()
+            val resuming = !claimed.isNullOrEmpty()
+            val path = if (resuming) claimed!! else availablePath(shard, reserved)
             if (!matchesFilter(path)) continue
             reserved += path
-            pulls += PullPlan(shard, path)
+            pulls += PullPlan(shard, path, claimed = resuming)
         }
 
         return IngestPlan(

@@ -28,9 +28,9 @@ private val mergedPhotoAdapter = MergedPhoto.Adapter(
     widthAdapter = IntColumnAdapter,
     heightAdapter = IntColumnAdapter,
     media_typeAdapter = mediaTypeAdapter,
-    original_idAdapter = uuidAdapter,
+    image_idAdapter = uuidAdapter,
+    live_still_idAdapter = uuidAdapter,
     live_video_idAdapter = uuidAdapter,
-    preview_idAdapter = uuidAdapter,
     video_idAdapter = uuidAdapter,
 )
 
@@ -105,9 +105,11 @@ public class CatalogWriter(public val path: Path, drivers: SqlDrivers) : AutoClo
                     height = photo.height,
                     bytes = photo.bytes,
                     media_type = photo.mediaType,
-                    original_id = photo.originalId,
+                    source_bytes = photo.sourceBytes,
+                    content_hash = photo.contentHash,
+                    image_id = photo.imageId,
+                    live_still_id = photo.liveStillId,
                     live_video_id = photo.liveVideoId,
-                    preview_id = photo.previewId,
                     video_id = photo.videoId,
                 )
             }
@@ -221,12 +223,12 @@ public class CatalogReader(public val path: Path, drivers: SqlDrivers) : AutoClo
     /** Photos with coordinates, for the map's photo layer. */
     public fun placedPhotos(): List<PlacedPhoto> = queries.selectPlacedPhotos {
         albumId, id, filename, sourceFilename, takenAt, lat, lon, width, height, bytes,
-        mediaType, originalId, liveVideoId, previewId, videoId ->
+        sourceBytes, contentHash, mediaType, imageId, liveStillId, liveVideoId, videoId ->
         PlacedPhoto(
             albumId,
             PhotoRow(
                 id, filename, sourceFilename, takenAt, lat, lon, width, height, bytes,
-                mediaType, originalId, liveVideoId, previewId, videoId,
+                sourceBytes, contentHash, mediaType, imageId, liveStillId, liveVideoId, videoId,
             ),
         )
     }.executeAsList()

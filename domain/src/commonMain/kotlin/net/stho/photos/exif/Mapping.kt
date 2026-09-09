@@ -127,10 +127,12 @@ public fun ExifTags.toPhotoRow(
     filename: String,
     sourceFilename: String? = null,
     bytes: Long? = null,
+    sourceBytes: Long? = null,
+    contentHash: String? = null,
     mediaType: MediaType = MediaType.PHOTO,
-    originalId: Uuid? = null,
+    imageId: Uuid? = null,
+    liveStillId: Uuid? = null,
     liveVideoId: Uuid? = null,
-    previewId: Uuid? = null,
     videoId: Uuid? = null,
 ): PhotoRow {
     val coordinate = coordinate()
@@ -145,10 +147,12 @@ public fun ExifTags.toPhotoRow(
         width = size?.width,
         height = size?.height,
         bytes = bytes,
+        sourceBytes = sourceBytes,
+        contentHash = contentHash,
         mediaType = mediaType,
-        originalId = originalId,
+        imageId = imageId,
+        liveStillId = liveStillId,
         liveVideoId = liveVideoId,
-        previewId = previewId,
         videoId = videoId,
     )
 }

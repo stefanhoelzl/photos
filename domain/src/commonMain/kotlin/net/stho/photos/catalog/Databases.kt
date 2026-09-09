@@ -56,6 +56,16 @@ internal val mediaTypeAdapter: ColumnAdapter<MediaType, Long> =
         override fun encode(value: MediaType): Long = value.code.toLong()
     }
 
+/** An unknown state is a malformed shard, not a silent default. */
+internal val albumStateAdapter: ColumnAdapter<AlbumState, String> =
+    object : ColumnAdapter<AlbumState, String> {
+        override fun decode(databaseValue: String): AlbumState =
+            AlbumState.of(databaseValue)
+                ?: throw ShardFailure.Malformed("unknown album state '$databaseValue'")
+
+        override fun encode(value: AlbumState): String = value.wire
+    }
+
 /** Stored unquoted, exactly as [ETag] holds it. */
 internal val etagAdapter: ColumnAdapter<ETag, String> = object : ColumnAdapter<ETag, String> {
     override fun decode(databaseValue: String): ETag = ETag(databaseValue)

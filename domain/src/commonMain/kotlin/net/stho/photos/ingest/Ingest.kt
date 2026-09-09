@@ -21,6 +21,7 @@ import kotlinx.io.files.SystemFileSystem
 import net.stho.photos.IgnoreRulesUnreadableFailure
 import net.stho.photos.IngestAbort
 import net.stho.photos.catalog.AlbumInfo
+import net.stho.photos.catalog.AlbumState
 import net.stho.photos.catalog.BLOB_PREFIX
 import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.catalog.SHARD_SCHEMA_VERSION
@@ -38,7 +39,6 @@ import net.stho.photos.library.readIgnoreRules
 import net.stho.photos.model.PhotoRow
 import net.stho.photos.pipeline.MediaClassifier
 import net.stho.photos.pipeline.MediaItem
-import net.stho.photos.pipeline.OriginalSource
 import net.stho.photos.pipeline.SkippedFile
 import net.stho.photos.pipeline.withExtension
 import net.stho.photos.ports.SqlDrivers
@@ -406,22 +406,6 @@ public class Ingest(
         var row = derived.row
         var bytes = 0L
 
-        when (val original = derived.original) {
-            is OriginalSource.File -> {
-                val id = ids.next()
-                bytes += upload(id.blobKey, Body.File(Path(original.path)))
-                row = row.copy(originalId = id)
-            }
-
-            is OriginalSource.Bytes -> {
-                val id = ids.next()
-                bytes += upload(id.blobKey, Body.Bytes(original.value))
-                row = row.copy(originalId = id)
-            }
-
-            OriginalSource.None -> Unit
-        }
-
         derived.video?.let { video ->
             val id = ids.next()
             bytes += upload(id.blobKey, Body.File(Path(video)))
@@ -433,10 +417,17 @@ public class Ingest(
             bytes += upload(id.blobKey, Body.File(Path(liveVideo)))
             row = row.copy(liveVideoId = id)
         }
+        // The one untouched original left in the zone: a Live Photo's still, whose
+        // `content.identifier` has to survive to pair with the MOV above (§5).
+        derived.liveStill?.let { liveStill ->
+            val id = ids.next()
+            bytes += upload(id.blobKey, Body.File(Path(liveStill)))
+            row = row.copy(liveStillId = id)
+        }
 
-        val previewId = ids.next()
-        bytes += upload(previewId.blobKey, Body.Bytes(derived.preview))
-        row = row.copy(previewId = previewId)
+        val imageId = ids.next()
+        bytes += upload(imageId.blobKey, Body.Bytes(derived.image))
+        row = row.copy(imageId = imageId)
 
         return Produced(row, derived.thumbnail, bytes)
     }
@@ -563,9 +554,20 @@ public class Ingest(
     // ------------------------------------------------------------------ pulling a phone album down
 
     /**
-     * §7's archive-only pull: copy the album into `$LIBRARY_ROOT` and claim it by writing
-     * `source_path`. That is metadata, not the objects the laptop must not rewrite — and once
-     * claimed it is an ordinary album, deletable like any other.
+     * §7's pull: claim the album, copy it into `$LIBRARY_ROOT`, and leave it for the next run
+     * to encode.
+     *
+     * **Claim first, download second.** The claim writes `source_path` and leaves the state at
+     * [AlbumState.UPLOADED], which is what makes a retry safe: the path is recorded before any
+     * file exists, so a run interrupted mid-download resumes into the same directory instead of
+     * choosing a fresh name beside it — and because the deletion rule is gated on
+     * [AlbumState.ENCODED], the half-filled directory it leaves behind can never be read as
+     * photos someone deleted.
+     *
+     * The album stays [AlbumState.UPLOADED] until it has been encoded. That is deliberate: the
+     * phone's full-quality blobs are the only copy until the library copy is durable, so
+     * nothing deletes them here. The next run sees an ordinary album below the current profile
+     * and re-encodes it through the path that already exists for that.
      *
      * `.photosignore` is not consulted: the rules govern what goes up (§7).
      */
@@ -574,9 +576,20 @@ public class Ingest(
         var files = 0
         var bytes = 0L
         try {
+            if (!pull.claimed) {
+                val claimed = pull.shard.info.copy(sourcePath = pull.sourcePath)
+                val write = catalog.writeShard(
+                    Shard(claimed, pull.shard.photos),
+                    ifMatch = etags[claimed.id],
+                )
+                if (write == ShardWriteResult.StaleETag) {
+                    report.contendedAlbums += pull.sourcePath
+                    return
+                }
+            }
             SystemFileSystem.createDirectories(directory)
             for (row in pull.shard.photos) {
-                val primary = row.originalId ?: row.videoId ?: continue
+                val primary = row.liveStillId ?: row.imageId ?: row.videoId ?: continue
                 val destination = Path(directory, row.filename)
                 if (!SystemFileSystem.exists(destination)) s3.download(primary.blobKey, destination)
                 files++
@@ -591,12 +604,6 @@ public class Ingest(
                 }
             }
 
-            val info = pull.shard.info.copy(sourcePath = pull.sourcePath)
-            val shard = Shard(info, pull.shard.photos)
-            if (catalog.writeShard(shard, ifMatch = etags[info.id]) == ShardWriteResult.StaleETag) {
-                report.contendedAlbums += pull.sourcePath
-                return
-            }
             report.pulledAlbums += IngestReport.PulledAlbum(pull.sourcePath, files, bytes)
             emit(IngestEvent.Line("v ${pull.sourcePath}  $files files pulled"))
         } catch (cancelled: CancellationException) {
@@ -609,11 +616,17 @@ public class Ingest(
     // ------------------------------------------------------------------------- the orphan sweep
 
     /**
-     * Deletes blobs no shard references and that are older than the age floor.
+     * Deletes blobs no shard references and that are older than the age floor, and collects
+     * phone uploads that were abandoned before they finished.
      *
      * Skipped entirely when any shard is unreadable: the referenced set would then be missing
      * whatever that album owns, and the sweep would delete a readable album's photographs on the
      * strength of a shard it could not open.
+     *
+     * A shard still [AlbumState.UPLOADING] *names* the blobs its upload has written so far, so
+     * they count as referenced and are never mistaken for debris however long the upload takes.
+     * Past the floor the shard itself is the debris: §8's presigned PUTs have expired, so the
+     * upload provably cannot still finish, and the album is deleted shard-first like any other.
      */
     private suspend fun sweep(
         report: ReportBuilder,
@@ -630,8 +643,28 @@ public class Ingest(
             return
         }
 
-        val referenced = shards.flatMapTo(mutableSetOf(), Shard::objectIds)
         val floor = clock.now() - config.sweepAge
+
+        // Abandoned uploads first, so the blobs they were protecting become sweepable in the
+        // same pass rather than waiting for the next run.
+        val abandoned = shards.filter {
+            it.info.state == AlbumState.UPLOADING && it.info.addedAt < floor
+        }
+        for (shard in abandoned) {
+            report.abandonedUploads++
+            if (dryRun) continue
+            try {
+                catalog.deleteShard(shard.info.id)
+                deleteBlobs(shard.objectIds)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                report.failures += IngestReport.Failure(shard.info.name, failure.describe())
+            }
+        }
+
+        val live = if (dryRun) shards else shards - abandoned.toSet()
+        val referenced = live.flatMapTo(mutableSetOf(), Shard::objectIds)
 
         s3.list(prefix = BLOB_PREFIX).collect { listed ->
             if (listed.isDirectoryMarker) return@collect
@@ -701,6 +734,7 @@ private class ReportBuilder {
     var blockedByUnreadable: List<ShardProbe> = emptyList()
     var duplicateNames: List<String> = emptyList()
     var orphanedAlbums: List<Uuid> = emptyList()
+    var abandonedUploads = 0
     var sweptBlobs = 0
     var sweptBytes = 0L
     var youngUnreferencedBlobs = 0
@@ -723,6 +757,7 @@ private class ReportBuilder {
         contendedAlbums = contendedAlbums.toList(),
         duplicateNames = duplicateNames,
         orphanedAlbums = orphanedAlbums,
+        abandonedUploads = abandonedUploads,
         sweptBlobs = sweptBlobs,
         sweptBytes = sweptBytes,
         youngUnreferencedBlobs = youngUnreferencedBlobs,
