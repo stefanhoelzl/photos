@@ -145,3 +145,21 @@ public sealed class ShardFailure(message: String) : PhotosFailure(message) {
  */
 public class ShardUnavailableFailure(public val albumId: Uuid) :
     PhotosFailure("shard $albumId listed but could not be fetched")
+
+/**
+ * `$LIBRARY_ROOT/.photosignore` exists and could not be read.
+ *
+ * *Absent* is a different thing and is not a failure here: it means no exclusions. *Unreadable*
+ * is fatal, because the file existing means exclusions were intended, and proceeding without
+ * them silently changes what gets uploaded — §7 already aborts a run on the byte-size mismatch
+ * for the same reason. A photo manager's trash directory holds real, decodable photographs.
+ */
+public class IgnoreRulesUnreadableFailure(
+    /** The `.photosignore` itself, not the library root. */
+    public val path: String,
+    public val reason: String,
+) : PhotosFailure(
+    "$path exists but could not be read: $reason. " +
+        "Refusing to run — a file that exists means exclusions were intended, and " +
+        "continuing without them is how deleted photos get uploaded.",
+)

@@ -75,9 +75,37 @@ val defFileOnDisk: File = layout.buildDirectory.get().asFile.resolve("photosimag
     )
 }
 
+/**
+ * libdbus-1, for the Secret Service (§1).
+ *
+ * Unlike the imaging shim there is no C in between: `<dbus/dbus.h>` is self-contained, and the
+ * client is written against it directly. libdbus's variadic entry points are unreachable from
+ * Kotlin, but the `DBusMessageIter` API they wrap is not variadic and is what the client uses.
+ *
+ * dbus splits its headers across two directories — `dbus-arch-deps.h` is generated per
+ * architecture and installed under libdir — so both are on the include path or `<dbus/dbus.h>`
+ * fails to resolve its own include.
+ */
+val dbusDefFile: File = layout.buildDirectory.get().asFile.resolve("photosdbus.def").apply {
+    parentFile.mkdirs()
+    val lib = nativePrefix.resolve("lib")
+    writeText(
+        """
+        headers = dbus/dbus.h
+        headerFilter = dbus/**
+        compilerOpts = -I${nativePrefix.resolve("include/dbus-1.0")} -I${lib.resolve("dbus-1.0/include")}
+        linkerOpts = -L$lib -ldbus-1 -lexpat -lpthread
+
+        """.trimIndent(),
+    )
+}
+
 kotlin {
     jvmToolchain(libs.versions.jdk.get().toInt())
     linuxX64 {
+        compilations.getByName("main").cinterops.create("photosdbus") {
+            definitionFile.set(dbusDefFile)
+        }
         compilations.getByName("main").cinterops.create("photosimaging") {
             definitionFile.set(defFileOnDisk)
             // cinterop must not run before the static archive it absorbs exists.
