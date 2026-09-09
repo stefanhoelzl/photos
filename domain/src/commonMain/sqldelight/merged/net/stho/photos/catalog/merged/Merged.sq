@@ -1,0 +1,162 @@
+import kotlin.Int;
+import kotlin.time.Instant;
+import kotlin.uuid.Uuid;
+import net.stho.photos.model.MediaType;
+
+-- The merged database (§3): on-device, derived from every shard, never uploaded.
+CREATE TABLE IF NOT EXISTS album (
+  album_id       TEXT AS Uuid PRIMARY KEY,
+  name           TEXT NOT NULL,
+  name_folded    TEXT NOT NULL,
+  parent         TEXT AS Uuid,
+  photo_count    INTEGER AS Int NOT NULL,
+  date_min       INTEGER AS Instant,
+  date_max       INTEGER AS Instant,
+  lat            REAL,
+  lon            REAL,
+  cover_photo_id TEXT AS Uuid,
+  thumbs_id      TEXT AS Uuid
+);
+
+CREATE INDEX IF NOT EXISTS ix_album_parent ON album(parent);
+CREATE INDEX IF NOT EXISTS ix_album_folded ON album(name_folded);
+
+CREATE TABLE IF NOT EXISTS photo (
+  id              TEXT AS Uuid NOT NULL,
+  album_id        TEXT AS Uuid NOT NULL,
+  filename        TEXT NOT NULL,
+  source_filename TEXT,
+  taken_at        INTEGER AS Instant,
+  lat             REAL,
+  lon             REAL,
+  width           INTEGER AS Int,
+  height          INTEGER AS Int,
+  bytes           INTEGER,
+  media_type      INTEGER AS MediaType NOT NULL,
+  original_id     TEXT AS Uuid,
+  live_video_id   TEXT AS Uuid,
+  preview_id      TEXT AS Uuid,
+  video_id        TEXT AS Uuid,
+  PRIMARY KEY (album_id, id)
+);
+
+-- An expression index over §3's ordering rule, so the grid query reads in order with no sort
+-- step. The index and the query must state the rule identically; if they drift the planner
+-- simply stops using the index, which costs speed rather than correctness.
+CREATE INDEX IF NOT EXISTS ix_photo_album ON photo(album_id, taken_at IS NULL, taken_at, filename);
+CREATE INDEX IF NOT EXISTS ix_photo_taken ON photo(taken_at);
+CREATE INDEX IF NOT EXISTS ix_photo_geo ON photo(lat, lon) WHERE lat IS NOT NULL;
+
+-- ------------------------------------------------------------------- rebuild (the write side)
+
+deleteAllPhotos:
+DELETE FROM photo;
+
+deleteAllAlbums:
+DELETE FROM album;
+
+insertAlbum:
+INSERT INTO album (
+  album_id, name, name_folded, parent, photo_count, date_min, date_max, lat, lon,
+  cover_photo_id, thumbs_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?);
+
+insertPhoto:
+INSERT INTO photo (
+  album_id, id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
+  media_type, original_id, live_video_id, preview_id, video_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- An album's pin is the centroid of its tagged photos; a container's is the centroid of all its
+-- descendants' (§3). Computed here rather than stored in a shard, so a pin can never drift from
+-- the photos beneath it, and so placing a container costs no descendant rewrites.
+--
+-- A plain mean of latitude and longitude: §3 says centroid, and at the scale of one album it is
+-- what people expect. It is wrong across the antimeridian -- no album in this library spans it,
+-- and a wrong pin is a cosmetic fault, not a data one.
+fillLocations:
+WITH RECURSIVE descendant(root, album_id) AS (
+    SELECT album_id, album_id FROM album
+  UNION ALL
+    SELECT d.root, a.album_id FROM album a JOIN descendant d ON a.parent = d.album_id
+)
+UPDATE album SET
+  lat = (SELECT avg(p.lat) FROM descendant d JOIN photo p ON p.album_id = d.album_id
+          WHERE d.root = album.album_id AND p.lat IS NOT NULL AND p.lon IS NOT NULL),
+  lon = (SELECT avg(p.lon) FROM descendant d JOIN photo p ON p.album_id = d.album_id
+          WHERE d.root = album.album_id AND p.lat IS NOT NULL AND p.lon IS NOT NULL);
+
+-- ------------------------------------------------------------------------------ albums (read)
+
+selectRootAlbums:
+SELECT album_id, name, name_folded, parent, photo_count, date_min, date_max, lat, lon,
+       cover_photo_id, thumbs_id
+FROM album WHERE parent IS NULL ORDER BY date_max DESC, name;
+
+selectChildAlbums:
+SELECT album_id, name, name_folded, parent, photo_count, date_min, date_max, lat, lon,
+       cover_photo_id, thumbs_id
+FROM album WHERE parent = ? ORDER BY date_max DESC, name;
+
+selectAllAlbums:
+SELECT album_id, name, name_folded, parent, photo_count, date_min, date_max, lat, lon,
+       cover_photo_id, thumbs_id
+FROM album ORDER BY name;
+
+selectAlbum:
+SELECT album_id, name, name_folded, parent, photo_count, date_min, date_max, lat, lon,
+       cover_photo_id, thumbs_id
+FROM album WHERE album_id = ?;
+
+-- Case- and diacritic-insensitive substring search over album names (§3). No fuzzy matching --
+-- too noisy on short names -- and no filename search.
+searchAlbums:
+SELECT album_id, name, name_folded, parent, photo_count, date_min, date_max, lat, lon,
+       cover_photo_id, thumbs_id
+FROM album WHERE name_folded LIKE ? ESCAPE '\' ORDER BY name;
+
+selectPlacedAlbums:
+SELECT album_id, name, name_folded, parent, photo_count, date_min, date_max, lat, lon,
+       cover_photo_id, thumbs_id
+FROM album WHERE lat IS NOT NULL ORDER BY name;
+
+-- Every album name that appears more than once under the same parent. Two devices creating one
+-- album no longer collide on a key, so duplicates are possible. They are shown and reported,
+-- never merged: merging is a destructive guess about intent (§2).
+selectDuplicateNames:
+SELECT name, group_concat(album_id) FROM album
+ GROUP BY parent, name HAVING count(*) > 1 ORDER BY name;
+
+-- ------------------------------------------------------------------------------ photos (read)
+
+selectPhotosInAlbum:
+SELECT id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
+       media_type, original_id, live_video_id, preview_id, video_id
+FROM photo WHERE album_id = ? ORDER BY taken_at IS NULL, taken_at, filename;
+
+selectPhotoById:
+SELECT id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
+       media_type, original_id, live_video_id, preview_id, video_id
+FROM photo WHERE id = ?;
+
+-- A container owns no photos, so its cover is resolved by descending into children until one is
+-- found. One statement rather than a walk: the recursive CTE reaches every descendant, and the
+-- ordering rule is applied across all of them at once.
+selectEarliestPhotoUnder:
+WITH RECURSIVE descendant(album_id) AS (
+    SELECT album_id FROM album WHERE album_id = ?
+  UNION ALL
+    SELECT a.album_id FROM album a JOIN descendant d ON a.parent = d.album_id
+)
+SELECT p.id, p.filename, p.source_filename, p.taken_at, p.lat, p.lon, p.width, p.height, p.bytes,
+       p.media_type, p.original_id, p.live_video_id, p.preview_id, p.video_id
+FROM photo p WHERE p.album_id IN (SELECT album_id FROM descendant)
+ORDER BY p.taken_at IS NULL, p.taken_at, p.filename LIMIT 1;
+
+selectPlacedPhotos:
+SELECT album_id, id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
+       media_type, original_id, live_video_id, preview_id, video_id
+FROM photo WHERE lat IS NOT NULL;
+
+countPhotos:
+SELECT count(*) FROM photo;

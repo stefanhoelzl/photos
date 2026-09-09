@@ -13,10 +13,10 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
-import kotlinx.io.files.SystemTemporaryDirectory
 import kotlinx.io.readByteArray
 import kotlinx.io.writeString
 import net.stho.photos.S3HttpFailure
+import net.stho.photos.scratchPath
 
 /**
  * The tests that need a real server rather than a scripted one.
@@ -56,8 +56,7 @@ class RoundTripTest {
 
     private fun key(suffix: String) = "round-trip/${Random.nextLong().toString(16)}-$suffix"
 
-    private fun tempFile(name: String): Path =
-        Path(SystemTemporaryDirectory, "photos-roundtrip-${Random.nextLong().toString(16)}-$name")
+    private fun tempFile(name: String): Path = scratchPath("roundtrip-$name")
 
     // ---------------------------------------------------------------- lifecycle
 

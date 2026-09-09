@@ -1,0 +1,27 @@
+import kotlin.time.Instant;
+import kotlin.uuid.Uuid;
+import net.stho.photos.storage.ETag;
+
+-- The ETag of every shard currently on disk (§4).
+--
+-- A separate file from `merged.db` on purpose. If the ETags lived in the merged database,
+-- losing it would mean re-fetching all 288 shards; here it stays purely derived and can be
+-- deleted and rebuilt with no network. Deleting `sync_state.db` on its own forces a full
+-- re-fetch, which is a free repair path.
+CREATE TABLE IF NOT EXISTS shard_state (
+  album_id   TEXT AS Uuid PRIMARY KEY,
+  etag       TEXT AS ETag NOT NULL,
+  fetched_at INTEGER AS Instant NOT NULL
+);
+
+selectKnown:
+SELECT album_id, etag FROM shard_state;
+
+-- `ON CONFLICT ... DO UPDATE` is the newest syntax this project uses anywhere: SQLite 3.24,
+-- which is the floor DESIGN §3 claims and the dialect this module is pinned to.
+record:
+INSERT INTO shard_state (album_id, etag, fetched_at) VALUES (?, ?, ?)
+ON CONFLICT(album_id) DO UPDATE SET etag = excluded.etag, fetched_at = excluded.fetched_at;
+
+forget:
+DELETE FROM shard_state WHERE album_id = ?;

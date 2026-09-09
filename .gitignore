@@ -9,3 +9,7 @@ build/
 .gradle/
 .kotlin/
 local.properties
+
+# Test scratch that escaped into the tree once (see TestScratch.kt)
+photos-roundtrip-*
+photos-tests-*

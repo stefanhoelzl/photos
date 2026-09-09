@@ -1,0 +1,76 @@
+import kotlin.Int;
+import kotlin.time.Instant;
+import kotlin.uuid.Uuid;
+import net.stho.photos.model.MediaType;
+
+-- The shard schema, DESIGN §3, one album per file at `meta/<album-uuid>.db`.
+--
+-- `album_id` and `source_path` are permanently stable: never removed, never retyped, whatever
+-- a later schema_version does. That is what lets any reader learn which folder a shard claims
+-- without understanding the rest of it, so a shard too new to read is still *identifiable*
+-- rather than merely unreadable -- which is what stops its directory being re-uploaded as a
+-- duplicate album (§3).
+--
+-- `IF NOT EXISTS` throughout because these statements also run against files that already have
+-- the tables: a shard fetched from the zone is opened as a file, not created.
+CREATE TABLE IF NOT EXISTS album_info (
+  id             INTEGER PRIMARY KEY CHECK (id = 1),
+  album_id       TEXT AS Uuid NOT NULL,
+  name           TEXT NOT NULL,
+  parent         TEXT AS Uuid,
+  source_path    TEXT,
+  cover_photo_id TEXT AS Uuid,
+  thumbs_id      TEXT AS Uuid,
+  added_at       INTEGER AS Instant NOT NULL,
+  schema_version INTEGER AS Int NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS photo (
+  id              TEXT AS Uuid PRIMARY KEY,
+  filename        TEXT NOT NULL,
+  source_filename TEXT,
+  taken_at        INTEGER AS Instant,
+  lat             REAL,
+  lon             REAL,
+  width           INTEGER AS Int,
+  height          INTEGER AS Int,
+  bytes           INTEGER,
+  media_type      INTEGER AS MediaType NOT NULL,
+  original_id     TEXT AS Uuid,
+  live_video_id   TEXT AS Uuid,
+  preview_id      TEXT AS Uuid,
+  video_id        TEXT AS Uuid
+);
+
+CREATE INDEX IF NOT EXISTS ix_photo_taken ON photo(taken_at);
+
+insertAlbumInfo:
+INSERT INTO album_info (
+  id, album_id, name, parent, source_path, cover_photo_id, thumbs_id, added_at, schema_version
+) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- Columns are named rather than starred: `schema_version` promises a reader keeps working when
+-- a *newer* writer adds a column, and `SELECT *` would break that promise by shifting indices.
+selectAlbumInfo:
+SELECT album_id, name, parent, source_path, cover_photo_id, thumbs_id, added_at, schema_version
+FROM album_info WHERE id = 1;
+
+-- What a shard says about itself even when it is too new to read: only §3's two permanently
+-- stable columns, so this keeps working across every future schema.
+selectProbe:
+SELECT album_id, source_path, schema_version FROM album_info WHERE id = 1;
+
+-- The version alone, so a caller can decide to skip a shard before paying to read it.
+selectSchemaVersion:
+SELECT schema_version FROM album_info WHERE id = 1;
+
+insertPhoto:
+INSERT INTO photo (
+  id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
+  media_type, original_id, live_video_id, preview_id, video_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+selectPhotos:
+SELECT id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
+       media_type, original_id, live_video_id, preview_id, video_id
+FROM photo;

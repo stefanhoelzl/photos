@@ -1,0 +1,20 @@
+import kotlin.uuid.Uuid;
+
+-- An album's thumbnails, packed into one blob (§3), so a grid opens in one request, offline.
+CREATE TABLE IF NOT EXISTS thumb (
+  id   TEXT AS Uuid PRIMARY KEY,
+  jpeg BLOB NOT NULL
+);
+
+insertThumb:
+INSERT INTO thumb (id, jpeg) VALUES (?, ?);
+
+selectAll:
+SELECT id, jpeg FROM thumb;
+
+selectIds:
+SELECT id FROM thumb;
+
+-- One thumbnail without decoding the rest -- for a cover tile in the album list.
+selectOne:
+SELECT jpeg FROM thumb WHERE id = ?;

@@ -1,5 +1,7 @@
 package net.stho.photos
 
+import kotlin.uuid.Uuid
+
 /**
  * A failure that ends the run.
  *
@@ -103,3 +105,43 @@ public sealed class StorageUrlFailure(message: String) : PhotosFailure(message) 
     public class MissingZone :
         StorageUrlFailure("missing storage zone — expected https://<host>/<zone>")
 }
+
+/**
+ * A shard that cannot be read.
+ *
+ * Distinguishable cases rather than one message, because §3 turns on the difference: the CLI
+ * reconciles a local library against the zone, and a shard it reports as *absent* gets
+ * re-uploaded as a new album — with UUID keys nothing collides to stop the duplicate. So
+ * "written by a newer schema" has to be tellable from "this file is not a shard" and from
+ * "SQLite is unwell".
+ */
+public sealed class ShardFailure(message: String) : PhotosFailure(message) {
+
+    /**
+     * The shard was written by a newer schema than this build understands.
+     *
+     * Not a corruption: the caller skips the album, probes it for §3's two permanently stable
+     * columns, and reports it — never as absent.
+     */
+    public class UnsupportedVersion(
+        public val found: Int,
+        public val supported: Int,
+    ) : ShardFailure("shard schema version $found is newer than this build supports ($supported)")
+
+    /** No `album_info` row, so the file is not a shard at all. */
+    public class MissingAlbumInfo :
+        ShardFailure("shard has no album_info row")
+
+    /** A column held something its type says it cannot — a uuid that is not one, say. */
+    public class Malformed(public val detail: String) :
+        ShardFailure("malformed shard: $detail")
+}
+
+/**
+ * A shard the LIST named, which then could not be brought to disk.
+ *
+ * §4's diff reads a missing key as a deleted album, so a shard that listed and then failed to
+ * arrive must end the run rather than quietly become an absence.
+ */
+public class ShardUnavailableFailure(public val albumId: Uuid) :
+    PhotosFailure("shard $albumId listed but could not be fetched")
