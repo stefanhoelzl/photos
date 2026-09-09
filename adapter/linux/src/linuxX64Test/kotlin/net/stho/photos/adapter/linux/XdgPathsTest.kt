@@ -15,15 +15,15 @@ class XdgPathsTest {
                 "HOME" to "/home/someone",
             )::get,
         )
-        assertEquals("/var/cache/mine/photos", paths.cacheRoot)
-        assertEquals("/etc/mine/photos", paths.configRoot)
+        assertEquals("/var/cache/mine/photos-cli", paths.cacheRoot)
+        assertEquals("/etc/mine/photos-cli", paths.configRoot)
     }
 
     @Test
     fun homeIsTheFallback() {
         val paths = XdgPaths(environment = mapOf("HOME" to "/home/someone")::get)
-        assertEquals("/home/someone/.cache/photos", paths.cacheRoot)
-        assertEquals("/home/someone/.config/photos", paths.configRoot)
+        assertEquals("/home/someone/.cache/photos-cli", paths.cacheRoot)
+        assertEquals("/home/someone/.config/photos-cli", paths.configRoot)
     }
 
     /**
@@ -40,7 +40,7 @@ class XdgPathsTest {
                 "HOME" to "/home/someone",
             )::get,
         )
-        assertEquals("/home/someone/.cache/photos", paths.cacheRoot)
-        assertEquals("/home/someone/.config/photos", paths.configRoot)
+        assertEquals("/home/someone/.cache/photos-cli", paths.cacheRoot)
+        assertEquals("/home/someone/.config/photos-cli", paths.configRoot)
     }
 }

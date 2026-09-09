@@ -12,9 +12,13 @@ import platform.posix.getuid
 /**
  * §7's `Paths`, as the XDG base directory specification defines them.
  *
- * `$XDG_CACHE_HOME/photos` and `$XDG_CONFIG_HOME/photos`, falling back to `~/.cache/photos` and
- * `~/.config/photos`. §4's on-device layout — `sync_state.db`, `shards/`, `merged.db` and
- * `blobs/` — lives under the first.
+ * `$XDG_CACHE_HOME/photos-cli` and `$XDG_CONFIG_HOME/photos-cli`, falling back to
+ * `~/.cache/photos-cli` and `~/.config/photos-cli`. §4's on-device layout — `sync_state.db`,
+ * `shards/`, `merged.db` and `blobs/` — lives under the first.
+ *
+ * Named for the binary rather than the project, which is also what the keyring service is
+ * called (`Credentials.SERVICE`). It is the *CLI's* cache: the app has its own container and
+ * shares none of it, so naming it `photos` would claim a generality it does not have.
  *
  * A relative value is treated as unset, which the specification requires and which matters
  * here: resolving the cache root against whatever directory a timer happened to start in is how
@@ -33,7 +37,7 @@ public class XdgPaths(
 }
 
 /** The one directory name this application owns under either root. */
-private const val APPLICATION = "photos"
+private const val APPLICATION = "photos-cli"
 
 private fun xdgRoot(
     environment: (String) -> String?,

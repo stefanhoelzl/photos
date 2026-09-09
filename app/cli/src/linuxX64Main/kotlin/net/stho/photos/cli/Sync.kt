@@ -62,7 +62,7 @@ internal class SyncCommand(private val console: Console = Console()) : CoreClikt
 
     private val cacheDir by option(
         "--cache-dir",
-        help = "Where shards and ETags are cached. Defaults to \$XDG_CACHE_HOME/photos.",
+        help = "Where shards and ETags are cached. Defaults to \$XDG_CACHE_HOME/photos-cli.",
     )
 
     private val jobs by option("--jobs", help = "Encoder workers. Budget ~400 MB each.")
