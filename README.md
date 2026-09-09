@@ -3,6 +3,26 @@
 Ingest CLI and iOS app for a personal photo library on bunny.net storage.
 The design lives in [`DESIGN.md`](DESIGN.md); this file covers building it.
 
+## Status
+
+**Two trees, deliberately, until the port lands.** `Sources/` is Swift and is still the working
+implementation; the Gradle modules are the Kotlin Multiplatform port DESIGN.md describes. They
+coexist — SwiftPM reads `Package.swift` and `Sources/`, Gradle reads `settings.gradle.kts` and
+the module directories, and neither sees the other.
+
+The port runs in three steps: **skeleton and toolchain** (done), then the domain, then the CLI.
+The Swift tree is retired by the last of them. `Sources/CImaging` and
+`Scripts/build-native.sh` carry across unchanged — the C shim is bound from Kotlin by cinterop
+with no glue layer.
+
+The app (E–H) is not in scope for the port. It begins once the CLI lands.
+
+| module | what |
+|---|---|
+| `:domain` | DESIGN §7's shared tier. Empty until step 2. |
+| `:adapter:linux` | the Linux ports: the imaging backend over `Sources/CImaging`, later the keyring, run lock and paths |
+| `:tools:smoke` | successor to `native-smoke` — the only thing that exercises the *shipped* link |
+
 ## Layout
 
 One package, one target per milestone, so §10's dependency arrows are enforced
@@ -21,7 +41,7 @@ by the compiler rather than by discipline.
 | `native-smoke` | the only thing that can exercise the musl build | done |
 | `PhotosIngest` | **D** — reconciliation, deletion, pull, sweep | done |
 | `PhotosCLI` | **D** — the shipped `photos-cli` binary | done |
-| `ios/` | E–G — the app | blocked on a Mac |
+| — | E–H — the app | after the port; Compose Multiplatform, developed on a Linux desktop harness (DESIGN §6) |
 
 ## Toolchain
 
@@ -85,7 +105,20 @@ first import outlasts the hour between timer firings. A run prints what it inten
 line per album as it commits; on a terminal a counter on stderr shows files, bytes, rate and
 an estimate.
 
-## Build and test
+## Build and test — Kotlin
+
+```sh
+Scripts/build-native.sh konan     # once: the imaging stack, sqlite, openssl, curl, dbus
+./gradlew :tools:smoke:linkReleaseExecutableLinuxX64
+tools/smoke/build/bin/linuxX64/releaseExecutable/native-smoke.kexe
+```
+
+The prefix must be the **`konan`** one. Kotlin/Native links `linuxX64` against its own bundled
+gcc 8.3.0 / glibc 2.19 toolchain, so the native stack has to be built with that same toolchain
+or the link fails on symbols the sysroot does not have — and building it that way is what gives
+the binary its low glibc floor. `./gradlew checkNativePrefix` says whether the prefix is there.
+
+## Build and test — Swift
 
 Milestone C links a native imaging stack, so builds go through a wrapper that points
 pkg-config at the right prefix:

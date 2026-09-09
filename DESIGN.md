@@ -25,9 +25,12 @@ Both render identically; only the content differs.
 
 **Components**
 - **Storage** — one bunny.net storage zone (Frankfurt), S3-compatible API.
-- **Ingest CLI** — Linux, single static binary (`photos-cli`). Reconciles the zone with a
+- **Ingest CLI** — Linux, one self-contained binary (`photos-cli`). Reconciles the zone with a
   local library root in one command, and pulls phone-uploaded albums back down.
 - **iOS app** — browses the zone; can upload new albums.
+
+Both are Kotlin Multiplatform, over one shared domain (§7). The app's UI also runs as a Linux
+desktop harness, which is how it is developed and reviewed (§6).
 
 **Hard constraints**
 - **No backend.** Every derivative is pre-generated at ingest; nothing is resized on demand.
@@ -121,8 +124,8 @@ photos-cli login     # prompts for the endpoint and the password, stores both
 photos-cli logout    # removes both
 ```
 
-The keyring is read and written **in-process, over D-Bus** (`Sources/PhotosIngest/SecretService.swift`),
-not by exec'ing `secret-tool`. That is what makes the shipped binary literally self-sufficient
+The keyring is read and written **in-process, over D-Bus** — the `Keyring` port's Linux adapter,
+over cinterop'd libdbus-1 — not by exec'ing `secret-tool`. That is what makes the shipped binary literally self-sufficient
 (§7), and it is why `login` exists at all: reading in-process while setup still needed
 libsecret's tools on `PATH` would have moved the dependency rather than removed it. The items
 carry the attributes `secret-tool` wrote, so anything stored before the client existed is
@@ -246,9 +249,19 @@ hazards at once:
   and no ETag, so **the diff still skips keys ending in `/`** — but there is exactly one such
   key per prefix now, rather than one per folder level, and none that could be mistaken for a
   shard.
-- **NFC normalisation** stops being a wire concern. It still governs text *stored in* the
-  catalog and the matching of a local folder to its shard, but no key can ever differ by
-  composition.
+- **NFC normalisation is gone entirely.** It stopped being a wire concern the moment keys
+  became UUIDs, and it was measured out of the rest: of 34,729 entries in the library, 51 have
+  non-ASCII names and **none is decomposed**. Every normalisation call was a no-op on the only
+  data it has ever seen, and preserving it meant a native Unicode library on Linux, a second
+  implementation on iOS, and a Unicode-version skew between them — to convert text that is
+  already in the target form. Names are stored exactly as given.
+
+  > **The accepted risk, stated plainly.** A decomposed name arriving later — realistically
+  > from an import off an HFS+ Mac — would be a *different string* from its composed twin, so
+  > the folder would not match its shard and would be uploaded again as a second album. Nothing
+  > detects this. The mitigating facts are that no such name exists today, iOS keyboards emit
+  > composed text, and the one import path that produces them is a deliberate act rather than
+  > something that happens by itself.
 - Keys can no longer carry **Private Use Area characters or codepage mojibake** from an
   unclean library, so `encoding-type=url` on LIST protects the ~292 `meta/` keys rather than
   ~34,000.
@@ -311,7 +324,7 @@ CREATE TABLE album_info (
 
 CREATE TABLE photo (
   id              TEXT PRIMARY KEY,  -- row identity; survives re-encoding
-  filename        TEXT NOT NULL,     -- NFC, with extension; the name *in the zone*
+  filename        TEXT NOT NULL,     -- with extension; the name *in the zone*
   source_filename TEXT,              -- the name on disk, when it differs. NULL usually
   taken_at      INTEGER,             -- epoch seconds; NULL when no EXIF date
   lat           REAL,
@@ -452,6 +465,46 @@ shared index — the map and the date filter would scan 288 tables.
 **Access is one writer, many readers, in WAL mode.** The rebuild holds a single write
 transaction for 1–3 s (§4) while the album list may be on screen; WAL is what lets readers see
 the pre-transaction snapshot for its whole duration and switch at commit, rather than blocking.
+
+### Which SQLite
+
+**Nothing here needs a particular one.** The newest SQL feature used anywhere is
+`ON CONFLICT … DO UPDATE`, which is SQLite 3.24 (2018), and everything else — partial indexes,
+expression indexes, `CHECK`, the PRAGMAs above — is older still. There are no STRICT tables, no
+`RETURNING`, no window functions, no JSON functions, no FTS and no R-Tree. iOS 18 ships far
+newer than that floor, and so does every desktop distribution. **On iOS the platform's SQLite
+is therefore used as-is.**
+
+**The Linux CLI links its own anyway, and the reason is the link, not the SQL.** A distro's
+`libsqlite3.so` is compiled against that distro's glibc — Ubuntu 24.04's needs `GLIBC_2.38` —
+while the rest of the binary links against a glibc 2.19 sysroot to get §7's floor. Those cannot
+meet, so taking the platform's library would raise the shipped binary's floor to whatever the
+build host happened to have, making portability a property of the machine rather than of the
+build. It is one pinned tarball beside the imaging stack (`Scripts/PROVENANCE.md`), committed
+nowhere.
+
+> The two builds can differ freely, because the floor above says they cannot disagree about
+> anything this project asks of them.
+
+**That floor is enforced, not merely asserted.** The query layer's SQL dialect is pinned to
+SQLite 3.24, so SQL that needs anything newer fails the build rather than failing on a device
+that turns out to have an older SQLite than the one it was written against. The claim in the
+paragraph above is therefore checked every time the project compiles.
+
+The one place platforms genuinely differ is collation, and the schema already avoids depending
+on it: `filename` sorts under BINARY — a UTF-8 byte compare — so the grid order is identical on
+both devices without trusting either one's collation tables, and `name_folded` exists only in
+the merged DB, which is per-device and never uploaded.
+
+**A shard is read as a file, not as a byte array.** §4's on-device layout already keeps
+`shards/<uuid>.db` — it is the source of truth for a rebuild — so opening one is opening a file
+the design wanted anyway, and the same holds for thumbnail packs, which §6 keeps permanently.
+Only the CLI *writing* a shard for upload needs a scratch file, and it can use its own cache
+rather than a temporary directory. This is what makes the platform's SQLite sufficient:
+nothing has to serialise a database in or out of memory.
+
+> The cost to watch is §4's 1–3 s rebuild across 288 shards, which §10 treats as fixed. Opening
+> files rather than memory images is the one decision here that spends against it.
 
 ### Dates, locations, sorting
 
@@ -648,15 +701,30 @@ still hardware-decoded** via the HEVC block, so swiping stays fast.
 > container, grid, pinch density, both viewer states, both map representations, set-cover
 > dialog, settings, log out, first-run setup, and the five upload steps.
 
-**Minimum iOS 18.** SwiftUI throughout, except three components where UIKit is required:
+**Minimum iOS 18. Compose Multiplatform**, entered through `ComposeUIViewController` — one UI
+in `commonMain` that renders identically on the phone and on a Linux desktop harness. That
+second target is not a nicety: it is how the app is developed and driven at all, including by
+an agent over HTTP, without Apple hardware in the loop.
 
-| component | why SwiftUI cannot do it |
+Compose draws its own widgets through Skia rather than composing UIKit views, so the platform's
+own controls are reached deliberately, through `UIKitView` interop, and only where the platform
+is the thing being used:
+
+| component | why it needs interop |
 |---|---|
-| photo grid | no **prefetch API** — `LazyVGrid` fires `onAppear` when a cell is already visible, far too late for a 385 KB fetch; no **interactive layout transition** for pinch-to-density; no **drag-to-select** range gesture |
-| fullscreen pager | zoom + paging + drag-to-dismiss composition |
-| map | no annotation clustering (`MKMarkerAnnotationView.clusteringIdentifier`) |
+| `PHLivePhotoView` | Live Photo playback is a system view; there is nothing to reimplement |
+| PhotoKit picker (§8) | `PHAssetCollection` browsing, and deletion after upload |
 
-`PHLivePhotoView` is a small `UIViewRepresentable` either way.
+Everything else is drawn, including the three hardest screens. `LazyVerticalGrid` exposes
+`layoutInfo`, so the grid's prefetch is driven from visible-item state rather than from a
+callback that fires once a cell is already on screen — far too late for a 385 KB fetch.
+Drag-to-select is a `pointerInput` gesture. The fullscreen viewer's zoom + page +
+drag-to-dismiss is an ordinary composition of `HorizontalPager` and `transformable`.
+
+Two consequences are accepted rather than solved. **Pinch-to-density needs a custom animated
+layout**, because no interactive layout transition is provided; and it **cannot be exercised on
+the desktop harness**, which has no pinch gesture. The grid's behaviour at scale is therefore
+the one part of §6 that only a device can confirm.
 
 ### Navigation and chrome
 
@@ -664,9 +732,15 @@ still hardware-decoded** via the HEVC block, so swiping stays fast.
 On first launch the setup screen (§1) is shown instead, and Settings › Account can change the
 endpoint, zone and key, or switch zones entirely, at any time.
 
-Following the iOS 26 Liquid Glass HIG: the nav bar is **two rows** — back button and actions on
-top, **large title 34pt bold** beneath (17pt semibold when scrolled). Fixed bar buttons render
-as **Liquid Glass circles containing icons**, with content scrolling beneath them.
+The nav bar is **two rows** — back button and actions on top, **large title 34pt bold** beneath
+(17pt semibold when scrolled). Fixed bar buttons are **circular icon buttons**, with content
+scrolling beneath them.
+
+**The design system is Material 3, skinned.** The colour scheme is pinned in full — every
+container and outline token supplied — so no component can fall back to Material's stock
+baseline palette and introduce a hue the design never chose. The app does not imitate iOS
+chrome: a drawn approximation of a system material is worse than a coherent drawn design, and
+the whole point of one UI is that it looks the same in the harness as on the device.
 
 Every list/grid screen carries the same four trailing icons — **gear · the other representation
 · sort · upload** — and the toggle always shows the view you switch *to*:
@@ -687,16 +761,34 @@ Every list/grid screen carries the same four trailing icons — **gear · the ot
 icons, toggled rather than pushed. The same holds one level down: an album's grid and its map
 are two views of one album.
 
-**Colour carries meaning; it is never decoration.** Standard bar buttons are **monochrome** —
-the glyph takes the label colour and the glass adapts to what is behind it. Blue-for-tappable is
-the pre-iOS-26 idiom and is not used.
+**The map is drawn, not embedded.** A raster tile layer on a Compose canvas, with pan, zoom and
+pins over it — the same code on the phone and in the harness. MapKit would give a better
+basemap, but it would only be giving the basemap: clustering is our own algorithm either way,
+and §5's pin is a 38pt square thumbnail, which is a custom annotation view in MapKit too. An
+embedded native map would also make the one screen that cannot be developed or reviewed without
+a device.
 
-| context | glyph | glass |
+**Clustering, the album→pin projection and pin selection live in the shared tier**, not in the
+renderer, so the part that can be wrong is the part that is unit-tested.
+
+**Tiles come from the public VersaTiles server.** Three consequences are accepted rather than
+mitigated: the map is **the one surface that is not available offline**, where §6 otherwise
+promises the catalog and every thumbnail always are; it depends on a third party this project
+does not control; and tile requests disclose roughly where the library's photographs were
+taken. If any of those bite, the alternative is already available and needs no new mechanism —
+a regional `.versatiles` extract stored in the zone as an ordinary blob, read with the range
+GETs §2 already relies on, cached like everything else.
+
+**Colour carries meaning; it is never decoration.** Standard bar buttons are **monochrome** —
+the glyph takes the on-surface colour. Blue-for-tappable is not used: if every affordance is
+tinted, tint says nothing, and the four colours below have to keep meaning something.
+
+| context | glyph | background |
 |---|---|---|
-| nav bars | label colour | `.regular` (adaptive) |
-| over a photo | label colour (white) | `.clear` + **dimming scrim** |
-| destructive (clear cache) | **red** | `.regular` |
-| active state (photo is the cover) | **gold** | `.regular` |
+| nav bars | on-surface | surface |
+| over a photo | white | **dimming scrim** |
+| destructive (clear cache) | **error red** | surface |
+| active state (photo is the cover) | **gold** | surface |
 | progress fill | tinted | — |
 
 ### Fullscreen viewer
@@ -734,59 +826,108 @@ images — so this screen is the only route.
 
 ## 7. Ingest CLI
 
-**A shared Swift package** holds everything where a laptop/phone disagreement would corrupt the
-catalog: the shard schema, NFC normalisation, the mapping from EXIF tags to catalog rows, the
-S3 client and signer, and the LIST-diff sync algorithm.
+**One Kotlin Multiplatform `domain` module** holds everything where a laptop/phone disagreement
+would corrupt the catalog: the shard schema, the mapping from EXIF tags to catalog rows, the
+S3 client and signer, and the LIST-diff sync algorithm. The CLI and the app
+are two entry points onto it, not two implementations of it.
 
-Encoders stay platform-native behind an `ImageBackend` protocol — **ImageIO/AVFoundation on
+Encoders stay platform-native behind an `ImageBackend` port — **ImageIO/AVFoundation on
 iOS and macOS**, **libjpeg-turbo/libheif/x265/ffmpeg/lcms2/libexif on Linux**, behind a small
-C shim (libjpeg reports errors by `longjmp`, which Swift cannot safely be on the far end of). **`ImageBackend` also extracts raw EXIF tags**,
+C shim (libjpeg reports errors by `longjmp`, which no managed runtime can safely be on the far
+end of). **`ImageBackend` also extracts raw EXIF tags**,
 since both platforms already have a library that reads them and neither would gain from a
-hand-written container parser. What the shared package owns is the *interpretation*:
+hand-written container parser. What the domain owns is the *interpretation*:
 `"2013:07:04 18:22:11"` → epoch, `GPSLatitudeRef 'S'` → a negative latitude, rationals →
 degrees, orientation → swapped dimensions. Backends also normalise Apple's maker-note content
 identifier to `AppleContentIdentifier`, so Live-Photo pairing (§5) is a shared decision rather
 than a platform one. That is where a disagreement would corrupt the
-catalog, and it is the same code on both platforms. The protocol itself is declared in the
-shared package, because a contract belongs with the other contracts.
+catalog, and it is the same code on both platforms. The port itself is declared in the
+domain, because a contract belongs with the other contracts.
+
+### Ports and adapters
+
+The domain declares what it needs from the world; adapters supply it; `app/cli` wires them
+together by hand in one function. No container — the graph is small enough to read, and a
+missing edge should fail at compile time rather than at start.
+
+**A seam becomes a port for one of three reasons, and for no other.** Purity is not a reason:
+
+1. it needs a fake to be testable,
+2. its implementation differs by platform, or
+3. the domain would otherwise reach for it *statically* rather than receive it.
+
+The third is the one that catches the most. `Date()` and `UUID()` scattered through ingest are
+the same defect as a run lock acquired from a static factory: the object is fine, the reach is
+not, and it is what makes "this run was refused because another holds the lock" indistinguishable
+in a test from "this run could not write to its cache directory" — two outcomes with different
+exit codes.
+
+| port | why | Linux adapter |
+|---|---|---|
+| `ImageBackend` | (1) (2) | the C shim over libjpeg-turbo/libheif/x265/ffmpeg |
+| `Keyring` | (1) (2) | libdbus-1, in-process (§1) |
+| `Clock` | (1) (3) | system clock |
+| `Ids` | (1) (3) | random UUIDs |
+| `Paths` | (1) (2) | XDG cache/config directories |
+| `RunLock` | (1) (3) | `flock`, unchanged |
+| `Reporter` | (1) | console output |
+
+**Deliberately not ports.** The SQL driver is not one — SQLDelight is already that abstraction
+and ships in-memory drivers for tests. Neither is HTTP: Ktor abstracts its engines per platform
+*and* ships `MockEngine`, so wrapping it would only add a layer that hides mistakes in how Ktor
+itself is used — which is the exact class of blind spot that let a truncated `ListBucketResult`
+parse as success (§10).
+
+The one HTTP path that *will* need a port is §8's background upload, because Ktor's Darwin
+engine cannot use a background `URLSession`. That port arrives with the upload feature, not
+before it.
 
 ### Distribution
 
-**One fully self-contained static binary.** Swift's Static Linux SDK cross-compiles against
-musl — `swift build --swift-sdk x86_64-swift-linux-musl` — producing a static ELF with no
-dynamic linker, no shared libraries and no Swift installation on the target, for x86-64 and
-ARM64. **libheif, x265 and ffmpeg are statically linked in**, not shelled out. Measured: 80 MB
-stripped.
+**The requirement is one binary that runs on every major modern desktop distribution** — not,
+as an earlier draft had it, a binary with no dynamic dependencies at all. Those are different
+things, and the second is unreachable here: Kotlin/Native has no musl target, and `-static` in
+its linker options is accepted and then silently ignored.
 
-It shells out to nothing. The keyring is reached in-process through a statically linked
-libdbus-1 (§1), which is what closed the last gap: an earlier draft exec'd `secret-tool` for
-the password, on the grounds that reaching the keyring in-process meant linking glib. It does
-not — that is true of *libsecret*, not of libdbus, which has no glib dependency at all. The
-client costs **204 KB** in the shipped binary.
+What delivers the requirement instead is the **glibc floor**. Kotlin/Native links `linuxX64`
+against its own bundled crosstool-NG toolchain — gcc 8.3.0, glibc 2.19 — so the imaging stack
+is built with *that same toolchain* rather than the host's, and the result names no symbol
+newer than **GLIBC_2.17**. That is CentOS 7 vintage: older than any desktop distribution still
+in use. **23.4 MB stripped**, for x86-64 and ARM64.
 
-musl is not a preference: Swift ships exactly one fully-static target, and glibc resolves DNS
-through NSS, which `dlopen`s at runtime — so a statically linked glibc binary breaks the one
-thing this tool does on every run.
+**libheif, x265, ffmpeg, libcurl, OpenSSL, SQLite and libstdc++ are all statically linked in.** What
+remains dynamic is base-system only — libc, libm, libpthread, libdl, librt, libutil, libcrypt,
+libresolv, libz, libgcc_s. Nothing is shelled out: the keyring is reached in-process through a statically linked libdbus-1 (§1),
+which is what closed the last gap. An earlier draft exec'd `secret-tool` for the password, on
+the grounds that reaching the keyring in-process meant linking glib. It does not — that is true
+of *libsecret*, not of libdbus, which has no glib dependency at all. The client costs
+**204 KB** in the shipped binary.
+
+> Building against an old toolchain is what makes the floor low, and it has one recurring cost:
+> anything compiled against a *newer* glibc will not link. Before glibc 2.34, `pthread_create`
+> and the `sem_*` family live in libpthread rather than libc, so a `.pc` file that omits
+> `-lpthread` fails at link time rather than at configure time.
 
 > **x265 is GPLv2.** A statically linked binary inherits GPL terms *if distributed*.
 > Irrelevant for personal use; relevant the day it goes on GitHub with release artifacts.
 
-macOS builds need no external tools at all — it reuses the iOS `ImageBackend`.
+macOS builds need no external tools at all — they reuse the iOS `ImageBackend`.
 Windows is unblocked but untargeted.
 
 ### Dependencies
 
-**URLSession + swift-crypto + swift-argument-parser. No Soto, no swift-nio, no glib.**
+**Ktor + SQLDelight + KotlinCrypto + clikt. No glib, no AWS SDK.**
 
-swift-argument-parser is pure Swift and links statically under musl without trouble; §7's
-objection to Soto was swift-nio's static-link cost and its lack of Windows support, not
-dependencies as such, and subcommands, `--help`, validation and exit codes are most of what a
-CLI is.
+Ktor is both the platform abstraction and the test seam (see *Ports and adapters*): its curl
+engine on Linux, its Darwin engine on iOS, `MockEngine` in tests. `HttpRequestRetry` covers
+the backoff policy. SQLDelight generates the query layer; it supplies no SQLite of its own, so
+which SQLite is linked is a separate decision (§3). clikt gives subcommands, `--help`,
+validation and exit codes, which are most of what a CLI is.
 
 **glib stays out, which means no libsecret.** Reaching the desktop keyring through libsecret
-would drag meson, libffi, PCRE2, proxy-libintl, libgcrypt and libgpg-error into both build
-prefixes for about 8 MB — and glib `dlopen`s its GIO modules, which is a stub that always
-fails in a static musl binary. The same reasoning already kept libvips out
+would drag meson, libffi, PCRE2, proxy-libintl, libgcrypt and libgpg-error into the build
+prefix for about 8 MB — and glib `dlopen`s its GIO modules, which is a stub that always fails
+in a statically linked binary. The same reasoning already kept libvips out
 (`Scripts/PROVENANCE.md`).
 
 **libdbus-1 comes in, and it is not glib.** The Secret Service is a D-Bus protocol, and
@@ -797,24 +938,22 @@ expat comes with it — 377 KB of archive, no dependencies of its own, and nothi
 includes it. Both are pinned in `build-native.sh`; dbus at 1.14.10 because 1.16 dropped
 autotools for meson.
 
-**The Swift options were measured and refused.** `KeyringAccess` is the right shape and
-Apache-2.0, but reaches the bus through `wendylabsinc/dbus`, which is built on SwiftNIO, and
-brings CryptoSwift and swift-nio-ssl with it. Measured against the Static Linux SDK: **+8.5 MB
-and +18 packages** — nio-http2, swift-certificates and service-lifecycle among them, plus a
-second BoringSSL beside swift-crypto's — to read one password once per run. The objection is
-the graph on the credential path, not the megabytes; the note above about swift-nio's
-static-link cost was written about Soto on the hot path of every request, and does not by
-itself decide this case.
+**There is no keyring library to reach for.** Nothing in Kotlin speaks the Secret Service, on
+any target. The JVM options either exec `secret-tool` — which the paragraph above rules out —
+or bind libsecret through JNA, which drags glib back in. So the D-Bus client is ours, over
+cinterop'd libdbus-1, and the iOS side gets `SecItem*` free through Apple framework interop.
+That is the same split as every other port here: one contract, two adapters, neither of them a
+dependency.
 
 ### S3 layer
 
-**A hand-written AWS4-HMAC-SHA256 signer over URLSession.**
+**A hand-written AWS4-HMAC-SHA256 signer over Ktor.**
 
-Soto pulls in swift-nio, which is large to link statically and does not support Windows.
 The signing surface here is small — one service (`s3`), one region, static credentials, no STS
-or session tokens, path-style URLs — roughly 150 lines. There is no production-ready standalone
-SigV4 signer for Swift: `SotoSignerV4` lives in soto-core (NIO), and `aws-crt-swift` is
-explicitly developer preview.
+or session tokens, path-style URLs — roughly 150 lines, and it is validated against AWS's
+published test vectors. An AWS SDK would bring a request/response stack, a credential-provider
+chain and a retry policy this design has already decided differently about, to sign one kind of
+request against one endpoint.
 
 **Validate against AWS's published SigV4 test vectors.** A subtle signing bug fails *every*
 request, so this is the one place that needs real test coverage.
@@ -912,7 +1051,7 @@ what the zone contains; the other two decide nothing at all.
   The CLI carries no built-in exclusions — no extension list, no filename list, not even a
   dot-file rule. The single hardcoded rule is that `.photosignore` excludes itself. What
   counts as junk is a fact about a particular library, and baking one library's photo-manager
-  artefacts into a package this document presents as reusable is the mixing of concerns
+  artefacts into a tool this document presents as reusable is the mixing of concerns
   `INGEST.md` exists to prevent.
   - **Syntax**: `fnmatch` globs (`*`, `?`, `[abc]`); a pattern with no `/` matches a file's
     name at any depth, one containing `/` is anchored to the root; a trailing `/` means a
@@ -999,6 +1138,11 @@ foreground and recomputed on return. Background uploads must come from files on 
 (`uploadTask(with:fromFile:)`), which suits us since derivatives are written out anyway.
 Presented as a **bottom sheet, minimizable** to a progress pill.
 
+This is the one HTTP path that does not go through Ktor, whose Darwin engine cannot drive a
+background session — so it is a **`BackgroundUploader` port**, with a Kotlin/Native adapter
+over `URLSession` on iOS and a plain foreground implementation everywhere else. The manifest
+below is the port's own state, which is what makes reconciliation testable without a device.
+
 **Resume.** The app persists an upload manifest, re-creates the background session with the same
 identifier on launch, diffs `getAllTasks` against the manifest and re-queues what is missing —
 silently, no prompt.
@@ -1049,40 +1193,40 @@ AWS4 signer + S3 client: GET with ranges, PUT, HEAD, LIST v2 with `encoding-type
 multipart. Verified by AWS SigV4 test vectors, then a round-trip against a local S3 server.
 
 **B · Catalog** *(needs A's `S3Client`; buildable against it the day A lands)*
-DDL, shard writer/reader, thumbnail packs, merged-DB rebuild, the LIST-diff sync loop, NFC
-normalisation, EXIF-tag mapping and hierarchy rules. Verified with synthetic fixtures and a
-stubbed transport, no network — plus a **measured full-scale rebuild**: 288 shards, 337
-albums, 34,607 rows, inside §4's 1–3 s budget, since that is the one number E inherits and
-cannot renegotiate.
+DDL, shard writer/reader, thumbnail packs, merged-DB rebuild, the LIST-diff sync loop,
+EXIF-tag mapping and hierarchy rules. Verified with synthetic fixtures and
+`MockEngine`, no network — plus a **measured full-scale rebuild**: 288 shards, 337 albums,
+34,607 rows, inside §4's 1–3 s budget, since that is the one number E inherits and cannot
+renegotiate.
 
-**C · Derivative pipeline** *(needs `PhotosCore`, extracted from B)*
+**C · Derivative pipeline** *(needs the domain's EXIF and derivative contracts, extracted from B)*
 Thumbs, previews, video transcode, CR2 extraction, Live-Photo pairing, `.photosignore`
-filtering, and the Linux `ImageBackend`. Verified by running over the real library and checking output against
-previously measured sizes and counts (see `INGEST.md`) — any large deviation means the pipeline
-is wrong. `photos-scan` is that check, made repeatable.
+filtering, and the Linux `ImageBackend` adapter. Verified by running over the real library and
+checking output against previously measured sizes and counts (see `INGEST.md`) — any large
+deviation means the pipeline is wrong. `photos-scan` is that check, made repeatable.
 
-> §10 originally had D absorb it as `photos scan`. It does not: the figures it compares
-> against were measured from one particular library, and compiling those into a package this
-> document presents as reusable is the mixing of concerns `INGEST.md` exists to prevent. It
-> stays a dev-only target, built from source when the pipeline changes and never installed.
+> `photos-scan` is deliberately not a subcommand of the shipped binary: the figures it compares
+> against were measured from one particular library, and compiling those into a tool this
+> document presents as reusable is the mixing of concerns `INGEST.md` exists to prevent. It is
+> built from source when the pipeline changes, and never installed.
 
-> §10 originally called C dependency-free. It is not: `ImageBackend`, `ExifTags`, `MediaType`
-> and `PhotoRow` are contracts both the catalog and the pipeline own, so they live in a
-> `PhotosCore` target below both. C does not link SQLite.
+> C is not dependency-free. `ImageBackend`, `ExifTags`, `MediaType` and `PhotoRow` are contracts
+> both the catalog and the pipeline own, so they sit in the domain below both.
 >
-> Traversal lives in a further target, `PhotosLibrary` — `$LIBRARY_ROOT` as something you walk,
-> with its own `.photosignore`. It sits below D rather than inside the pipeline because the
-> phone uploads from `PHAssetCollection` and has no library tree to walk.
+> Traversal is separate again — `$LIBRARY_ROOT` as something you walk, with its own
+> `.photosignore`. It sits below D rather than inside the pipeline because the phone uploads
+> from `PHAssetCollection` and has no library tree to walk.
 
 **D · Ingest CLI** = A+B+C — first real data in the bucket.
-`PhotosIngest` holds every rule that decides what the zone should contain — folder→album
-matching, the per-album diff, container synthesis, the mixed-folder and too-new-shard rules,
-the pull, the sweep — and `photos-cli` is argument parsing and wiring over it. That split is
-not tidiness: this is the code that can lose photographs, and it has to be reachable from a
-test with a temporary directory and nothing else.
+The domain holds every rule that decides what the zone should contain — folder→album matching,
+the per-album diff, container synthesis, the mixed-folder and too-new-shard rules, the pull,
+the sweep — and `photos-cli` is argument parsing and wiring over it. That split is not
+tidiness: this is the code that can lose photographs, and it has to be reachable from a test
+with a temporary directory and nothing else.
 *Ingest one album end-to-end before the bulk import.*
 
-**E · iOS read-only app** = B — first point the project is useful. Can start on fixtures.
+**E · iOS read-only app** = B — first point the project is useful. Can start on fixtures, and
+runs on the Linux desktop harness (§6) long before it runs on a phone.
 It must render an album with **zero photos**: emptying a directory leaves one (§7).
 
 **F · Map** = B — parallel with E.
@@ -1113,20 +1257,23 @@ confirmed, which de-risks milestone A considerably:
 | Directory markers in LIST | **present, must be filtered** |
 | Header-auth PUT with `UNSIGNED-PAYLOAD` | **accepted** — so file uploads skip the hashing pass |
 
-Verified during milestone A, on Linux with the Static Linux SDK:
+Verified on Linux, building the shipped configuration:
 
 | check | result |
 |---|---|
-| swift-crypto, FoundationXML, FoundationNetworking under musl | **all link statically**, 63 MB stripped |
-| static ELF makes real HTTPS requests | **works** — no dynamic linker |
 | SigV4 signer vs. AWS vector suite (38 cases, both auth modes) | **green at every stage** |
+| the C shim bound from Kotlin/Native by cinterop | **no glue layer** — decode, resize, colour-convert, JPEG, HEIC and MP4 all drive from Kotlin |
+| libheif, x265, libde265, ffmpeg built against the gcc 8.3 / glibc 2.19 toolchain | **all build**, C++ included |
+| Ktor over statically linked libcurl + OpenSSL | **real HTTPS request, 200 with body** — DNS and TLS both work |
+| SQLDelight over the platform SQLite | **binds cleanly**, no duplicate symbols |
+| shipped binary | **23.4 MB stripped, floor GLIBC_2.17** |
 
-> **A hazard found while building A.** swift-corelibs-foundation's `XMLParser`
-> returns `true` for a *truncated* document, merely setting `parserError`, and
-> succeeds outright on an empty one. Since LIST is the whole sync mechanism and a
-> missing key means "album deleted", a connection dropped mid-LIST would otherwise
-> parse as zero objects and drop the entire catalog. The parser therefore requires
-> a `<ListBucketResult>` element that was both opened and closed.
+> **A hazard worth keeping in mind.** An XML parser that accepts a *truncated* document is a
+> catalog-destroying bug here, not a cosmetic one: LIST is the whole sync mechanism, and a
+> missing key means "album deleted", so a connection dropped mid-LIST would parse as zero
+> objects and drop everything. The parser must require a `<ListBucketResult>` that was both
+> opened and closed — and the tests must exercise the real HTTP client rather than a stub, or
+> this class of failure never surfaces.
 
 **Egress is billed only when traffic goes through the CDN.** Direct reads from the storage
 API are free — confirmed by the account owner. This fully validates §2's decision to skip the
@@ -1139,5 +1286,12 @@ often as wanted at no bandwidth cost.
 
 ### Remaining unknowns
 
-*None are technical — every storage-layer assumption above is verified against a live zone.*
+Every storage-layer assumption above is verified against a live zone, and the CLI's whole
+dependency stack is verified on Linux. Two things are not, and both need Apple hardware:
+
+- **whether a Compose lazy grid sustains §6's prefetch at scale on a device** — 385 KB per
+  tile, at grid scroll speed. It is E's central screen and the harness cannot answer it.
+- **whether the platform SQLite on iOS behaves as §3 assumes.** The SQL floor is 2018, so this
+  is expected rather than doubted, but it is untested.
+
 Library-specific open items (unlocated albums, deferred UI) are tracked in `INGEST.md`.
