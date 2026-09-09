@@ -49,6 +49,45 @@ val buildShim by tasks.registering {
     }
 }
 
+/**
+ * The same C, again, as a **host** shared library for the JVM side to bind through FFM.
+ *
+ * Built with the host's gcc rather than konan's: this one is loaded by a JVM running on this
+ * machine, so it links against this machine's glibc, and §7's 2.19 floor is the shipped CLI's
+ * concern rather than a development surface's. The prefix's static archives are position
+ * independent, so they go into a `.so` unchanged.
+ */
+val hostShimOut = layout.buildDirectory.dir("shim-host")
+val buildHostShim by tasks.registering {
+    group = "build"
+    description = "Compiles CImaging's decode path into libphotosdecode.so for the JVM adapter"
+    inputs.dir(shimSource)
+    outputs.dir(hostShimOut)
+    doLast {
+        val out = hostShimOut.get().asFile.apply { mkdirs() }
+        val lib = nativePrefix.resolve("lib")
+        // Decode only, and deliberately so. The full shim cannot become a shared object at
+        // all: ffmpeg's swscale and x265 both ship hand-written assembly with absolute
+        // relocations, which a `.so` cannot carry. Neither is needed to *read* a photograph --
+        // swscale resizes, x265 encodes -- and the app only ever decodes.
+        val units = listOf("pi_decode.c", "pi_common.c", "pi_heif.c", "pi_jpeg.c", "pi_color.c")
+        providers.exec {
+            commandLine(
+                listOf("gcc", "-O2", "-fPIC", "-std=c11", "-shared",
+                    "-o", out.resolve("libphotosdecode.so").absolutePath) +
+                    units.map { shimSource.resolve(it).absolutePath } +
+                    listOf(
+                        "-I", shimSource.resolve("include").absolutePath,
+                        "-I", nativePrefix.resolve("include").absolutePath,
+                        "-L$lib", "-Wl,--start-group",
+                        "-lheif", "-lde265", "-ljpeg", "-llcms2", "-lavutil",
+                        "-Wl,--end-group", "-lstdc++", "-lm", "-lpthread", "-ldl",
+                    ),
+            )
+        }.standardOutput.asText.get()
+    }
+}
+
 // The .def is generated rather than checked in, so the prefix path stays derived from the
 // build instead of pasted into a file that goes stale. Written during configuration because
 // its content is a pure function of paths -- cinterop wants it to exist before any task runs.
@@ -138,7 +177,9 @@ kotlin {
     // Both runtimes here are Linux; what differs is Kotlin/Native-with-cinterop versus the
     // JVM. That is a source set, not a second module -- and Gradle resolves per target, so
     // `:app:cli` never sees the JVM variant and `:app:desktop` never sees cinterop.
-    jvm()
+    jvm {
+        compilations.getByName("main").compileTaskProvider.configure { dependsOn(buildHostShim) }
+    }
     linuxX64 {
         compilations.getByName("main").cinterops.create("photosdbus") {
             definitionFile.set(dbusDefFile)
@@ -160,6 +201,9 @@ kotlin {
             implementation(libs.kotlinx.io.core)
             implementation(libs.sqldelight.driver.native)
         }
+        jvmTest.dependencies {
+            implementation(kotlin("test"))
+        }
         jvmMain.dependencies {
             implementation(project(":domain"))
             implementation(libs.sqldelight.driver.jdbc)
@@ -172,4 +216,15 @@ kotlin {
             implementation(project(":tests:fixtures"))
         }
     }
+}
+
+// The FFM tests load the shared object by path rather than by `System.loadLibrary`, so the
+// build hands them the one it just compiled -- there is no installed copy to find.
+tasks.named<Test>("jvmTest") {
+    dependsOn(buildHostShim)
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    systemProperty(
+        "photos.decode.library",
+        hostShimOut.get().asFile.resolve("libphotosdecode.so").absolutePath,
+    )
 }
