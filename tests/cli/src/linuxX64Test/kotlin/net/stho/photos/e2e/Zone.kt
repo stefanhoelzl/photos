@@ -10,6 +10,7 @@ import kotlin.uuid.Uuid
 import kotlinx.coroutines.flow.toList
 import kotlinx.io.files.Path
 import net.stho.photos.catalog.AlbumInfo
+import net.stho.photos.catalog.AlbumState
 import net.stho.photos.catalog.BLOB_PREFIX
 import net.stho.photos.catalog.META_PREFIX
 import net.stho.photos.catalog.Shard
@@ -76,12 +77,22 @@ internal class GivenAlbum(private val name: String) {
     /** Null means unclaimed: no local directory has been connected to this album yet. */
     var sourcePath: String? = null
 
+    /**
+     * Defaults to what the path implies: an album with no `source_path` is one the phone made
+     * and finished uploading, so it is `uploaded` at encoding version 0 — the only shape the
+     * CLI pulls from. One that names a path is already the laptop's.
+     */
+    var state: AlbumState? = null
+
     val id: Uuid = Uuid.random()
     private val photos = mutableListOf<GivenPhoto>()
 
     fun photo(filename: String, width: Int = 160, height: Int = 120) {
         photos += GivenPhoto(filename, width, height)
     }
+
+    private val resolvedState: AlbumState
+        get() = state ?: if (sourcePath == null) AlbumState.UPLOADED else AlbumState.ENCODED
 
     internal suspend fun materialise(s3: S3Client, scratch: Path) {
         val rows = photos.map { photo ->
@@ -117,6 +128,12 @@ internal class GivenAlbum(private val name: String) {
                 name = name,
                 sourcePath = sourcePath,
                 thumbsId = thumbsId,
+                state = resolvedState,
+                encodingVersion = if (resolvedState == AlbumState.ENCODED) {
+                    DerivativeSpec.ENCODING_VERSION
+                } else {
+                    0
+                },
                 addedAt = Instant.fromEpochSeconds(Clock.System.now().epochSeconds),
             ),
             photos = rows,

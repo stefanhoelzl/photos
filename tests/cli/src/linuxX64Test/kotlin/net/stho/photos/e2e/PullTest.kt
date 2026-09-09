@@ -4,11 +4,11 @@ import kotlin.test.Test
 import net.stho.photos.ingest.ExitCode
 
 /**
- * §7's archive-only pull: the one direction in which `sync` writes into the library.
+ * §7's pull: the one direction in which `sync` writes into the library.
  *
- * A shard with no `source_path` is an album no local directory has been connected to -- what an
- * album the phone created looks like (§8). The laptop archives it and claims it by writing
- * `source_path`, after which it is an ordinary album, deletable like any other.
+ * An `uploaded` shard is one the phone finished uploading and nothing has encoded (§8). The
+ * laptop claims it, archives it, re-derives it and writes `encoded` -- after which it is an
+ * ordinary album, deletable like any other.
  *
  * This is also the scenario that needs the zone materialised directly: no CLI run produces an
  * unclaimed shard, because every album a run creates is one it found on disk.
@@ -41,6 +41,34 @@ class PullTest {
                     sourcePath("FromPhone")
                     photo("0001.jpg")
                     photo("0002.jpg")
+                }
+            }
+        }
+    }
+
+    /**
+     * The transition has to complete, or the album is pulled again on every run forever. The
+     * assertion that matters is `encoded`: it is what takes the album out of the pull set.
+     */
+    @Test
+    fun aPulledAlbumEndsUpEncodedAndIsNotPulledAgain() = scenario("pull-completes") {
+        library { photosignore() }
+        zone {
+            empty()
+            album("FromPhone") { photo("0001.jpg", width = 160, height = 120) }
+        }
+
+        run("sync")
+        run("sync")
+
+        expect {
+            exit(ExitCode.CLEAN)
+            library { exists("FromPhone/0001.jpg") }
+            zone {
+                album("FromPhone") {
+                    sourcePath("FromPhone")
+                    encoded()
+                    photo("0001.jpg")
                 }
             }
         }

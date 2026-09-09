@@ -573,26 +573,29 @@ public class Ingest(
      */
     private suspend fun archive(pull: PullPlan, etags: Map<Uuid, ETag>, report: ReportBuilder) {
         val directory = Path(config.libraryRoot, *pull.sourcePath.split('/').toTypedArray())
-        var files = 0
+        val downloaded = mutableListOf<Path>()
         var bytes = 0L
         try {
+            var etag = etags[pull.shard.info.id]
             if (!pull.claimed) {
                 val claimed = pull.shard.info.copy(sourcePath = pull.sourcePath)
-                val write = catalog.writeShard(
-                    Shard(claimed, pull.shard.photos),
-                    ifMatch = etags[claimed.id],
-                )
-                if (write == ShardWriteResult.StaleETag) {
-                    report.contendedAlbums += pull.sourcePath
-                    return
+                when (val write = catalog.writeShard(Shard(claimed, pull.shard.photos), ifMatch = etag)) {
+                    is ShardWriteResult.Written -> etag = write.etag
+                    ShardWriteResult.StaleETag -> {
+                        report.contendedAlbums += pull.sourcePath
+                        return
+                    }
                 }
             }
+
             SystemFileSystem.createDirectories(directory)
             for (row in pull.shard.photos) {
+                // A Live Photo keeps an untouched still precisely so its identifier survives, so
+                // that is the file to archive when there is one (§5).
                 val primary = row.liveStillId ?: row.imageId ?: row.videoId ?: continue
                 val destination = Path(directory, row.filename)
                 if (!SystemFileSystem.exists(destination)) s3.download(primary.blobKey, destination)
-                files++
+                downloaded += destination
                 bytes += row.bytes ?: 0
                 // The paired MOV has no name of its own in the catalog. `<stem>.MOV` is the
                 // convention every pair in this library follows, and pairing is by content
@@ -600,12 +603,38 @@ public class Ingest(
                 row.liveVideoId?.let { liveVideoId ->
                     val path = Path(directory, row.filename.withExtension("MOV"))
                     if (!SystemFileSystem.exists(path)) s3.download(liveVideoId.blobKey, path)
-                    files++
+                    downloaded += path
                 }
             }
+            report.pulledAlbums += IngestReport.PulledAlbum(pull.sourcePath, downloaded.size, bytes)
+            emit(IngestEvent.Line("v ${pull.sourcePath}  ${downloaded.size} files pulled"))
 
-            report.pulledAlbums += IngestReport.PulledAlbum(pull.sourcePath, files, bytes)
-            emit(IngestEvent.Line("v ${pull.sourcePath}  $files files pulled"))
+            commit(
+                AlbumPlan(
+                    id = pull.shard.info.id,
+                    name = pull.shard.info.name,
+                    sourcePath = pull.sourcePath,
+                    parent = pull.shard.info.parent,
+                    directory = directory,
+                    existing = pull.shard,
+                    uploads = downloaded,
+                    files = downloaded,
+                    keep = emptyList(),
+                    // The rows the phone wrote, and the full-quality blobs they own. Deleting
+                    // them is the ordinary drop path, and it runs only now that the library
+                    // holds the files they were the only copy of.
+                    drop = pull.shard.photos,
+                    mixedFileCount = 0,
+                    reencoding = true,
+                ),
+                etags = etag?.let { mapOf(pull.shard.info.id to it) } ?: emptyMap(),
+                report = report,
+            )
+            // Every file is now on disk, so the album can be derived like any other — which is
+            // what finally moves it to `encoded` and deletes the phone's full-quality blobs. It
+            // happens here rather than on a later run because only this code knows the download
+            // completed: a run that stopped halfway leaves the state at `uploaded`, and the next
+            // one resumes into the same directory and skips what is already there.
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {

@@ -9,6 +9,7 @@ import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 import net.stho.photos.adapter.linux.CImagingProbe
 import net.stho.photos.adapter.linux.imageDimensions
+import net.stho.photos.catalog.AlbumState
 import net.stho.photos.catalog.Shard
 import net.stho.photos.catalog.ThumbPack
 import net.stho.photos.catalog.blobKey
@@ -221,13 +222,14 @@ internal class ZoneExpectations {
 internal class ExpectedAlbum {
     internal val files = mutableMapOf<String, Unit>()
     private var sourcePath: String? = null
+    private var state: AlbumState? = null
 
-    /** A still: thumbnail, preview and original are implied. */
+    /** A still: a thumbnail and one viewing image are implied. */
     fun photo(filename: String) {
         files[filename] = Unit
     }
 
-    /** A video: thumbnail, preview poster and video blob, and no original (§3). */
+    /** A video: a thumbnail, an image_id poster and a video blob (§3). */
     fun video(filename: String) {
         files[filename] = Unit
     }
@@ -236,14 +238,30 @@ internal class ExpectedAlbum {
         sourcePath = path
     }
 
+    /** The laptop owns this album and its images are at the current profile. */
+    fun encoded() {
+        state = AlbumState.ENCODED
+    }
+
     internal fun checkSourcePath(scenario: String, album: String, shard: Shard) {
-        val expected = sourcePath ?: return
-        if (shard.info.sourcePath != expected) {
-            throw LibraryWrong(
-                scenario,
-                listOf("album $album has source_path ${shard.info.sourcePath}, expected $expected"),
-            )
+        val problems = mutableListOf<String>()
+        sourcePath?.let {
+            if (shard.info.sourcePath != it) {
+                problems += "album $album has source_path ${shard.info.sourcePath}, expected $it"
+            }
         }
+        state?.let {
+            if (shard.info.state != it) {
+                problems += "album $album is ${shard.info.state}, expected $it"
+            }
+            if (it == AlbumState.ENCODED &&
+                shard.info.encodingVersion != DerivativeSpec.ENCODING_VERSION
+            ) {
+                problems += "album $album is at encoding version ${shard.info.encodingVersion}, " +
+                    "expected ${DerivativeSpec.ENCODING_VERSION}"
+            }
+        }
+        if (problems.isNotEmpty()) throw LibraryWrong(scenario, problems)
     }
 }
 
