@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# Builds milestone C's native imaging stack into a prefix SwiftPM can point at.
+# Builds the native imaging stack, plus SQLite, OpenSSL, curl and libdbus, into the prefix
+# Kotlin/Native links against.
 #
-#     Scripts/build-native.sh host      -> .tools/native/host   (glibc; what `swift test` links)
-#     Scripts/build-native.sh musl      -> .tools/native/musl   (what the release binary links)
+#     Scripts/build-native.sh           -> .tools/native/konan
 #
-# Two prefixes are not a preference. The Static Linux SDK ships no XCTest and no
-# swift-testing, so tests can only ever run on the host -- while §7's deliverable is the
-# musl binary. Building both from one pinned recipe is what keeps the tested configuration
-# and the shipped one the same code.
+# One prefix, built with Kotlin/Native's own toolchain -- see the toolchain block below for
+# why that is not optional.
 #
 # Everything lands in .tools/ (gitignored) and nothing is installed system-wide; this
 # machine has no sudo. Versions and their reasons live in PROVENANCE.md beside this script.
@@ -18,11 +16,8 @@ TOOLS="$ROOT/.tools"
 SRC="$TOOLS/native/src"
 BIN="$TOOLS/bin"
 
-TARGET="${1:-}"
-case "$TARGET" in
-    host|musl|konan) ;;
-    *) echo "usage: $0 <host|musl>" >&2; exit 2 ;;
-esac
+# One prefix. The argument the Swift tree needed is gone with it.
+TARGET=konan
 
 PREFIX="$TOOLS/native/$TARGET"
 BUILD="$TOOLS/native/build-$TARGET"
@@ -93,78 +88,27 @@ fi
 export PATH="$BIN:$PATH"
 
 # ---------------------------------------------------------------- toolchain
-# Finding the toolchain by following `swift` lands in swiftly's shim directory, where every
-# entry -- including the musl clang config files -- is a symlink to the swiftly binary. clang
-# then tries to parse an ELF as a config file. So a candidate only counts if its musl config
-# is a real config: a readable file naming the triple.
-find_toolchain() {
-    local c cfg
-    for c in "$(dirname "$(readlink -f "$(command -v swiftc 2>/dev/null)" 2>/dev/null)")" \
-             $(ls -d "$HOME"/.local/share/swiftly/toolchains/*/usr/bin 2>/dev/null) \
-             /usr/lib/swift/bin /usr/bin; do
-        cfg="$c/x86_64-swift-linux-musl-clang.cfg"
-        if [ -x "$c/clang" ] && [ -f "$cfg" ] && grep -q -- "-target x86_64-swift-linux-musl" "$cfg" 2>/dev/null; then
-            echo "$c"; return 0
-        fi
-    done
-    return 1
-}
-if [ "$TARGET" != konan ]; then
-    SWIFT_TC="$(find_toolchain)" || { echo "no Swift toolchain with musl clang configs found" >&2; exit 1; }
-    echo "toolchain: $SWIFT_TC" >&2
-fi
-
-if [ "$TARGET" = musl ]; then
-    SDK_ROOT="$(ls -d "$HOME"/.swiftpm/swift-sdks/*static-linux*.artifactbundle/*/swift-linux-musl 2>/dev/null | head -1)"
-    [ -n "$SDK_ROOT" ] || { echo "Static Linux SDK not installed" >&2; exit 1; }
-    SYSROOT="$SDK_ROOT/musl-1.2.5.sdk/x86_64"
-    [ -d "$SYSROOT" ] || { echo "musl sysroot missing at $SYSROOT" >&2; exit 1; }
-
-    # The toolchain ships ready-made config files for this exact triple; they set
-    # -target/-rtlib/-stdlib/-fuse-ld/-unwindlib/-static so we do not have to guess.
-    CC="$SWIFT_TC/clang --config $SWIFT_TC/x86_64-swift-linux-musl-clang.cfg --sysroot=$SYSROOT"
-    CXX="$SWIFT_TC/clang++ --config $SWIFT_TC/x86_64-swift-linux-musl-clang++.cfg --sysroot=$SYSROOT"
-    AR="$SWIFT_TC/llvm-ar"
-    RANLIB="$SWIFT_TC/llvm-ranlib"
-    NM="$SWIFT_TC/llvm-nm"
-    STRIP="$SWIFT_TC/llvm-strip"
-    HOST_TRIPLE=x86_64-linux-musl
-    CROSS=1
-    CXX_RUNTIME_LIBS="-lc++ -lc++abi -lunwind"
-elif [ "$TARGET" = konan ]; then
-    # Kotlin/Native links linuxX64 against its own bundled crosstool-NG toolchain -- gcc 8.3.0,
-    # glibc 2.19, kernel 4.9 headers. Building the imaging stack with that *same* toolchain is
-    # what makes the two agree at link time, and it is what drops the shipped binary's glibc
-    # floor to 2.17 (§7). Built with the host's gcc instead, the prefix pulls in libmvec,
-    # __isoc23_strtol, __libc_single_threaded and the modern libstdc++ __cxx11 ABI, none of
-    # which konan's sysroot has.
-    KTC="$(ls -d "$HOME"/.konan/dependencies/x86_64-unknown-linux-gnu-gcc-*-glibc-*/ 2>/dev/null | head -1)"
-    [ -n "$KTC" ] || { echo "konan gcc toolchain not found under ~/.konan/dependencies; link a linuxX64 binary once to fetch it" >&2; exit 1; }
-    KTC="${KTC%/}"; KP="$KTC/bin/x86_64-unknown-linux-gnu"
-    echo "toolchain: $KTC" >&2
-    CC="$KP-gcc"
-    CXX="$KP-g++"
-    AR="$KP-ar"
-    RANLIB="$KP-ranlib"
-    NM="$KP-nm"
-    STRIP="$KP-strip"
-    HOST_TRIPLE=x86_64-unknown-linux-gnu
-    # Deliberately NOT a cross build. A glibc-2.19 binary runs on a modern glibc host, so
-    # configure's test programs execute normally and every cross-compile guard below would be
-    # ceremony -- cmake try_run included.
-    CROSS=0
-    CXX_RUNTIME_LIBS="-lstdc++"
-else
-    CC=gcc
-    CXX=g++
-    AR=ar
-    RANLIB=ranlib
-    NM=nm
-    STRIP=strip
-    HOST_TRIPLE=x86_64-linux-gnu
-    CROSS=0
-    CXX_RUNTIME_LIBS="-lstdc++"
-fi
+# Kotlin/Native links linuxX64 against its own bundled crosstool-NG toolchain -- gcc 8.3.0,
+# glibc 2.19, kernel 4.9 headers -- and nothing else. Building the imaging stack with that
+# *same* toolchain is what makes the two agree at link time, and it is what drops the shipped
+# binary's glibc floor to 2.17 (§7). Built with the host's gcc instead, the prefix pulls in
+# libmvec, __isoc23_strtol, __libc_single_threaded and the modern libstdc++ __cxx11 ABI, none
+# of which konan's sysroot has.
+KTC="$(ls -d "$HOME"/.konan/dependencies/x86_64-unknown-linux-gnu-gcc-*-glibc-*/ 2>/dev/null | head -1)"
+[ -n "$KTC" ] || { echo "konan gcc toolchain not found under ~/.konan/dependencies; link a linuxX64 binary once to fetch it" >&2; exit 1; }
+KTC="${KTC%/}"; KP="$KTC/bin/x86_64-unknown-linux-gnu"
+echo "toolchain: $KTC" >&2
+CC="$KP-gcc"
+CXX="$KP-g++"
+AR="$KP-ar"
+RANLIB="$KP-ranlib"
+NM="$KP-nm"
+STRIP="$KP-strip"
+HOST_TRIPLE=x86_64-unknown-linux-gnu
+# Deliberately NOT a cross build. A glibc-2.19 binary runs on a modern glibc host, so
+# configure's test programs execute normally and every cross-compile guard below would be
+# ceremony -- cmake try_run included.
+CXX_RUNTIME_LIBS="-lstdc++"
 
 # -ffunction-sections/-fdata-sections let the final link drop everything unreferenced, which
 # is what keeps ffmpeg's enumerated codec set from costing what a full build would.
@@ -173,8 +117,8 @@ COMMON_CFLAGS="-O2 -fPIC -ffunction-sections -fdata-sections"
 export CC CXX AR RANLIB NM STRIP
 export CFLAGS="$COMMON_CFLAGS"
 export CXXFLAGS="$COMMON_CFLAGS"
-# Cross builds must not see the host's .pc files, or configure scripts happily link glibc
-# libraries into a musl target and only the final link says so.
+# The prefix's own .pc files and nothing else: a configure script that finds the host's would
+# happily link a modern-glibc library in, and only the final link would say so.
 export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 
@@ -189,29 +133,6 @@ CMAKE_ARGS=(
     -DCMAKE_FIND_ROOT_PATH="$PREFIX"
 )
 
-if [ "$CROSS" = 1 ]; then
-    # A toolchain file rather than -DCMAKE_C_COMPILER: cmake must be told it is cross
-    # compiling before it starts probing, or its try-run checks execute musl binaries under
-    # assumptions that do not hold.
-    TCFILE="$BUILD/musl-toolchain.cmake"
-    cat > "$TCFILE" <<TCEOF
-set(CMAKE_SYSTEM_NAME Linux)
-set(CMAKE_SYSTEM_PROCESSOR x86_64)
-set(CMAKE_C_COMPILER "$SWIFT_TC/clang")
-set(CMAKE_CXX_COMPILER "$SWIFT_TC/clang++")
-set(CMAKE_C_FLAGS_INIT "--config $SWIFT_TC/x86_64-swift-linux-musl-clang.cfg --sysroot=$SYSROOT")
-set(CMAKE_CXX_FLAGS_INIT "--config $SWIFT_TC/x86_64-swift-linux-musl-clang++.cfg --sysroot=$SYSROOT")
-set(CMAKE_AR "$AR" CACHE FILEPATH "")
-set(CMAKE_RANLIB "$RANLIB" CACHE FILEPATH "")
-set(CMAKE_NM "$NM" CACHE FILEPATH "")
-set(CMAKE_SYSROOT "$SYSROOT")
-set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
-TCEOF
-    CMAKE_ARGS+=(-DCMAKE_TOOLCHAIN_FILE="$TCFILE")
-fi
 
 cmake_build() { # cmake_build <srcdir> <name> [extra cmake args...]
     local src="$1" name="$2"; shift 2
@@ -227,7 +148,6 @@ autotools_build() { # autotools_build <srcdir> <name> [configure args...]
     local src="$1" name="$2"; shift 2
     rm -rf "$BUILD/$name"; mkdir -p "$BUILD/$name"
     local host_arg=()
-    [ "$CROSS" = 1 ] && host_arg=(--host="$HOST_TRIPLE")
     ( cd "$BUILD/$name" && "$src/configure" --prefix="$PREFIX" --enable-static --disable-shared \
         "${host_arg[@]}" "$@" ) >"$BUILD/$name.log" 2>&1 \
         || { echo "configure failed for $name; tail:" >&2; tail -30 "$BUILD/$name.log" >&2; exit 1; }
@@ -354,14 +274,7 @@ if ! have ffmpeg; then
         --enable-bsf=hevc_mp4toannexb,h264_mp4toannexb,extract_extradata
         --pkg-config-flags=--static
     )
-    if [ "$CROSS" = 1 ]; then
-        ff_args+=(
-            --enable-cross-compile --target-os=linux --arch=x86_64
-            --cc="$CC" --cxx="$CXX" --ar="$AR" --ranlib="$RANLIB" --nm="$NM" --strip="$STRIP"
-        )
-    else
-        ff_args+=(--cc="$CC" --cxx="$CXX")
-    fi
+    ff_args+=(--cc="$CC" --cxx="$CXX")
 
     ( cd "$BUILD/ffmpeg" && "$d/configure" "${ff_args[@]}" ) >"$BUILD/ffmpeg.log" 2>&1 \
         || { echo "ffmpeg configure failed; tail of $BUILD/ffmpeg.log:" >&2; tail -40 "$BUILD/ffmpeg.log" >&2; exit 1; }
@@ -402,7 +315,6 @@ if ! have dbus; then
     d=$(unpack "$tb" "dbus-$DBUS_V")
     rm -rf "$BUILD/dbus"; mkdir -p "$BUILD/dbus"
     host_arg=()
-    [ "$CROSS" = 1 ] && host_arg=(--host="$HOST_TRIPLE")
     ( cd "$BUILD/dbus" && "$d/configure" --prefix="$PREFIX" --enable-static --disable-shared \
         "${host_arg[@]}" --disable-tests --disable-doxygen-docs --disable-xml-docs \
         --disable-selinux --disable-apparmor --disable-systemd --disable-launchd \
@@ -446,13 +358,6 @@ PCEOF
 # calls into x265, libheif calls into both x265 and libde265, and a static linker resolves
 # strictly left to right. Grouping them is what stops the correct order from being something
 # anyone has to know.
-# ------------------------------------------------- sqlite / openssl / curl (konan only)
-# These three exist for the Kotlin binary and nothing else: the Swift tree takes HTTP from
-# FoundationNetworking and SQLite from Sources/CSQLite, so building them into the host and musl
-# prefixes would be minutes of build time nothing consumes -- and openssl and curl have never
-# been built against the Swift musl toolchain, so it would be untested minutes at that.
-if [ "$TARGET" = konan ]; then
-
 # ---------------------------------------------------------------- sqlite
 # Built here rather than taken from the distro, and the reason is the link, not the SQL.
 # A distro libsqlite3.so is built against that distro's glibc -- Ubuntu 24.04's needs
@@ -525,8 +430,6 @@ if ! have curl; then
         --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt
     stamp curl
 fi
-
-fi  # konan-only block
 
 log "photos-native.pc"
 mkdir -p "$PREFIX/lib/pkgconfig"

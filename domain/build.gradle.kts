@@ -78,7 +78,7 @@ kotlin {
 tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest>().configureEach {
     environment(
         "PHOTOS_SIGV4_FIXTURES",
-        rootDir.resolve("Tests/PhotosStorageTests/Fixtures/sigv4").absolutePath,
+        rootDir.resolve("testdata/sigv4").absolutePath,
     )
 }
 

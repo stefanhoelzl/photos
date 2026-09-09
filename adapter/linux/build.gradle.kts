@@ -1,11 +1,11 @@
 plugins { alias(libs.plugins.kotlin.multiplatform) }
 
-// The Linux half of DESIGN §7's ports: the imaging backend over Sources/CImaging, and later
+// The Linux half of DESIGN §7's ports: the imaging backend over native/CImaging, and later
 // the D-Bus keyring, the flock run lock and the XDG paths.
 
 val nativePrefix: File = rootProject.extra["nativePrefix"] as File
 val konanToolchain: File? = rootProject.extra["konanToolchain"] as File?
-val shimSource: File = rootDir.resolve("Sources/CImaging")
+val shimSource: File = rootDir.resolve("native/CImaging")
 
 val shimOut = layout.buildDirectory.dir("shim")
 
@@ -18,7 +18,7 @@ val shimOut = layout.buildDirectory.dir("shim")
  */
 val buildShim by tasks.registering {
     group = "build"
-    description = "Compiles Sources/CImaging into libphotosimaging.a"
+    description = "Compiles native/CImaging into libphotosimaging.a"
     inputs.dir(shimSource)
     outputs.dir(shimOut)
     doLast {
