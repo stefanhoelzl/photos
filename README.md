@@ -116,7 +116,7 @@ without ever touching your actual credentials.
 
 ## The shipped binary
 
-**31.4 MiB stripped, glibc floor `GLIBC_2.17`** — older than any desktop distribution still in
+**26.6 MiB stripped, glibc floor `GLIBC_2.17`** — older than any desktop distribution still in
 use. libheif, x265, ffmpeg, libcurl, OpenSSL, SQLite and libstdc++ are all linked in; what
 remains dynamic is base-system only:
 
