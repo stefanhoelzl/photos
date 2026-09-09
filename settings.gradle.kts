@@ -13,8 +13,9 @@ dependencyResolutionManagement {
 
 rootProject.name = "photos"
 
-// DESIGN §7's ports-and-adapters split. Modules appear here as they gain content rather than
-// as empty shells: `:adapter:generic`, `:adapter:fake` and `:app:cli` arrive with the domain.
+// DESIGN §7's ports-and-adapters split. `:app:cli` is the composition root: the only place
+// that knows which adapter satisfies which port, and the only place that constructs anything.
 include(":domain")
 include(":adapter:linux")
+include(":app:cli")
 include(":tools:smoke")

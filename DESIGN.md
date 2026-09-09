@@ -893,7 +893,8 @@ What delivers the requirement instead is the **glibc floor**. Kotlin/Native link
 against its own bundled crosstool-NG toolchain — gcc 8.3.0, glibc 2.19 — so the imaging stack
 is built with *that same toolchain* rather than the host's, and the result names no symbol
 newer than **GLIBC_2.17**. That is CentOS 7 vintage: older than any desktop distribution still
-in use. **23.4 MB stripped**, for x86-64 and ARM64.
+in use. **31.4 MiB stripped**, for x86-64 and ARM64 — against 80.6 MiB for the
+statically linked predecessor, which is what dynamic libc and a smaller runtime buy.
 
 **libheif, x265, ffmpeg, libcurl, OpenSSL, SQLite and libstdc++ are all statically linked in.** What
 remains dynamic is base-system only — libc, libm, libpthread, libdl, librt, libutil, libcrypt,
@@ -1271,7 +1272,7 @@ Verified on Linux, building the shipped configuration:
 | libheif, x265, libde265, ffmpeg built against the gcc 8.3 / glibc 2.19 toolchain | **all build**, C++ included |
 | Ktor over statically linked libcurl + OpenSSL | **real HTTPS request, 200 with body** — DNS and TLS both work |
 | SQLDelight over the platform SQLite | **binds cleanly**, no duplicate symbols |
-| shipped binary | **23.4 MB stripped, floor GLIBC_2.17** |
+| shipped `photos-cli` | **31.4 MiB stripped, floor GLIBC_2.17**, base-system libraries only |
 
 > **A hazard worth keeping in mind.** An XML parser that accepts a *truncated* document is a
 > catalog-destroying bug here, not a cosmetic one: LIST is the whole sync mechanism, and a

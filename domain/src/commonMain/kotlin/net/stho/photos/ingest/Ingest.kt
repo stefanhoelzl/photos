@@ -94,7 +94,10 @@ public class Ingest(
     private val uploadPermits = Semaphore(config.uploadJobs)
     private val meter = ProgressMeter(clock)
 
-    private val mutableEvents = MutableSharedFlow<IngestEvent>(extraBufferCapacity = 64)
+    // replay = 1 because the *plan* is the first thing emitted: a collector that subscribes
+    // after `run()` has started would otherwise miss "to do: …" and never know it, which is a
+    // trap laid for every future caller rather than a bug in any one of them.
+    private val mutableEvents = MutableSharedFlow<IngestEvent>(replay = 1, extraBufferCapacity = 64)
 
     /**
      * Progress, for a caller that wants to show it.

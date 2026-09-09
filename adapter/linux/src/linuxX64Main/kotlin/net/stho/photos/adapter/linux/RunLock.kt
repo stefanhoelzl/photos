@@ -127,15 +127,4 @@ private class FlockHandle(private val descriptor: Int) : LockHandle {
     }
 }
 
-/**
- * The lock could not be attempted at all — an unwritable cache directory, say.
- *
- * Distinct from `acquire()` answering null, which means another run holds it and is §7's exit
- * 75. This one stops the run (3).
- */
-public class RunLockFailure(
-    message: String,
-    override val cause: Throwable? = null,
-) : Exception(message)
-
 private fun lastError(): String = strerror(errno)?.toKString() ?: "errno $errno"

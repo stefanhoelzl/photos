@@ -17,7 +17,10 @@ import net.stho.photos.pipeline.VideoInfo
  * testable, its implementation differs by platform, or the domain would otherwise reach for it
  * *statically* rather than receive it. Purity is not a reason, which is why neither the SQL
  * driver nor the HTTP client appears here: SQLDelight and Ktor are already those abstractions,
- * and both ship test doubles of their own. Nor does a clock — `kotlin.time.Clock` is one.
+ * and both ship test doubles of their own. Nor does a clock — `kotlin.time.Clock` is one. Nor,
+ * after the fact, does the run's own reporting: §7's report turned out to be `IngestReport`,
+ * plain data a test asserts on directly, so the port that was going to carry it had no caller
+ * and no fake to be. Rendering it is the CLI's business and lives there.
  */
 
 /**
@@ -133,20 +136,6 @@ public sealed interface LockAttempt {
 }
 
 public interface LockHandle : AutoCloseable
-
-/**
- * Where a run says what it did.
- *
- * §7's report is a contract, not decoration: every unresolved condition is named on *every*
- * run until a person deals with it — unlocated albums, mixed folders, shards too new to read,
- * an ignore rule that matched nothing. Those are assertions worth writing, and asserting on a
- * recording fake beats asserting on captured stdout.
- */
-public interface Reporter {
-    public fun progress(message: String)
-    public fun unresolved(condition: String, detail: String)
-    public fun failed(subject: String, message: String)
-}
 
 /**
  * What a file *is*, and what a video container says about it — both from a bounded read.
