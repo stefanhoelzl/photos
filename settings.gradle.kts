@@ -1,5 +1,5 @@
 pluginManagement {
-    repositories { gradlePluginPortal(); mavenCentral() }
+    repositories { gradlePluginPortal(); mavenCentral(); google() }
 }
 
 plugins {
@@ -8,7 +8,9 @@ plugins {
 }
 
 dependencyResolutionManagement {
-    repositories { mavenCentral() }
+    // Compose Multiplatform republishes the androidx artifacts it is built on, and those live
+    // on Google's Maven rather than Central -- so a Compose target cannot resolve without it.
+    repositories { mavenCentral(); google() }
 }
 
 rootProject.name = "photos"
@@ -18,6 +20,12 @@ rootProject.name = "photos"
 include(":domain")
 include(":adapter:linux")
 include(":app:cli")
+
+// The app (DESIGN §6). `:ui` is one Compose UI plus the non-Compose state tier it renders --
+// sibling packages in one module, the same rule `:domain` follows. `:app:desktop` is its
+// composition root, and the only place that knows which adapter satisfies which port.
+include(":ui")
+include(":app:desktop")
 
 // Test-only modules. `:tests:fixtures` generates the synthetic media both the adapter's own
 // tests and the end-to-end suite work from; `:tests:cli` drives the shipped binary.

@@ -1,5 +1,7 @@
 INGEST.md
 mockups/index.html
+# The desktop app's cache: shards, packs and browsed blobs for this checkout (§4).
+.cache/
 .build/
 .tools/
 
