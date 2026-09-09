@@ -16,7 +16,7 @@ TOOLS="$ROOT/.tools"
 SRC="$TOOLS/native/src"
 BIN="$TOOLS/bin"
 
-# One prefix. The argument the Swift tree needed is gone with it.
+# One prefix, and so no argument to pick between them.
 TARGET=konan
 
 PREFIX="$TOOLS/native/$TARGET"
@@ -108,7 +108,6 @@ HOST_TRIPLE=x86_64-unknown-linux-gnu
 # Deliberately NOT a cross build. A glibc-2.19 binary runs on a modern glibc host, so
 # configure's test programs execute normally and every cross-compile guard below would be
 # ceremony -- cmake try_run included.
-CXX_RUNTIME_LIBS="-lstdc++"
 
 # -ffunction-sections/-fdata-sections let the final link drop everything unreferenced, which
 # is what keeps ffmpeg's enumerated codec set from costing what a full build would.
@@ -307,7 +306,7 @@ fi
 # library is all we link.
 #
 # 1.14.x rather than 1.16: 1.16 dropped autotools for meson, and this script speaks autotools
-# and cmake. --disable-x11-autolaunch matters beyond size -- see Credentials.swift on why the
+# and cmake. --disable-x11-autolaunch matters beyond size -- see DbusKeyring.kt on why the
 # client opens an explicit address rather than letting libdbus fork dbus-launch.
 if ! have dbus; then
     log "dbus $DBUS_V"
@@ -326,38 +325,6 @@ if ! have dbus; then
     stamp dbus
 fi
 
-# ---------------------------------------------------------------- photos-dbus.pc
-# Separate from photos-native.pc because it is a separate concern: PhotosIngest links the
-# keyring client, PhotosPipeline links the imaging stack, and neither should drag the other in
-# because they happen to be built by the same script.
-#
-# dbus splits its headers across two prefixes -- dbus-arch-deps.h is generated per
-# architecture and installed under libdir -- so both directories have to be on the include
-# path or <dbus/dbus.h> fails to resolve its own include.
-log "photos-dbus.pc"
-mkdir -p "$PREFIX/lib/pkgconfig"
-cat > "$PREFIX/lib/pkgconfig/photos-dbus.pc" <<PCEOF
-prefix=$PREFIX
-libdir=\${prefix}/lib
-includedir=\${prefix}/include
-
-Name: photos-dbus
-Description: libdbus-1 for the Secret Service client ($TARGET)
-Version: 1
-Cflags: -I\${includedir}/dbus-1.0 -I\${libdir}/dbus-1.0/include
-Libs: -L\${libdir} -ldbus-1 -lexpat -lpthread
-PCEOF
-
-# ---------------------------------------------------------------- one .pc to rule them all
-# SwiftPM's pkgConfig support calls `pkg-config --libs` without --static, so the transitive
-# static closure has to be spelled out in Libs: rather than left to Libs.private. Writing it
-# ourselves is also what keeps unsafeFlags out of Package.swift -- a package that uses
-# unsafeFlags cannot be consumed as a dependency, and the iOS app will consume this one.
-#
-# --start-group because these archives reference each other in both directions: libavcodec
-# calls into x265, libheif calls into both x265 and libde265, and a static linker resolves
-# strictly left to right. Grouping them is what stops the correct order from being something
-# anyone has to know.
 # ---------------------------------------------------------------- sqlite
 # Built here rather than taken from the distro, and the reason is the link, not the SQL.
 # A distro libsqlite3.so is built against that distro's glibc -- Ubuntu 24.04's needs
@@ -430,20 +397,6 @@ if ! have curl; then
         --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt
     stamp curl
 fi
-
-log "photos-native.pc"
-mkdir -p "$PREFIX/lib/pkgconfig"
-cat > "$PREFIX/lib/pkgconfig/photos-native.pc" <<PCEOF
-prefix=$PREFIX
-libdir=\${prefix}/lib
-includedir=\${prefix}/include
-
-Name: photos-native
-Description: milestone C imaging stack ($TARGET)
-Version: 1
-Cflags: -I\${includedir}
-Libs: -L\${libdir} -Wl,--start-group -lheif -lde265 -lx265 -lavfilter -lavformat -lavcodec -lswscale -lswresample -lavutil -ljpeg -llcms2 -lexif -lz -Wl,--end-group $CXX_RUNTIME_LIBS -lm -lpthread -ldl
-PCEOF
 
 log "done: $PREFIX"
 ls -la "$PREFIX/lib"/*.a 2>/dev/null | awk '{printf "  %10.1f KB  %s\n", $5/1024, $9}'

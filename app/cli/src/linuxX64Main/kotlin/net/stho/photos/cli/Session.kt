@@ -85,8 +85,8 @@ internal class LogoutCommand(
         for (field in Credentials.Field.entries) keyring.remove(field.attribute)
 
         // A statement about the end state rather than about what was there a moment ago: the port
-        // returns nothing, and the gesture means *make sure they are gone*. Swift said "nothing
-        // stored" when it removed nothing, which needed `remove` to report what it deleted —
+        // returns nothing, and the gesture means *make sure they are gone*. Saying "nothing stored"
+        // when it removed nothing would need `remove` to report what it deleted —
         // `Keyring.remove` deliberately does not.
         console.line(
             Credentials.Field.entries.joinToString(" and ") { it.attribute } +

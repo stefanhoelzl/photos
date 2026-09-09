@@ -27,8 +27,8 @@ import net.stho.photos.scratchPath
  * session depends on and that nothing offline exercises.
  *
  * The endpoint is supplied by the build, which owns S3Mock's lifecycle. Without java the
- * variable is absent and these skip, exactly as the Swift suite did — a machine that cannot run
- * a JVM should still be able to run the signer vectors and everything offline.
+ * variable is absent and these skip — a machine that cannot run a JVM should still be able to
+ * run the signer vectors and everything offline.
  *
  * S3Mock does **not** validate signatures. That is accepted and stated in
  * `Scripts/fetch-s3mock.sh`: the vendored AWS vector suite is what proves the signer, and it

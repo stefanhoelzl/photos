@@ -57,10 +57,10 @@ import net.stho.photos.storage.list
  * in flight and the next run's LIST sees it as absent and redoes it. Nothing here keeps state
  * between runs beyond the shard cache, which is why it is self-correcting.
  *
- * Everything it works through is injected. Swift built the catalog, the pipeline and the
- * classifier from an `ImageBackend` in its own initialiser; here the imaging stack lives entirely
- * behind ports (§7), so the wiring is the CLI's one function and this class does not know which
- * platform it is on.
+ * Everything it works through is injected. The catalog, the pipeline and the classifier arrive
+ * built rather than being constructed here from an `ImageBackend`, because the imaging stack
+ * lives entirely behind ports (§7): the wiring is the CLI's one function, and this class does not
+ * know which platform it is on.
  */
 public class Ingest(
     private val config: IngestConfig,
@@ -102,9 +102,9 @@ public class Ingest(
     /**
      * Progress, for a caller that wants to show it.
      *
-     * A `SharedFlow` rather than Swift's `emit` closure, matching [Pipeline.events]: the flow
-     * never completes, a collector ends by cancelling its own scope, and a run nobody is watching
-     * costs nothing because the values are simply dropped.
+     * A `SharedFlow` rather than an `emit` callback the caller passes in, matching
+     * [Pipeline.events]: the flow never completes, a collector ends by cancelling its own scope,
+     * and a run nobody is watching costs nothing because the values are simply dropped.
      */
     public val events: SharedFlow<IngestEvent> = mutableEvents.asSharedFlow()
 
@@ -661,10 +661,9 @@ public class Ingest(
 /**
  * The report, under construction.
  *
- * Swift threaded one `inout IngestReport` through every step. Kotlin has no `inout`, and the
- * alternative — returning a fresh [IngestReport] from each of a dozen private methods — would make
- * the run read as plumbing. So the public type stays an immutable record and this is the mutable
- * accumulator behind it.
+ * Returning a fresh [IngestReport] from each of a dozen private methods would make the run read
+ * as plumbing. So the public type stays an immutable record, and this is the mutable accumulator
+ * behind it that the steps write into.
  */
 private class ReportBuilder {
     val albums = mutableListOf<IngestReport.AlbumOutcome>()

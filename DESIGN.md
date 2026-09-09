@@ -699,7 +699,9 @@ still hardware-decoded** via the HEVC block, so swiping stays fast.
 
 > See **`mockups/placeholder.html`** for all 17 screens rendered at device size — album list,
 > container, grid, pinch density, both viewer states, both map representations, set-cover
-> dialog, settings, log out, first-run setup, and the five upload steps.
+> dialog, settings, log out, first-run setup, and the five upload steps. They fix layout and
+> content, not chrome: they were drawn before this section settled on Compose, so a button in
+> them is an iOS button and in the build it is Material 3.
 
 **Minimum iOS 18. Compose Multiplatform**, entered through `ComposeUIViewController` — one UI
 in `commonMain` that renders identically on the phone and on a Linux desktop harness. That

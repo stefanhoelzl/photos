@@ -54,9 +54,13 @@ val buildShim by tasks.registering {
 // its content is a pure function of paths -- cinterop wants it to exist before any task runs.
 //
 // `linkerOpts` reaches ld.lld directly -- no compiler driver -- so `-Wl,` prefixes are
-// rejected and `--start-group` is spelled plainly. libstdc++ comes from konan's toolchain as a
-// static archive: linking it dynamically would put libstdc++.so.6 on the runtime list for no
-// reason (DESIGN §7).
+// rejected and `--start-group` is spelled plainly. The group is not decoration: these archives
+// reference each other in both directions -- libavcodec calls into x265, libheif into both x265
+// and libde265 -- and a static linker resolves strictly left to right, so grouping them is what
+// stops the correct order from being something anyone has to know.
+//
+// libstdc++ comes from konan's toolchain as a static archive: linking it dynamically would put
+// libstdc++.so.6 on the runtime list for no reason (DESIGN §7).
 val defFileOnDisk: File = layout.buildDirectory.get().asFile.resolve("photosimaging.def").apply {
     parentFile.mkdirs()
     val libstdcxx = konanToolchain?.resolve("x86_64-unknown-linux-gnu/lib64/libstdc++.a")?.absolutePath

@@ -88,11 +88,11 @@ public data class IgnoreRules(val rules: List<IgnoreRule> = emptyList()) {
         /**
          * Case-folded, and nothing else.
          *
-         * The Swift original also folded Unicode composition, so a pattern typed on a Mac
-         * (commonly NFD) would match an NFC path. That is gone from this project: measured on the
-         * real library, 34,729 entries carry 51 non-ASCII names and not one of them is
-         * decomposed, so the normalisation bought nothing and cost a rule that was hard to
-         * predict. Names are now compared exactly as the filesystem gives them.
+         * Unicode composition is deliberately **not** folded, which a pattern typed on a Mac
+         * (commonly NFD) would otherwise need to match an NFC path. Measured on the real library,
+         * 34,729 entries carry 51 non-ASCII names and not one of them is decomposed, so the
+         * normalisation would buy nothing and cost a rule that is hard to predict. Names are
+         * compared exactly as the filesystem gives them.
          */
         internal fun fold(text: String): String = text.lowercase()
     }

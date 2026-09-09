@@ -1,9 +1,16 @@
 /* JPEG decode and encode.
  *
  * This file is the reason the shim exists at all. libjpeg signals errors by longjmp-ing out
- * of the call you made, and Swift has no way to be on the far end of that jump safely: the
- * stack it unwinds past may hold Swift frames with refcounted values. Keeping the setjmp
- * target in C, and handing Swift a plain error code, is the only sound arrangement.
+ * of the call you made, and no managed runtime can be on the far end of that jump safely: the
+ * stack it unwinds past holds frames the runtime believes it owns. Keeping the setjmp target
+ * in C, and handing the caller a plain error code, is the only sound arrangement.
+ *
+ * TurboJPEG would remove that problem -- it returns error codes -- and it has shrink-on-load
+ * too, as tj3SetScalingFactor. It is not used because it cannot read JPEG markers at all: the
+ * ICC profile has its own accessor, but APP1, and therefore the EXIF orientation tag, is
+ * simply unreachable. Reading it here is what makes DESIGN section 3's promise -- stored
+ * dimensions are already rotated, no consumer applies orientation -- true for the 94% of the
+ * library that is JPEG. See Scripts/PROVENANCE.md.
  */
 #include <stdio.h>
 #include <stdlib.h>

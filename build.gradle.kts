@@ -28,7 +28,7 @@ tasks.register("checkNativePrefix") {
     description = "Fails with an actionable message if the native prefix has not been built."
     doLast {
         require(nativePrefix.resolve("lib/libheif.a").exists()) {
-            "native prefix missing -- run: Scripts/build-native.sh konan"
+            "native prefix missing -- run: Scripts/build-native.sh"
         }
         requireNotNull(konanToolchain) {
             "konan gcc toolchain not found under ~/.konan/dependencies -- link a linuxX64 binary once to fetch it"
@@ -40,9 +40,8 @@ tasks.register("checkNativePrefix") {
 
 // ---------------------------------------------------------------- S3Mock
 //
-// Round-trip tests need a real S3 server. Swift started one in-process; the Gradle-shaped
-// answer is for the build to own its lifecycle and hand the tests an endpoint, so a test
-// never has to know how to spawn a JVM.
+// Round-trip tests need a real S3 server, and the build owns its lifecycle rather than the
+// tests: a test is handed an endpoint and never has to know how to spawn a JVM.
 //
 // S3Mock rather than a real server, for the reasons in Scripts/fetch-s3mock.sh: MinIO's
 // community edition was archived, SeaweedFS's conditional PUT is absent or broken, and
@@ -75,9 +74,8 @@ val fetchS3Mock by tasks.registering {
 /**
  * Starts S3Mock for [task] and exports `PHOTOS_S3MOCK_ENDPOINT` to it.
  *
- * Without java the round-trip tests skip and everything else still runs -- the same bargain the
- * Swift harness struck: a machine that cannot run a JVM should still be able to run the signer
- * vectors and the offline tests.
+ * Without java the round-trip tests skip and everything else still runs: a machine that cannot
+ * run a JVM should still be able to run the signer vectors and the offline tests.
  */
 fun configureS3Mock(task: Task) {
     task.dependsOn(fetchS3Mock)

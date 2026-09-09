@@ -3,7 +3,7 @@
  * §7 splits this deliberately: the *extraction* is platform-native, because both platforms
  * ship a library that reads EXIF and a hand-written container parser would only add a third
  * opinion. The *interpretation* -- what "2013:07:04 18:22:11" means, which way GPSLatitudeRef
- * 'S' points -- is Swift's ExifMapper, shared, so a phone and a laptop cannot derive
+ * 'S' points -- is the shared mapping in the domain, so a phone and a laptop cannot derive
  * different dates from the same file.
  *
  * So this file's whole job is to hand over tags in one vocabulary, losing nothing. Values are

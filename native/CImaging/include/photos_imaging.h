@@ -1,9 +1,9 @@
 /* The narrow C surface milestone C's pipeline sits on.
  *
  * Nothing from libjpeg, libheif, ffmpeg, lcms2 or libexif appears in this header. That is the
- * point of it: libjpeg reports errors through setjmp/longjmp, which Swift cannot cross
- * safely, so an error handler has to live in C regardless -- and once C is in the picture,
- * giving Swift one flat API over five libraries costs nothing more.
+ * point of it: libjpeg reports errors through setjmp/longjmp, which no managed runtime can
+ * cross safely, so an error handler has to live in C regardless -- and once C is in the
+ * picture, giving the caller one flat API over five libraries costs nothing more.
  *
  * Ownership rule throughout: any pi_image or pi_buffer an out-parameter comes back filled is
  * owned by the caller and freed with the matching pi_*_free. On a nonzero return nothing is
@@ -119,7 +119,7 @@ int pi_encode_heic(const pi_image *img, int quality, int threads,
 /* ------------------------------------------------------------------ EXIF */
 /* Called once per tag, with EXIF/TIFF tag names unprefixed: DateTimeOriginal, GPSLatitude,
  * Orientation, and the synthesised AppleContentIdentifier. Values are rendered as text; the
- * Swift side re-parses them into ExifValue, so both platforms share one vocabulary. */
+ * caller re-parses them into ExifValue, so both platforms share one vocabulary. */
 typedef void (*pi_exif_tag_fn)(void *ctx, const char *tag, const char *value);
 int pi_exif_read(const char *path, pi_exif_tag_fn fn, void *ctx, pi_error *err);
 

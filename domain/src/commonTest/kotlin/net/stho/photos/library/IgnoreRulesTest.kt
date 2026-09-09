@@ -83,11 +83,11 @@ class IgnoreRulesTest {
      * Composition folding is gone from this project, so a decomposed pattern is a different
      * pattern.
      *
-     * The Swift original normalised both sides to NFC on the grounds that a pattern typed on a Mac
-     * commonly arrives NFD. Measured on the real library, 34,729 entries carry 51 non-ASCII names
-     * and none of them is decomposed — so the rule bought nothing and made "why does this pattern
-     * not match?" unanswerable by looking at the two strings. Names are compared exactly as the
-     * filesystem gives them.
+     * Normalising both sides to NFC would cover a pattern typed on a Mac, which commonly arrives
+     * NFD. Measured on the real library, 34,729 entries carry 51 non-ASCII names and none of them
+     * is decomposed — so the rule would buy nothing and make "why does this pattern not match?"
+     * unanswerable by looking at the two strings. Names are compared exactly as the filesystem
+     * gives them.
      */
     @Test
     fun compositionIsNotFolded() {
@@ -126,7 +126,7 @@ class IgnoreRulesTest {
         assertFailsWith<IgnoreRulesUnreadableFailure> { root.readIgnoreRules() }
     }
 
-    // ------------------------------------------------------- glob cases the Swift suite left out
+    // ------------------------------------------------------------------- further glob cases
 
     @Test
     fun aQuestionMarkMatchesExactlyOneCharacter() {

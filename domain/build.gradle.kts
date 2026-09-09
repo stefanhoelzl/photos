@@ -71,8 +71,8 @@ kotlin {
     }
 }
 
-// The vendored AWS SigV4 vectors are 382 files that stay where they are, beside the Swift
-// tests. Kotlin/Native bundles no test resources, so the path arrives through the environment.
+// The vendored AWS SigV4 vectors are 382 files under `testdata/sigv4`. Kotlin/Native bundles
+// no test resources, so the path arrives through the environment.
 // The test fails loudly when it is missing rather than skipping: a subtle signing bug fails
 // every request, and this suite is the only proof the signer is right (§7).
 tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest>().configureEach {

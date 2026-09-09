@@ -2,7 +2,7 @@ package net.stho.photos.library
 
 /**
  * `fnmatch(pattern, subject, FNM_PATHNAME)`, which is what DESIGN §7 defines `.photosignore`
- * matching as and what the Swift original called libc for.
+ * matching as.
  *
  * Written out rather than bound, because there is no `fnmatch` in `commonMain` — and binding one
  * per platform would put the rule that decides what gets uploaded behind an `expect`/`actual`

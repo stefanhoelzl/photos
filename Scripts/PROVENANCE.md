@@ -33,7 +33,7 @@ from these paths, so there is no checked-in file to go stale.
 
 | library | version | why it is here |
 |---|---|---|
-| **libjpeg-turbo** | 3.1.0 | 94% of the library is JPEG. Built for the *classic* libjpeg API, not TurboJPEG, because the pipeline depends on `scale_num`/`scale_denom` shrink-on-load — that is what bounds decode memory on the 164 MP panorama and makes 34k photos cheap. |
+| **libjpeg-turbo** | 3.1.0 | 94% of the library is JPEG. Built for the *classic* libjpeg API (`WITH_TURBOJPEG=OFF`), and the reason is **markers, not scaling**. Shrink-on-load is what bounds decode memory — the 164 MP panorama comes back as ~7.7 MB instead of 494 MB — but TurboJPEG has that too, as `tj3SetScalingFactor`, at the same N/8 ratios; anything implying otherwise was wrong. What TurboJPEG has no API for is *reading JPEG markers*: `tj3GetICCProfile` covers APP2, but **APP1 — the EXIF block, and so the orientation tag — is unreachable**, and its "copy extra markers" parameter applies to lossless transforms rather than to reading. §3 promises stored dimensions are already rotated and that no consumer applies orientation, and `jpeg_save_markers` is what makes that true for 94% of the library. The alternative is walking the segment chain by hand on the hottest path in the system — the container parsing the exiv2 note below exists to avoid. `longjmp` is the price, and it is why `pi_jpeg.c` exists. |
 | **libheif** | 1.19.8 | HEIC decode and encode. `ENABLE_PLUGIN_LOADING=OFF`: libheif's default builds x265 and libde265 as `dlopen`-ed plugins, which a single static binary cannot use. |
 | **libde265** | 1.0.15 | libheif's HEVC decoder. 1,531 HEICs in the library. |
 | **x265** | 3.6 | HEVC encoder, for **both** previews and video. Choosing HEVC for video (decision 10) is what let libx264 out of the stack entirely — one video encoder instead of two. Its `.pc` is patched after install to add `-lpthread -lrt`: x265 uses pthreads and named semaphores but does not declare them, because on glibc ≥ 2.34 they live in libc. Against the `konan` prefix's 2.19 they do not, and ffmpeg's configure then fails its x265 link test and reports the misleading *"x265 not found using pkg-config"*. |
@@ -110,18 +110,19 @@ decision 10 changed nothing there — libx264 is GPL too.
 
 ## The link line
 
-`photos-native.pc` spells out the whole static closure in `Libs:` rather than `Libs.private:`,
-so a consumer that asks for the libraries without `--static` still gets all of them. The
-archives are wrapped in `--start-group … --end-group`: libavcodec calls into x265, libheif
+The whole static closure is spelled out in the cinterop `.def` files, which
+`adapter/linux/build.gradle.kts` generates from this prefix's paths. There is no `.pc` of ours
+in between: `pkg-config` is set to this prefix only so the libraries here can configure against
+each other, and nothing downstream consults it. Note the flag spelling — `linkerOpts` reaches
+`ld.lld` directly rather than through a compiler driver, so the `-Wl,` prefix a compiler would
+want is rejected there.
+
+The archives are wrapped in `--start-group … --end-group`: libavcodec calls into x265, libheif
 calls into both x265 and libde265, and a static linker resolves strictly left to right.
 Grouping them is what stops the correct order from being something anyone has to know.
 
-The Gradle build generates its cinterop `.def` files from these same paths, and note the flag
-spelling: `linkerOpts` reaches `ld.lld` directly rather than through a compiler driver, so the
-`-Wl,` prefix a compiler would want is rejected there.
-
-`photos-dbus.pc` is separate rather than folded in, because it is a separate concern: the
-keyring adapter links the D-Bus client and the imaging adapter links the imaging stack, and
-neither should drag the other in merely because one script builds both. It carries two include
+There are **two** interops, not one, because they are separate concerns: the keyring adapter
+links the D-Bus client and the imaging adapter links the imaging stack, and neither should drag
+the other in merely because one script builds both. The D-Bus one carries two include
 directories, since dbus generates `dbus-arch-deps.h` per architecture and installs it under
 `libdir` rather than beside its other headers.

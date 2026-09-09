@@ -52,7 +52,7 @@ internal const val TEST_SECRET: String = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEK
 
 /**
  * Retry is off unless a test asks for it, so a test that does not care about backoff does not
- * wait for one — the Swift suite's `RetryPolicy.none` by another name.
+ * wait for one.
  */
 internal fun testClient(
     engine: MockEngine,

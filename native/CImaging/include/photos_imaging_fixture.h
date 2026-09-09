@@ -2,10 +2,10 @@
  *
  * Decision 16 keeps every test input synthesised rather than committed -- the real library is
  * personal data, and a committed corpus goes stale in a way generated inputs cannot. Stills
- * are cheap to synthesise in Swift, but a video needs an encoder, and the only one in the
+ * are cheap to synthesise in Kotlin, but a video needs an encoder, and the only one in the
  * build is the one the pipeline ships with. So the fixture writer lives here, beside it.
  *
- * Nothing in the pipeline calls this; it exists for PhotosPipelineTests and native-smoke.
+ * Nothing in the pipeline calls this; it exists for the adapter's tests and for :tools:smoke.
  */
 #ifndef PHOTOS_IMAGING_FIXTURE_H
 #define PHOTOS_IMAGING_FIXTURE_H

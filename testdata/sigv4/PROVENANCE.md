@@ -6,8 +6,8 @@ Vendored from [awslabs/aws-c-auth](https://github.com/awslabs/aws-c-auth),
 AWS's original `aws-sig-v4-test-suite.zip` is no longer served from
 docs.aws.amazon.com (404 as of 2026-09). This mirror is a superset of it: it
 carries explicit `normalized` / `unnormalized` path variants, which matters
-here because **S3 does not normalise paths** — `PhotosStorage` signs with
-`normalizePath: false`, while the vectors exercise both settings via each
+here because **S3 does not normalise paths** — `S3Client` signs with
+`normalizePath = false`, while the vectors exercise both settings via each
 case's `context.json`.
 
 Each case directory holds:

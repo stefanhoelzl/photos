@@ -168,8 +168,8 @@ public interface MediaProbe {
  *
  * Progress arrives on [events] rather than through a callback parameter, so [derive]'s
  * signature stays a plain function and every worker publishes into the one flow. A
- * `SharedFlow` never completes; a collector ends by cancelling its own scope, which is why
- * there is no counterpart to Swift's `finish()`.
+ * `SharedFlow` never completes; a collector ends by cancelling its own scope, which is why the
+ * port has no `finish()` to call.
  */
 public interface Pipeline {
     public val events: SharedFlow<PipelineEvent>

@@ -170,10 +170,9 @@ internal fun Path.deleteRecursively() {
 /**
  * A pipeline that produces the *shape* of a derivative without an encoder.
  *
- * The Swift cycle tests ran the real pipeline over synthetic JPEGs, because in Swift the pipeline
- * was a concrete type. Here it is a port (§7), and the imaging stack lives in the Linux adapter —
- * so what the domain's own tests can pin down is the state machine around it, which is what these
- * tests are about anyway.
+ * The pipeline is a port (§7) and the imaging stack lives in the Linux adapter, so the domain's
+ * own tests cannot run a real encoder over synthetic JPEGs. What they can pin down is the state
+ * machine around it, which is what these tests are about anyway.
  */
 internal class FakePipeline(private val ids: Ids, private val workRoot: Path) : Pipeline {
 

@@ -1,4 +1,4 @@
-/* Shared between the shim's own translation units. Not part of the Swift-facing contract. */
+/* Shared between the shim's own translation units. Not part of the public contract. */
 #ifndef PI_INTERNAL_H
 #define PI_INTERNAL_H
 

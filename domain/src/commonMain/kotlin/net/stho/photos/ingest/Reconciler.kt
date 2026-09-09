@@ -291,9 +291,9 @@ public class Reconciler(
 /**
  * A `source_path` as this build compares them: no leading or trailing separator.
  *
- * The Swift original also folded Unicode composition here. That is gone from the whole project —
- * §2 measured that none of the library's 51 non-ASCII names is decomposed — so paths are now
- * compared exactly as the filesystem and the catalog spell them.
+ * Unicode composition is deliberately **not** folded here: §2 measured that none of the
+ * library's 51 non-ASCII names is decomposed, so paths are compared exactly as the filesystem
+ * and the catalog spell them.
  */
 private fun String.normalisedPath(): String = trim('/')
 

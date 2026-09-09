@@ -351,9 +351,9 @@ internal fun Bus.deleteItem(item: String) {
 
 // ---------------------------------------------------------------- marshalling
 //
-// libdbus's variadic entry points are unreachable from Kotlin, exactly as they were from
-// Swift. The `DBusMessageIter` API they wrap is not variadic, and is what everything above
-// uses; these are the pieces of it worth naming.
+// libdbus's variadic entry points are unreachable from Kotlin. The `DBusMessageIter` API they
+// wrap is not variadic, and is what everything above uses; these are the pieces of it worth
+// naming.
 
 /** The reply's arguments, or [SecretServiceFailure.Malformed] when it carries none. */
 internal inline fun <R> CPointer<DBusMessage>.readArguments(

@@ -36,8 +36,9 @@ public sealed interface IngestEvent {
  * Throttled to one update a second: a status line redrawn once per uploaded photo would be several
  * a second at the start of a small album and pointless the rest of the time.
  *
- * A [Mutex] rather than Swift's actor — the state is a handful of counters touched by every
- * encoder worker, and serialising the *writer* is the whole requirement.
+ * A [Mutex] rather than confining the counters to an owning coroutine — the state is a handful
+ * of numbers touched by every encoder worker, and serialising the *writer* is the whole
+ * requirement.
  */
 internal class ProgressMeter(private val clock: Clock) {
 
