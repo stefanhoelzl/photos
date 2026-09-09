@@ -91,7 +91,7 @@ an estimate.
 Scripts/build-native.sh          # once: imaging stack, sqlite, openssl, curl, dbus
 ./gradlew build                  # 308 tests
 ./gradlew :app:cli:linkReleaseExecutableLinuxX64
-./gradlew :tests:cli:e2e         # 13 scenarios against the shipped binary — opt-in
+./gradlew :tests:cli:e2e         # 14 scenarios against the shipped binary — opt-in
 ```
 
 `:tests:cli` is **not** part of `build`, which compiles its scenarios but does not run them —

@@ -239,7 +239,7 @@ lists** — bounded, no reference counting, no garbage collector in the normal p
 mints a *new* UUID, points the shard at it, and deletes the old object. This is what makes
 §6's cache correct for free: the cache keeps browsed content indefinitely and evicts nothing,
 so a key whose content could change would need revalidating on every hit. Instead, a changed
-`preview_id` in the shard *is* the invalidation signal.
+`image_id` in the shard *is* the invalidation signal.
 
 **What UUID keys buy beyond renames.** Every key becomes flat ASCII, which removes three
 hazards at once:
@@ -318,8 +318,12 @@ CREATE TABLE album_info (
   source_path    TEXT,               -- folder this came from; a hint, not identity
   cover_photo_id TEXT,               -- overrides the default cover
   thumbs_id      TEXT,               -- blob holding this album's packed thumbnails
+  state            TEXT NOT NULL,    -- 'uploading' | 'uploaded' | 'encoded'  (§7)
+  encoding_version INTEGER NOT NULL, -- 0 = as uploaded; profiles number from 1 (§5)
   added_at       INTEGER NOT NULL,
-  schema_version INTEGER NOT NULL
+  schema_version INTEGER NOT NULL,
+  CHECK (state IN ('uploading', 'uploaded', 'encoded')),
+  CHECK ((state = 'encoded') = (encoding_version > 0))
 );
 
 CREATE TABLE photo (
@@ -332,27 +336,34 @@ CREATE TABLE photo (
   width         INTEGER,             -- display dimensions, already rotated
   height        INTEGER,
   bytes         INTEGER,           -- the size of the blob a tap fetches, not the file's
+  source_bytes  INTEGER,             -- the size of the file on disk; what §7 checks
+  content_hash  TEXT,                -- forensic only; never verified on a schedule (§7)
   media_type    INTEGER NOT NULL,    -- 0 photo · 1 video · 2 live photo
-  original_id   TEXT,                -- blob: the original as uploaded
+  image_id      TEXT,                -- blob: 3200px HEIC, the one image you view
+  live_still_id TEXT,                -- blob: untouched source still, Live Photos only (§5)
   live_video_id TEXT,                -- blob: paired MOV, when media_type = 2
-  preview_id    TEXT,                -- blob: 2048px HEIC
   video_id      TEXT                 -- blob: 1080p-ceiling HEVC transcode
 );
 CREATE INDEX ix_photo_taken ON photo(taken_at);
 ```
 
 **The row describes what is in the zone, not what is on disk.** `bytes` is the size of the
-blob a tap actually fetches, and `filename` carries the extension its bytes really have — so
-§6's `Original …` badge is true for every one of the 34,201 files rather than for the 33,768
-whose original happens to be the file itself. For a video that means the transcode, for a
-developed CR2 the carved JPEG, and `source_filename` keeps the camera's own name so ingest
-can still find the file on disk: `IMG_1234.CR2` beside `filename = IMG_1234.jpg`,
-`VID_0001.MOV` beside `VID_0001.mp4`. It is NULL for the great majority of rows, where the
-blob simply *is* the file.
+blob a tap actually fetches, and `filename` carries the extension its bytes really have. For a
+video that means the transcode, for every still the 3200px HEIC, and `source_filename` keeps
+the camera's own name so ingest can still find the file on disk: `IMG_1234.CR2` beside
+`filename = IMG_1234.heic`, `VID_0001.MOV` beside `VID_0001.mp4`.
 
-That column is also what says whether §7's byte-size assertion applies. Only a row whose
-original was uploaded byte-for-byte can be checked against a directory entry; a video has no
-original in the zone at all, and a carved RAW's blob is 1.6 MB of JPEG next to 22 MB of CR2.
+**`source_bytes` is what §7's change assertion compares against the directory entry**, and it
+is free for the same reason its predecessor was: the scan reads the entry anyway. The
+predecessor rode on `bytes`, which now describes a derivative and equals nothing on disk — and
+it could only ever cover rows whose blob happened to *be* the file, which excluded video and
+carved RAW. Describing the source instead covers every row.
+
+**`image_id` never changes meaning across states.** While an album is `uploading` or
+`uploaded` it points at the phone's full-quality upload, with `encoding_version` at 0; once
+`encoded` it points at the 3200px HEIC. A reader that knows nothing about `state` still renders
+the album correctly — it merely fetches something heavier. That is what keeps the version rule
+below a promise rather than a hope.
 
 **`album_id` and `source_path` are permanently stable.** Never removed, never retyped,
 whatever a later `schema_version` does. That is what lets any reader learn which folder a
@@ -366,21 +377,21 @@ rather than reading back NULL. The price is that adding a field is a migration, 
 `schema_version` handles.
 
 **Roles live in the schema, not in prefixes.** A photo row states exactly which objects it
-owns through four nullable id columns, rather than the reader inferring them from
-`media_type` and a naming convention. A still photo has `original_id` and `preview_id`; a
-Live Photo adds `live_video_id`; a video has `video_id` and a `preview_id` poster but no
-`original_id`, since §5 keeps video originals on the laptop; a developed CR2 has an
-`original_id` pointing at the JPEG, not the RAW.
+owns through four nullable id columns, rather than the reader inferring them from `media_type`
+and a naming convention. A still has `image_id`; a Live Photo adds `live_still_id` and
+`live_video_id`; a video has `video_id` and an `image_id` poster. There is no `original_id`,
+because §5 keeps no originals here at all.
 
 **`photo.id` is its own UUID**, separate from every object id. It is what `cover_photo_id`
 points at and what the thumbnail pack keys by, so it has to survive a derivative being
-re-encoded — which mints a new `preview_id` but leaves the photo the same photo.
+re-encoded — which mints a new `image_id` but leaves the photo the same photo. §5's profile
+bump re-encodes the whole library; nothing about a photograph's identity moves when it does.
 
 **No `ext`, no `orientation`, no `sort_key`.** Each was removable once something else carried
 its meaning. `filename` holds the extension, so `ext` only duplicated its tail and would have
 needed reassembly rules for extensionless names, `IMG.2013.07.jpg` and `.JPG` case.
 `width`/`height` are stored **already rotated**, so `orientation` had no consumer: C bakes
-orientation into thumbs and previews, and iOS applies the EXIF tag itself when decoding an
+orientation into thumbs and viewing images, and iOS applies the EXIF tag itself when decoding an
 original. `sort_key` is replaced by an expression index — see *Dates, locations, sorting*.
 
 **Measured sizes** (metadata only): 2 photos → 24 KB · 104 photos → **32 KB** ·
@@ -395,12 +406,12 @@ referenced from the shard by `album_info.thumbs_id`:
 ```sql
 CREATE TABLE thumb (
   id    TEXT PRIMARY KEY,          -- = photo.id
-  jpeg  BLOB NOT NULL              -- 256px JPEG q75, ~8.7 KB
+  jpeg  BLOB NOT NULL              -- 256px JPEG q75, ~13 KB
 );
 ```
 
-At ~11.6 KB per thumbnail a 100-photo album is ~1.2 MB and a 1,750-photo album ~20.8 MB, so
-**one request opens an album's entire grid, offline** — about 2.8 s for the largest album at
+At ~13.1 KB per thumbnail a 100-photo album is ~1.3 MB and a 1,750-photo album ~22.4 MB, so
+**one request opens an album's entire grid, offline** — about 3.0 s for the largest album at
 the measured 7.5 MB/s. Shard the pack only if an album exceeds a few
 thousand photos.
 
@@ -439,7 +450,7 @@ CREATE INDEX ix_album_folded ON album(name_folded);
 CREATE TABLE photo (
   id, album_id TEXT NOT NULL REFERENCES album(album_id),
   filename, source_filename, taken_at, lat, lon, width, height, bytes,
-  media_type, original_id, live_video_id, preview_id, video_id,
+  source_bytes, content_hash, media_type, image_id, live_still_id, live_video_id, video_id,
   PRIMARY KEY (album_id, id)
 );
 CREATE INDEX ix_photo_album ON photo(album_id, taken_at IS NULL, taken_at, filename);
@@ -649,63 +660,130 @@ deals with it — which is the only thing that distinguishes a typo from a rule 
 
 ## 5. Derivatives
 
-Two tiers only:
+Two tiers, and neither is an original:
 
 | tier | typical size | where | purpose |
 |---|---|---|---|
-| **256×256 q75 JPEG** | ~11.6 KB | packed per album, one blob | the grid |
-| **2048px HEIC** | ~285 KB | one blob per photo | fullscreen |
+| **256×256 q75 JPEG** | ~13.1 KB | packed per album, one blob | the grid |
+| **3200px HEIC q45** | ~424 KB | one blob per photo | everything else |
+
+**The zone is not a backup, and stopped pretending to be one.** The laptop library holds every
+original; §7's pull is what keeps that true for photographs that arrive from the phone. Once the
+archive lives somewhere else, the largest thing the zone has to store is the largest thing a
+screen will ever display — which is a far smaller number than what a camera captures.
+
+Measured against the real library: the median original is **3264px** on the long edge, 69%
+exceed 3200px, and those hold 88% of the bytes. A 3200px cap is 2.4× pinch zoom on a 3× iPhone
+and a 1.2× upscale on a 4K desktop panel. It takes the still-image tier from **~100 GiB to
+~14 GiB**, and §9's first import from **19.5 h to about 3**.
+
+> Rejected: 4096px (10.2 h, native on a 4K panel, but HEIC's advantage over JPEG collapses to
+> −6% at that fidelity); 2560px (7.0 h, but only 1.25× the linear pixels of the tier it
+> replaced); and keeping originals byte-for-byte, which costs 19.5 h and 3.07 MB per photo of
+> never-evicted device cache to store pixels nothing displays.
+
+**Why one viewing tier and not two.** The old design had a 2048px preview *because* the tier
+above it was a 3.3 MB camera original — far too heavy to swipe through, so something had to sit
+between the grid and the archive. At 424 KB that reason is gone: one image serves the swipe and
+the deep zoom, the viewer loses its two states, and there is no escalation to get wrong. The
+rungs now sit 13 KB → 424 KB, which is the order-of-magnitude spacing a two-rung ladder wants;
+inserting a preview would have put one rung 2.9× below another.
 
 **Thumbnails are a square centre crop, not a fitted image.** Every consumer in §6 is a square
 `object-fit: cover` box — the grid, the 54pt album-list cover, the 38pt map pin and search row,
 the 30pt filmstrip, the 26pt set-cover dialog. The only surface that uses `contain` is the
-fullscreen viewer, and it reads the preview. So an aspect-preserved thumbnail stores pixels
+fullscreen viewer, and it reads the viewing image. So an aspect-preserved thumbnail stores pixels
 nothing ever displays, *and* starves the one thing that does: fitting a 3:2 photo into 256×256
 leaves it 256×171, and a 4-column grid tile on a 3× iPhone is 287 device pixels — a 1.68×
-upscale. Filling the box is 1.12×. Measured on 120 photos from the library: fitted 8.78 KB,
-cropped 11.59 KB. The crop costs 27% more storage and is not irreversible — originals remain,
+upscale. Filling the box is 1.12×. The crop is not irreversible: originals remain on the laptop,
 and re-thumbnailing an album mints a new `thumbs_id` (§2).
 
-Rejected: 320px and 512px thumbs (a 512px tier is 3.7× larger and breaks the
-one-request-per-album property); 1280px previews (visibly soft on a 3× display).
+> Measured across 16,181 photos in the live zone: **13.1 KB per thumbnail**, per-album median
+> 14.0 KB with p10 10.8 and p90 16.9. An earlier figure of 11.59 KB came from a 120-photo
+> sample, which the spread was wide enough to miss.
+
+Rejected: 320px and 512px thumbs (a 512px tier is 3.7× larger, and a 1,645-photo pack would
+reach ~77 MiB, breaking §3's one-request-per-album property).
 
 > The 2-column pinch density cannot be served sharply by *any* thumbnail tier — a 580px tile at
-> 3× would need ~576px thumbs. It either accepts softness or fetches previews; that is §6's
+> 3× would need ~576px thumbs. It now fetches viewing images for its tiles; that is §6's
 > decision, not this one's.
 
 For this library's actual totals see `INGEST.md`.
 
-### Format: JPEG thumbs, HEIC previews
+### Format: JPEG thumbs, HEIC images
 
-A PSNR-matched benchmark (HEIC/AVIF quality raised until they matched the JPEG baseline):
+At thumbnail size the container overhead swamps any codec advantage, so **JPEG wins outright**
+— a PSNR-matched benchmark put 256px HEIC at 279% of JPEG and AVIF at 145%.
 
-| tier | JPEG | HEIC | AVIF |
+At viewing size **HEIC wins, but by less than it looks.** Measured at matched PSNR on identical
+lossless references, its advantage decays as fidelity rises:
+
+| matched at | 2560px | 3200px | 4096px |
 |---|---|---|---|
-| 256px thumb | **0.32 GB** | 0.90 GB (279%) | 0.47 GB (145%) |
-| 2048px preview | 14.57 GB | **12.35 GB (85%)** | 10.57 GB (72%) |
+| JPEG q85's PSNR | −23% | −24% | −22% |
+| JPEG q90's PSNR | −18% | −18% | −6% |
+| JPEG q92's PSNR | −12% | −4% | **+1%** |
 
-> Re-derived during milestone C, because the benchmark's own settings had not survived. The
-> JPEG baseline reproduces at q84 (427 KB/photo measured against the 434 KB recorded), and
-> HEIC **quality 50** matches its PSNR at 285 KB/photo — so the tier is ~9.8 GB rather than
-> 12.35 GB. The original shipped above what its stated criterion required.
+HEVC intra is built for low bitrate; push it to high fidelity and it stops paying. At 4096px
+q92-equivalent it is *larger* than JPEG. The tier sits where the advantage is real, and HEIC is
+hardware-decoded on every supported device, which is the argument that also picked it over AVIF.
 
-At thumbnail size the container overhead swamps any codec advantage, so **JPEG wins outright**.
-At preview size AVIF is smallest but decodes in software; **HEIC is 15% smaller than JPEG and
-still hardware-decoded** via the HEVC block, so swiping stays fast.
+**Accepted cost: reach.** This is the tier most likely to be opened outside the iOS app, and
+HEIC is unsupported in Chrome and Firefox, on Windows without a codec pack, and in §6's Linux
+desktop harness without libheif. Taken knowingly, for one imaging path and no new dependency —
+x265 is already linked.
+
+### Quality: q45, chosen by eye
+
+**PSNR picked the tier's size; it did not pick its quality.** HEVC intra artifacts are
+structured rather than noise-like, and PSNR does not see them the way a person does. The ladder
+was judged on 1:1 crops of already-delivered 2000px files — faces and hair, compressed once
+already by the photographer, which is the hardest case for visible loss:
+
+```
+    q30    62 KiB   16% of source   33.8 dB
+    q45   168 KiB   44%             37.6 dB   ←  chosen
+    q60   302 KiB   78%             40.4 dB
+    q70   397 KiB  103%             41.2 dB
+```
+
+Two things that ladder shows. Above roughly q60 the encoder spends bytes reproducing the source
+JPEG's own artifacts, and **PSNR plateaus at ~41 dB** because the reference is itself lossy — so
+a PSNR-matched choice would have bought quality that does not exist. And q70 is *larger* than
+the file it came from.
+
+Over the representative 150-file sample, q45 stores **13.7% of source bytes, 424 KiB per photo**.
+If fullscreen ever looks soft, 50 is the conservative step; bumping `ENCODING_VERSION` alongside
+it is what makes the library follow (§7).
+
+### Re-encoding, and how a profile change reaches the library
+
+`DerivativeSpec.ENCODING_VERSION` names the profile that produced an album's images, and every
+shard records the version it was written at. `sync` re-derives any album below the current one:
+mint new blobs, repoint the shard, delete the old objects (§2). Bump the constant and the whole
+library drains to the new profile over as many runs as it takes, one album per commit.
+
+That is the entire migration mechanism. There is no separate pass, no second verb, and nothing
+to remember to run — which is what makes a quality decision reversible rather than permanent.
 
 ### Media handling
 
-- **Live Photos** — the preview is a plain still and needs no identifier. Long-press fetches the
-  **original HEIC + original MOV**, whose `content.identifier` values already match,
-  and hands both to `PHLivePhotoView`. No maker-note surgery at ingest.
+- **Live Photos** — the one place an untouched original survives in the zone. `PHLivePhotoView`
+  pairs a still to its MOV by Apple's `content.identifier`, which re-encoding strips, so the
+  **187 pairs keep their source still** in `live_still_id` alongside the ordinary viewing image.
+  That is ~0.5 GiB, and it is cheaper than the alternative: carrying the identifier across a
+  re-encode is exactly the maker-note surgery this design set out to avoid, and it would have to
+  work identically in two encoders forever.
 - **Video** — everything is transcoded to a uniform **HEVC/AAC MP4, faststart, `hvc1`**, with
   **1080p as a ceiling rather than a target**. This covers formats iOS cannot play at all
-  (AVI, MPG, 3GP) and tames large camera MP4s. **Originals stay on the laptop.**
+  (AVI, MPG, 3GP) and tames large camera MP4s. **Originals stay on the laptop.** A video row
+  has a `video_id` and an `image_id` poster.
   - **HEVC, not H.264.** 223 of the library's 550 videos are already HEVC, iOS 18
-    hardware-decodes it on every supported device, and x265 is linked for HEIC previews
+    hardware-decodes it on every supported device, and x265 is linked for the HEIC tier
     regardless — so it is the encoder that was already there, and choosing it drops libx264
     from the build entirely. It is also the only choice that does not *inflate* the 132 files
-    already at 1080p. This is the same hardware-decode argument that picked HEIC over JPEG.
+    already at 1080p.
   - **A ceiling, not a target.** 137 files are 640×480 or smaller; scaling those up would be
     20× the pixels for no added detail. Only the 14 files above 1080p are scaled at all.
   - **Rotation is baked into the pixels** and the display matrix cleared — 118 files carry a
@@ -714,11 +792,10 @@ still hardware-decoded** via the HEVC block, so swiping stays fast.
     MPEG-1 and progressive, so it should never fire here.
 - **RAW** — every CR2 carries a **full-resolution JPEG at IFD0** — the camera's own rendering,
   ~2.5 MB — so "developing" it is a byte-range extraction, not a demosaic. No LibRaw, no
-  development parameters. The RAW stays on the laptop and only the extracted JPEG is uploaded,
-  with an EXIF APP1 grafted in from the CR2's own IFDs so it looks like every other original
-  rather than arriving with no date, no GPS and no orientation. Where a RAW has no JPEG sibling
-  the laptop copy is that photo's sole archive, so the bucket is explicitly *not* a backup
-  for it.
+  development parameters. The carved JPEG is then encoded to the viewing tier like any other
+  still, with an EXIF APP1 grafted in from the CR2's own IFDs so it carries date, GPS and
+  orientation. The RAW stays on the laptop, and for a RAW with no JPEG sibling the laptop copy
+  is that photograph's sole archive.
 
 ---
 
@@ -746,7 +823,8 @@ is the thing being used:
 
 Everything else is drawn, including the three hardest screens. `LazyVerticalGrid` exposes
 `layoutInfo`, so the grid's prefetch is driven from visible-item state rather than from a
-callback that fires once a cell is already on screen — far too late for a 385 KB fetch.
+callback that fires once a cell is already on screen — far too late for the 424 KB fetch the
+2-column pinch density needs (§5).
 Drag-to-select is a `pointerInput` gesture. The fullscreen viewer's zoom + page +
 drag-to-dismiss is an ordinary composition of `HorizontalPager` and `transformable`.
 
@@ -823,10 +901,15 @@ tinted, tint says nothing, and the four colours below have to keep meaning somet
 ### Fullscreen viewer
 
 One screen, two states. Chrome is identical in both — back, then gear/share/set-cover, a
-filmstrip, and a bottom line of date and an `Original …` badge. A **LIVE badge appears once**,
-top-left, and is the only thing that differs.
+filmstrip, and a bottom line carrying the date. A **LIVE badge appears once**, top-left, and is
+the only thing that differs.
 
-Swiping loads the 2048px preview; the original is fetched only on deep zoom or an explicit tap.
+Swiping loads the 3200px image, and deep zoom needs nothing further: at 424 KB one blob serves
+both, so the viewer has no escalation step and no second loading state.
+
+> The `Original …` badge is gone. It answered "is this the real file?", and since §5 the answer
+> is uniformly no — a badge that always says the same thing carries no information. What the
+> laptop holds is a property of the archive, not of the photograph on screen.
 
 **Set as album cover** is a star: outlined when the photo is not the cover, **filled and gold
 when it is**. Setting a cover from inside a sub-album opens a dialog to choose whether it covers
@@ -838,8 +921,13 @@ the sub-album or its parent container.
 ### Caching and storage
 
 **Browse-to-cache. Nothing is downloaded ahead of time, and nothing is auto-evicted.**
-Whatever you view is kept until you clear it. The catalog and all thumbnail DBs (~0.3 GB) are
+Whatever you view is kept until you clear it. The catalog and all thumbnail DBs (~0.5 GB) are
 always kept, so every grid opens instantly and offline.
+
+> Never evicting is what makes §5's cap a phone decision rather than a bill. At 424 KB per
+> viewing image, browsing a thousand photos keeps 0.42 GB permanently; byte-for-byte originals
+> would have kept 3.1 GB for the same browsing, and the tier that used to sit between them
+> existed largely to avoid exactly that.
 
 Settings is **one screen**: storage totals, credentials, sync, and the album list last — each
 row with **one button, a clear button, shown only on albums that have something cached**.
@@ -1027,20 +1115,35 @@ what the zone contains; the other two decide nothing at all.
   nothing else, so broadening a rule can only ever stop an upload — it can never make a
   photograph look deleted. This is the rule the whole deletion model rests on.
 - **Images are asserted never to change on disk**, and the assertion is checked. Ingest
-  compares the shard's `bytes` against the directory entry — free, since the scan reads it
-  anyway — and **aborts the run on a mismatch** rather than re-ingesting. A changed file means
-  the library broke its contract, so nothing is written that run and `OnFailure=` surfaces it.
-  There is no mtime column, no hashing pass and no re-ingest path. The check covers the 33,768
-  rows whose original *is* the file on disk; video and carved-RAW rows have nothing on disk
-  their `bytes` should equal, so they are not checked.
+  compares the shard's `source_bytes` against the directory entry — free, since the scan reads
+  it anyway — and **aborts the run on a mismatch** rather than re-ingesting. A changed file
+  means the library broke its contract, so nothing is written that run and `OnFailure=`
+  surfaces it. There is no mtime column and no re-ingest path. Because `source_bytes` describes
+  the *file* rather than the upload, the check now covers every row, including the video and
+  carved-RAW rows its predecessor had to exempt.
+
+  `content_hash` is recorded beside it, at ingest, where the file is already being read to
+  derive from — and is **never verified on a schedule**. A full pass is ~100 GiB of reads
+  against a timer that fires hourly. It is a forensic record for investigating a file already
+  suspected of having changed, not a monitor.
 - **Parallelism:** one worker per core for encoding. Measured during milestone C on real
-  18 MP photos: **2.7 s/photo serial**, **0.43 s/photo** wall with 16 workers — so roughly
-  **4 h for ~34k photos**, plus video. The HEIC encode is ~1.5 s of the 2.7 s and does not
-  come down without trading preview quality (x265 `superfast` saves 13%; `ultrafast` is 3.3×
-  faster and 8% larger).
-  > An earlier 0.79 s/photo, i.e. 40–60 min, was recorded here. It was optimistic by ~3.4×.
-  > The conclusion it supported is unchanged and in fact stronger: §9's upload is 17–22 h and
-  > encoding overlaps it, so encoding is nowhere near the bottleneck either way.
+  18 MP photos, when the tier was 2048px: **2.7 s/photo serial**, **0.43 s/photo** wall with
+  16 workers — so roughly **4 h for ~34k photos**, plus video. The HEIC encode was ~1.5 s of
+  the 2.7 s and does not come down without trading image quality (x265 `superfast` saves 13%;
+  `ultrafast` is 3.3× faster and 8% larger).
+
+  > **§5's cap inverts the conclusion this figure used to support, and the figure itself is
+  > stale.** A 3200px HEIC is 2.4× the pixels of a 2048px one; measured single-threaded,
+  > libheif takes 0.80 s at 2048px against 1.59 s at 3200px. Scaling the serial number by that
+  > ratio puts encoding somewhere near **6 h**, against an upload that §5 brought down to
+  > **~3 h**. So encoding is no longer overlapped by a much longer upload — it is now the
+  > longer half, and the first import is bounded by CPU rather than by the link.
+  >
+  > That is an inference from a component measurement, not an end-to-end one. The number to
+  > trust is a re-measured wall time at the shipped profile, and nothing here has produced one
+  > yet. It changes no decision in this design — the import is a one-off, and §9's cost
+  > argument never rested on it — but it does mean the "encoding is nowhere near the
+  > bottleneck" claim this note used to make is no longer true.
 - **Deletion is what the library says it is.** A row whose file is gone is dropped, its blobs
   deleted and the album's thumbnail pack repacked, in the same run. A **directory that is gone**
   deletes the album — shard first, so the album stops existing before its objects do and the
@@ -1057,25 +1160,52 @@ what the zone contains; the other two decide nothing at all.
   shard write never landed, e.g. a crash mid-upload — are deleted once they are **older than
   seven days**. That floor is anchored rather than guessed: presigned URLs live at most 7 days
   (§1) and §8's background uploads run against them, so an older blob cannot belong to an upload
-  that can still complete, while a younger one is indistinguishable from one the phone is
-  uploading right now. The sweep stands down entirely if any shard is too new to read, since the
-  referenced set would then be missing whatever that album owns.
+  that can still complete. The sweep stands down entirely if any shard is too new to read, since
+  the referenced set would then be missing whatever that album owns.
+
+  A phone upload in progress no longer relies on that floor at all. §8 writes its shard first,
+  at `uploading`, so the blobs it has written *are* referenced and are skipped on evidence
+  rather than on age. What the floor now catches is the abandoned case: an album still
+  `uploading` past seven days cannot finish, so the sweep deletes it shard-first and collects
+  its blobs in the same pass.
 - **The app never deletes.** `delete` exists on the shared S3 client because the CLI needs it,
   but no iOS code path calls it — a convention, not a compiler-enforced boundary. With no
   versioning underneath, deletion is the single irreversible operation in the system.
-- **Pull is archive-only, and folded into `sync`.** An album with no `source_path` was made by
-  the phone: `sync` copies it into `$LIBRARY_ROOT` and *claims* it with one `If-Match` write
-  setting `source_path`, which is metadata rather than the objects the laptop must not rewrite.
-  From then on it is an ordinary album. A pulled Live Photo's MOV has no name of its own in the
-  catalog and is written as `<still-stem>.MOV`, the convention all 187 pairs already follow;
-  pairing is by content identifier, so the walker re-pairs it either way. Pulls write
-  unconditionally — the ignore rules govern what goes up.
+- **Pull is folded into `sync`, and it is what makes the laptop the archive.** An album at
+  `uploaded` is one the phone finished and nothing has encoded. `sync` **claims it first** —
+  one `If-Match` write setting `source_path`, leaving the state alone — then downloads it into
+  `$LIBRARY_ROOT`, derives it, and writes `encoded` at the current profile, which deletes the
+  phone's full-quality blobs.
+
+  The order is the point. Claiming first records where the album will land *before any file
+  exists*, so a run interrupted mid-download resumes into the same directory instead of
+  choosing a fresh name beside it and fetching everything a second time. That is only safe
+  because **the deletion rule is gated on `encoded`**: a directory holding half its files would
+  otherwise read as photos someone deleted. And the full-quality blobs — the only copy until
+  the library copy is on disk — are dropped last, in the same commit that replaces them.
+
+  An album at `uploading` is skipped entirely: it is still in flight, and its shard is what
+  keeps its blobs safe from the sweep.
+
+  A pulled Live Photo's MOV has no name of its own in the catalog and is written as
+  `<still-stem>.MOV`, the convention all 187 pairs already follow; pairing is by content
+  identifier, so the walker re-pairs it either way. Pulls write unconditionally — the ignore
+  rules govern what goes up.
 - **A laptop-owned album is never restored.** `sync` reads the library and writes the zone; it
-  does not put files back. Deleting a folder is a deletion, not a divergence to repair.
+  does not put files back. Deleting a folder is a deletion, not a divergence to repair — and
+  since ownership is now a column rather than an inference from `source_path`, there is no
+  state in which a deletion could be mistaken for an album that was never pulled.
+
+- **Re-encoding is an ordinary sync outcome.** An `encoded` album whose `encoding_version` is
+  below §5's current profile has every file re-derived and every old row dropped, which deletes
+  the blobs it owned through the path that already deletes blobs. Bump the constant and the
+  library drains to the new profile over as many runs as it takes, one album per commit. No
+  separate pass, no second verb, nothing to remember to run.
 - **One sync at a time**, enforced by an `flock` on a file in the cache directory. The first
-  import is about 39 hours and the timer fires hourly, so without it the two overlap
-  thirty-eight times: both derive and upload the same files, and the loser's blobs sit in the
-  zone with nothing pointing at them until the sweep collects them a week later. A second run
+  import is several hours and the timer fires hourly, so without it the two overlap repeatedly:
+  both derive and upload the same files, and the loser's blobs sit in the zone with nothing
+  pointing at them until the sweep collects them a week later. The margin narrowed when §5 cut
+  the upload, but it did not close — one run still outlasts the interval by hours. A second run
   exits **75** rather than failing — the sync is happening, just not that one. The lock is
   advisory and process-scoped, so the kernel releases it however the run ends, including
   `kill -9`; there is no stale lock file to explain to anyone.
@@ -1162,19 +1292,32 @@ this album, and the background session then runs against those URLs alone.
 **The album you are in becomes the parent** — from the root this creates a top-level album, from
 inside an album, a sub-album of it.
 
-**The phone runs the full pipeline**: ImageIO plus the hardware HEVC encoder produce thumbs and
-2048px previews on-device, and the shared schema code writes the shard.
+**The phone uploads full quality, and derives only thumbnails.** ImageIO produces the packed
+thumbs on-device — 0.42% extra upload bytes — so the album is browsable in the grid the moment
+it lands, without waiting up to an hour for the laptop. It does not produce viewing images: the
+laptop makes those when it pulls, which keeps one encoder in the system and means a profile
+version can never mean two different things.
 
-**Upload order — originals, then previews, then thumbnails, then the shard LAST**, only after
-every object is uploaded and verified. An interrupted upload therefore leaves **orphan objects
-that no catalog references** — invisible, harmless, swept up by the laptop's sweep once they
-are a week old — rather than a catalog pointing at objects that do not exist. Cost: the album
-does not appear on other devices until it is complete.
+> The full-quality upload is not an archive decision reversed. It is what §7's pull turns *into*
+> the archive: the laptop takes it down, keeps it, and replaces it in the zone with a 3200px
+> image. Until that happens the phone's upload is the only copy, which is why nothing deletes it
+> before the library copy is on disk.
 
-> The seven-day floor on that sweep exists for exactly this upload. Below it, an unreferenced
-> blob is indistinguishable from one this session has uploaded but not yet written a shard
-> for; above it, the presigned URLs it was uploaded through have expired, so it cannot belong
-> to an upload that can still finish (§7).
+**Upload order — the shard FIRST, at state `uploading`; then every object; then the shard again
+at `uploaded`.** This is the opposite of what a catalog usually wants: the zone briefly holds a
+shard pointing at objects that do not exist yet. It is deliberate.
+
+The alternative — shard last — leaves blobs that no catalog references, indistinguishable from
+debris, and that indistinguishability is the entire reason the sweep needs a seven-day age
+floor. A shard at `uploading` *names* the blobs its upload has written so far, so the sweep skips
+them on evidence rather than on age, however long the upload takes. Cost: the album does not
+appear complete on other devices until the second write, and a `uploading` shard is skipped by
+every reader.
+
+> The seven-day floor still exists, and now applies to the one case that needs it: an album left
+> at `uploading` past the floor is an upload that was abandoned. The presigned PUTs it was
+> uploading through have expired by then, so it provably cannot still finish, and §7 deletes it
+> shard-first like any other album.
 
 **Transfer** uses a background `URLSession` with `allowsCellularAccess = true`, so it survives
 the app being backgrounded, the phone locked, and app crashes. Progress is shown live in the
@@ -1211,6 +1354,16 @@ verified.
 
 bunny.net storage: **$0.01/GB/month** (single-region HDD), no per-request fees, $1/month minimum.
 
+**The minimum is what actually bills.** This library at §5's tiers is ~17.9 GiB — thumbs 0.5,
+viewing images 13.8, video 3.1, Live-Photo stills 0.5 — which is $0.19 of a $1.00 invoice.
+Byte-for-byte originals would have been ~115 GiB and $1.23. So the whole storage dimension of
+§5's redesign is worth **$0.23/month**, and every decision in it was made on other grounds:
+upload hours, and the never-evicting device cache of §6.
+
+> Stated plainly because it is easy to get backwards: the tier sizes in §5 matter, but not for
+> what they cost to store. 424 KB per photo instead of 3.07 MB is 3.0 h of first import instead
+> of 19.5, and 0.42 MB of permanent phone cache per photo viewed instead of 3.07.
+
 **Egress is billed only through the CDN — direct reads from the storage API are free.** This is
 why §2 skips the pull zone: it is both the simplest path and the free one. The trade-off is no
 edge cache, so every re-view is a fresh fetch from the storage region — free, but not instant,
@@ -1244,7 +1397,7 @@ EXIF-tag mapping and hierarchy rules. Verified with synthetic fixtures and
 renegotiate.
 
 **C · Derivative pipeline** *(needs the domain's EXIF and derivative contracts, extracted from B)*
-Thumbs, previews, video transcode, CR2 extraction, Live-Photo pairing, `.photosignore`
+Thumbs, viewing images, video transcode, CR2 extraction, Live-Photo pairing, `.photosignore`
 filtering, and the Linux `ImageBackend` adapter. Verified by unit tests over synthesised
 images — every operation, every orientation, the CR2 carve, the colour conversions and the
 Live-Photo pairing rule — and by `:tests:cli`, which drives the whole native stack through the
@@ -1253,7 +1406,8 @@ configuration that actually ships, by running the shipped binary over a syntheti
 > **What that no longer covers, stated plainly.** An earlier draft added a dev-only harness
 > that ran the pipeline over the real library and compared per-tier counts and sizes against
 > the figures in `INGEST.md`. It is not part of this design. So the aggregate properties those
-> figures describe — a thumbnail averaging ~11.6 KB, a preview ~285 KB across 34,607 photos —
+> figures describe — a thumbnail averaging ~13.1 KB, a viewing image ~424 KB across 34,607
+> photos —
 > are **not checked by anything automated**. A change that leaves every unit test green while
 > shifting the output distribution, a quality constant or a resize path, would not be caught
 > here; it would surface as an unexpected bill, or not at all. The figures in `INGEST.md`
@@ -1336,11 +1490,26 @@ often as wanted at no bandwidth cost.
 ### Remaining unknowns
 
 Every storage-layer assumption above is verified against a live zone, and the CLI's whole
-dependency stack is verified on Linux. Two things are not, and both need Apple hardware:
+dependency stack is verified on Linux. Two things need Apple hardware:
 
-- **whether a Compose lazy grid sustains §6's prefetch at scale on a device** — 385 KB per
-  tile, at grid scroll speed. It is E's central screen and the harness cannot answer it.
+- **whether a Compose lazy grid sustains §6's prefetch at scale on a device.** The tile is a
+  13 KB thumbnail from the packed blob, which is the cheap case; what the harness cannot answer
+  is the 2-column pinch density, where §5 now has the grid fetching **424 KB viewing images**
+  per tile at scroll speed.
 - **whether the platform SQLite on iOS behaves as §3 assumes.** The SQL floor is 2018, so this
   is expected rather than doubted, but it is untested.
+
+And two that do not, both left by §5's redesign:
+
+- **the first import's wall time at the shipped profile.** §7 infers ~6 h of encoding against
+  ~3 h of upload from a component measurement; no end-to-end run has confirmed it. The
+  inference changes no decision, but it does mean the import is now CPU-bound rather than
+  link-bound, which is the opposite of what this design assumed throughout.
+- **why viewing-image size tracks source megapixels as strongly as it does.** Measured across
+  16,181 photos in the live zone at the *old* tier: 0-1 MP → 68 KiB, 5-6 → 277, 8-9 → 438,
+  12-20 → 408. A fixed-long-edge tier should vary with content rather than with source
+  resolution, and the 8-9 MP bucket exceeding the 12-20 MP one is backwards either way. The
+  same resize and encode path produces the current tier, so if it is a defect it is still
+  there.
 
 Library-specific open items (unlocated albums, deferred UI) are tracked in `INGEST.md`.
