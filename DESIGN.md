@@ -900,8 +900,13 @@ is what dynamic libc and a smaller runtime buy. x86-64 only: `linuxX64` is the o
 target declared, so no ARM64 binary has been produced and none is claimed.
 
 **libheif, x265, ffmpeg, libcurl, OpenSSL, SQLite and libstdc++ are all statically linked in.** What
-remains dynamic is base-system only — libc, libm, libpthread, libdl, librt, libutil, libcrypt,
-libresolv, libz, libgcc_s. Nothing is shelled out: the keyring is reached in-process through a statically linked libdbus-1 (§1),
+remains dynamic is base-system only — libc, libm, libpthread, libdl, librt, libz, libgcc_s.
+The link passes `--as-needed`, without which Kotlin/Native records a `DT_NEEDED` for every
+library on its default link line whether a symbol is taken from it or not. Four were spurious,
+and one of them mattered: glibc moved `crypt` to libxcrypt, so a current Fedora ships
+`libcrypt.so.2` and has `libcrypt.so.1` only with `libxcrypt-compat` installed. The binary
+linked cleanly, passed every test, and then refused to start — the loader is the only thing
+that reads that list, so nothing before it could have caught this. Nothing is shelled out: the keyring is reached in-process through a statically linked libdbus-1 (§1),
 which is what closed the last gap. An earlier draft exec'd `secret-tool` for the password, on
 the grounds that reaching the keyring in-process meant linking glib. It does not — that is true
 of *libsecret*, not of libdbus, which has no glib dependency at all. The client costs

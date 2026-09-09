@@ -121,8 +121,14 @@ use. libheif, x265, ffmpeg, libcurl, OpenSSL, SQLite and libstdc++ are all linke
 remains dynamic is base-system only:
 
 ```
-libc libm libpthread libdl librt libutil libcrypt libresolv libz libgcc_s
+libc libm libpthread libdl librt libz libgcc_s
 ```
+
+The link passes `--as-needed`. Without it Kotlin/Native records a `DT_NEEDED` for every library
+on its default link line, used or not — and one of those, `libcrypt.so.1`, does not exist on a
+current Fedora, which moved `crypt` to libxcrypt and ships `libcrypt.so.2`. The binary refused
+to start there while linking cleanly and passing every test, because the loader is the only
+thing that ever reads that list.
 
 It shells out to nothing. The desktop keyring is reached in-process through a statically linked
 libdbus-1 — see DESIGN §1 for why libsecret, and therefore glib, is still refused.

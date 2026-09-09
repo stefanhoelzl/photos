@@ -9,6 +9,15 @@ kotlin {
         binaries.executable {
             entryPoint = "net.stho.photos.cli.main"
             baseName = "photos-cli"
+            // Kotlin/Native links without --as-needed, so the binary records a DT_NEEDED for
+            // every library on its default link line whether or not a symbol is taken from it.
+            // Four were spurious -- libcrypt, libresolv, libutil, librt, none contributing a
+            // single undefined symbol -- and libcrypt is not a harmless entry: glibc moved crypt
+            // to libxcrypt, so Fedora ships libcrypt.so.2 and has libcrypt.so.1 only when
+            // libxcrypt-compat is installed. The binary refused to start there.
+            //
+            // `linkerOpts` reaches ld.lld directly, so no `-Wl,` prefix (DESIGN §7).
+            linkerOpts("--as-needed")
         }
     }
     sourceSets {
