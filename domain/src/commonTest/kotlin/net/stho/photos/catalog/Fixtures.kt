@@ -8,8 +8,11 @@ import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.Headers
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.decodeURLPart
+import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
@@ -166,17 +169,41 @@ internal fun Path.readBytes(): ByteArray =
  * business rather than a test's — so this one is keyed by path instead, and these tests never
  * encode an ordering they do not care about.
  */
-internal class FakeZone {
+internal class FakeZone(private val clock: Clock = Clock.System) {
 
-    private val objects = mutableMapOf<String, Pair<ByteArray, String>>()
+    private class Entry(val bytes: ByteArray, val etag: String, val lastModified: Instant)
+
+    private val objects = mutableMapOf<String, Entry>()
+    private var counter = 0
 
     /** Keys asked for by anything other than a LIST — what proves a no-op run fetched nothing. */
     val requestedKeys: MutableList<String> = mutableListOf()
     var listCount: Int = 0
         private set
 
+    /** Writes and deletes the zone actually saw, so a no-op run can be shown to have made none. */
+    var putCount: Int = 0
+        private set
+    var deleteCount: Int = 0
+        private set
+
+    val keys: List<String> get() = objects.keys.sorted()
+
+    fun contains(key: String): Boolean = key in objects
+
+    fun data(key: String): ByteArray? = objects[key]?.bytes
+
     fun put(key: String, bytes: ByteArray, etag: String) {
-        objects[key] = bytes to etag
+        objects[key] = Entry(bytes, etag, clock.now())
+    }
+
+    /**
+     * An object with an age, so the orphan sweep's seven-day floor can be tested without waiting a
+     * week (§7).
+     */
+    fun insert(key: String, bytes: ByteArray, age: Duration = Duration.ZERO) {
+        counter++
+        objects[key] = Entry(bytes, "e$counter", clock.now() - age)
     }
 
     fun remove(key: String) {
@@ -198,16 +225,26 @@ internal class FakeZone {
                 .decodeURLPart()
             when (request.method) {
                 HttpMethod.Put -> {
-                    val etag = "put-${objects.size + 1}"
-                    objects[key] = request.body.toByteArray() to etag
-                    respond(
-                        content = "",
-                        status = HttpStatusCode.OK,
-                        headers = Headers.build { append("ETag", "\"$etag\"") },
-                    )
+                    putCount++
+                    // §2's single-owner rule is enforced here rather than assumed: a stale
+                    // `If-Match` has to come back as a 412 for the conflict path to exist at all.
+                    val ifMatch = request.headers[HttpHeaders.IfMatch]?.trim('"')
+                    if (ifMatch != null && objects[key]?.etag != ifMatch) {
+                        respond(content = "", status = HttpStatusCode.PreconditionFailed)
+                    } else {
+                        counter++
+                        val etag = "put-$counter"
+                        objects[key] = Entry(request.body.toByteArray(), etag, clock.now())
+                        respond(
+                            content = "",
+                            status = HttpStatusCode.OK,
+                            headers = Headers.build { append("ETag", "\"$etag\"") },
+                        )
+                    }
                 }
 
                 HttpMethod.Delete -> {
+                    deleteCount++
                     objects.remove(key)
                     respond(content = "", status = HttpStatusCode.NoContent)
                 }
@@ -222,9 +259,9 @@ internal class FakeZone {
                         )
                     } else {
                         respond(
-                            content = found.first,
+                            content = found.bytes,
                             status = HttpStatusCode.OK,
-                            headers = Headers.build { append("ETag", "\"${found.second}\"") },
+                            headers = Headers.build { append("ETag", "\"${found.etag}\"") },
                         )
                     }
                 }
@@ -232,21 +269,22 @@ internal class FakeZone {
         }
     }
 
-    private fun listXml(objects: List<Map.Entry<String, Pair<ByteArray, String>>>): String = buildString {
+    private fun listXml(objects: List<Map.Entry<String, Entry>>): String = buildString {
         append("""<?xml version="1.0" encoding="UTF-8"?>""")
         append("""<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">""")
         append("<Name>my-photos</Name><EncodingType>url</EncodingType>")
         append("<IsTruncated>false</IsTruncated>")
         for ((key, value) in objects) {
             append("<Contents><Key>${key.replace("/", "%2F")}</Key>")
-            append("<LastModified>2026-01-15T10:30:00.000Z</LastModified>")
+            append("<LastModified>${value.lastModified}</LastModified>")
             // bunny.net's directory markers come back with no ETag and Size 0 (§2).
-            if (!key.endsWith("/")) append("<ETag>&quot;${value.second}&quot;</ETag>")
-            append("<Size>${value.first.size}</Size></Contents>")
+            if (!key.endsWith("/")) append("<ETag>&quot;${value.etag}&quot;</ETag>")
+            append("<Size>${value.bytes.size}</Size></Contents>")
         }
         append("</ListBucketResult>")
     }
 }
+
 
 internal fun zoneClient(engine: MockEngine): S3Client =
     S3Client(storage = testStorage, secretAccessKey = TEST_SECRET, http = HttpClient(engine))

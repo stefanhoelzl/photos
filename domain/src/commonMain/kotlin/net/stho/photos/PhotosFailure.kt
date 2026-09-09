@@ -1,6 +1,7 @@
 package net.stho.photos
 
 import kotlin.uuid.Uuid
+import net.stho.photos.ingest.ByteMismatch
 
 /**
  * A failure that ends the run.
@@ -163,3 +164,94 @@ public class IgnoreRulesUnreadableFailure(
         "Refusing to run — a file that exists means exclusions were intended, and " +
         "continuing without them is how deleted photos get uploaded.",
 )
+
+/**
+ * The conditions under which a run refuses to change anything (exit 3).
+ *
+ * All three mean the same thing: the library is not in the state the catalog was built from, and
+ * proceeding would write something irreversible on a false premise. They are structural guards
+ * rather than error handling — §7 has no confirmation step and no undelete, so the only place a
+ * mistaken premise can be caught is before the first write.
+ *
+ * Declared here rather than beside ingest because Kotlin requires a sealed class's subclasses to
+ * share its package, and the two-tier split (§1) puts every run-fatal failure under
+ * [PhotosFailure].
+ */
+public sealed class IngestAbort(message: String) : PhotosFailure(message) {
+
+    /**
+     * No readable `$LIBRARY_ROOT/.photosignore`.
+     *
+     * The file is the marker that says "this directory is a library root", which is what makes
+     * unattended deletion safe: an unmounted disk is a bare mount point, and a mistyped root is
+     * somebody else's directory — neither has one. A library that wants no exclusions writes an
+     * empty file.
+     *
+     * Note that this is *stricter* than [net.stho.photos.library.readIgnoreRules], which reads an
+     * absent file as "no exclusions". The distinction is deliberate: absent means "not a library
+     * root" only to the tool that deletes things.
+     */
+    public class NotALibraryRoot(
+        /** The library root, not the `.photosignore` itself. */
+        public val root: String,
+        public val detail: String,
+    ) : IngestAbort("$root is not a library root: $detail")
+
+    /**
+     * A file's size no longer matches the row that describes it. §7 asserts images never change
+     * on disk; a mismatch means the library broke that contract, so nothing is written and a
+     * person is told, rather than the file being silently re-ingested.
+     */
+    public class FileChanged(
+        public val mismatches: List<ByteMismatch>,
+    ) : IngestAbort(describeMismatches(mismatches))
+
+    /**
+     * A shard too new to read whose two stable columns could not be read either, so the folder it
+     * claims is unknowable. Continuing would risk uploading that folder as a second album (§3).
+     */
+    public class UnidentifiableShard(public val detail: String) :
+        IngestAbort("a shard could not be identified: $detail")
+}
+
+private fun describeMismatches(mismatches: List<ByteMismatch>): String =
+    "${mismatches.size} file(s) changed on disk since they were ingested: " +
+        mismatches.take(3).joinToString("; ")
+
+/**
+ * A credential that could not be resolved (§1).
+ *
+ * The cases are distinct because §7's exit codes turn on them: a keyring that cannot be reached
+ * is a deferral (75, try again next hour), while a keyring that answered and holds nothing is a
+ * real error (3).
+ */
+public sealed class CredentialFailure(message: String) : PhotosFailure(message) {
+
+    public class MissingLibraryRoot :
+        CredentialFailure("not a directory: pass --library-path, or run from inside the library")
+
+    /**
+     * The keyring could not be reached — no session bus, nothing owning
+     * `org.freedesktop.secrets`, or a collection still locked because nobody has logged in yet.
+     * Not a failure: exit 75 and try again next hour.
+     */
+    public class KeyringUnavailable(public val detail: String) :
+        CredentialFailure("keyring unavailable: $detail")
+
+    /** The keyring answered, and holds no such item. That is a real error. */
+    public class NoSuchItem(
+        public val service: String,
+        public val field: String,
+    ) : CredentialFailure(
+        "nothing in the keyring for service $service, field $field. Store it with:\n" +
+            "  photos-cli login\n" +
+            "For development, run under secrets-env instead, which injects both from Proton Pass.",
+    )
+
+    /**
+     * The keyring answered with something the Secret Service spec does not allow. Not a deferral
+     * — waiting an hour will not change it — so it aborts like any other condition that stops a
+     * run before it writes.
+     */
+    public class KeyringProtocol(public val detail: String) : CredentialFailure(detail)
+}
