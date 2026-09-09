@@ -116,6 +116,12 @@ public class Ingest(
         val report = ReportBuilder()
         report.dryRun = config.dryRun
 
+        // Before anything else, including the marker guard: whatever is in the work directory
+        // belongs to a run that is over, and reclaiming it is the one cleanup a `finally` cannot
+        // do. A dry run reclaims too — `catalog.refresh()` below already writes shards into the
+        // cache, so "changes nothing" was always a promise about the zone and the library.
+        reclaim()
+
         // The one structural guard. `.photosignore` is the marker that says this directory is a
         // library root, so an unmounted disk and a mistyped root both fail here rather than
         // looking like a library whose every album was deleted (§7).
@@ -650,6 +656,21 @@ public class Ingest(
         return path.drop(root.length).dropWhile { it == '/' }
     }
 
+    /**
+     * Empties the work directory, and says so if there was anything in it.
+     *
+     * Safe because of the run lock, not because of anything checked here: the lock lives in the
+     * cache directory this staging sits under, so a run that got it is the only run that can be
+     * using it (see [IngestConfig.workRoot]). Nothing else distinguishes debris from work in
+     * progress — there is no pid to read and no age that would not eventually be wrong.
+     */
+    private fun reclaim() {
+        if (SystemFileSystem.metadataOrNull(config.workRoot) == null) return
+        val debris = config.workRoot.measure()
+        config.workRoot.deleteRecursively()
+        if (debris.files > 0) emit(IngestEvent.Reclaimed(debris.files, debris.bytes))
+    }
+
     private fun emit(event: IngestEvent) {
         mutableEvents.tryEmit(event)
     }
@@ -724,6 +745,22 @@ private fun Throwable.describe(): String = message ?: toString()
 
 private fun Path.deleteQuietly() {
     runCatching { SystemFileSystem.delete(this, mustExist = false) }
+}
+
+/** What a directory holds, counted before it is removed so the run can report it. */
+private class Debris(val files: Int, val bytes: Long)
+
+private fun Path.measure(): Debris {
+    val metadata = SystemFileSystem.metadataOrNull(this) ?: return Debris(0, 0)
+    if (!metadata.isDirectory) return Debris(1, metadata.size)
+    var files = 0
+    var bytes = 0L
+    for (child in runCatching { SystemFileSystem.list(this) }.getOrDefault(emptyList())) {
+        val found = child.measure()
+        files += found.files
+        bytes += found.bytes
+    }
+    return Debris(files, bytes)
 }
 
 private fun Path.deleteRecursively() {

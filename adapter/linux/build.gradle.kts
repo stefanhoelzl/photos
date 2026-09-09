@@ -172,6 +172,85 @@ val flockDefFile: File = layout.buildDirectory.get().asFile.resolve("photosflock
     )
 }
 
+/**
+ * The signal handler itself, in C, because a signal handler is not a place for Kotlin.
+ *
+ * Almost nothing may be called from a handler — `write` and `signal` may, allocating and taking
+ * a lock may not — and Kotlin/Native's runtime offers no such guarantee about a `staticCFunction`
+ * that touches a top-level property. Written here it is a handler doing the two async-signal-safe
+ * things the self-pipe trick asks for, and the Kotlin side only ever reads a pipe.
+ *
+ * The default disposition is restored first, before the byte is written, so a second `^C` kills
+ * the process outright however long the first one takes to unwind. That is the escape hatch from
+ * a clean stop that is waiting on a transcode already inside the encoder.
+ */
+val signalsDefFile: File = layout.buildDirectory.get().asFile.resolve("photossignals.def").apply {
+    parentFile.mkdirs()
+    writeText(
+        """
+        ---
+        #include <errno.h>
+        #include <fcntl.h>
+        #include <signal.h>
+        #include <unistd.h>
+
+        static int photos_signal_pipe[2] = { -1, -1 };
+
+        static void photos_signal_handler(int sig) {
+            /* First, so that a second signal is the kernel's business and not ours. */
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTERM, SIG_DFL);
+
+            unsigned char byte = (unsigned char) sig;
+            ssize_t ignored = write(photos_signal_pipe[1], &byte, 1);
+            (void) ignored;
+        }
+
+        /* `pipe` plus `fcntl` rather than `pipe2`, which glibc hides behind _GNU_SOURCE. Both
+           ends are close-on-exec, and the read end never blocks: the Kotlin side polls it from a
+           coroutine rather than parking a thread in `read`. */
+        static inline int photos_signals_install(void) {
+            if (photos_signal_pipe[0] != -1) return 0;
+            if (pipe(photos_signal_pipe) != 0) return -1;
+            for (int i = 0; i < 2; i++) {
+                fcntl(photos_signal_pipe[i], F_SETFD, FD_CLOEXEC);
+                fcntl(photos_signal_pipe[i], F_SETFL, O_NONBLOCK);
+            }
+            if (signal(SIGINT, photos_signal_handler) == SIG_ERR) return -1;
+            if (signal(SIGTERM, photos_signal_handler) == SIG_ERR) return -1;
+            return 0;
+        }
+
+        /* The signal that arrived, 0 if none has, -1 if the pipe cannot be read. */
+        static inline int photos_signals_poll(void) {
+            unsigned char byte = 0;
+            ssize_t count = read(photos_signal_pipe[0], &byte, 1);
+            if (count == 1) return (int) byte;
+            if (count == 0) return -1;
+            return (errno == EAGAIN || errno == EWOULDBLOCK) ? 0 : -1;
+        }
+
+        static inline void photos_signals_uninstall(void) {
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTERM, SIG_DFL);
+            for (int i = 0; i < 2; i++) {
+                if (photos_signal_pipe[i] != -1) close(photos_signal_pipe[i]);
+                photos_signal_pipe[i] = -1;
+            }
+        }
+
+        /* Die the way an unhandled signal would have. The disposition is already SIG_DFL by the
+           time anyone gets here -- the handler did that -- but saying so again costs nothing and
+           means this is correct called from anywhere. */
+        static inline void photos_signals_surrender(int sig) {
+            signal(sig, SIG_DFL);
+            raise(sig);
+        }
+
+        """.trimIndent(),
+    )
+}
+
 kotlin {
     jvmToolchain(libs.versions.jdk.get().toInt())
     // Both runtimes here are Linux; what differs is Kotlin/Native-with-cinterop versus the
@@ -186,6 +265,9 @@ kotlin {
         }
         compilations.getByName("main").cinterops.create("photosflock") {
             definitionFile.set(flockDefFile)
+        }
+        compilations.getByName("main").cinterops.create("photossignals") {
+            definitionFile.set(signalsDefFile)
         }
         compilations.getByName("main").cinterops.create("photosimaging") {
             definitionFile.set(defFileOnDisk)

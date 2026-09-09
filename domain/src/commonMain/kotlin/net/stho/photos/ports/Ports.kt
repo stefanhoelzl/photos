@@ -3,6 +3,7 @@ package net.stho.photos.ports
 import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.db.SqlSchema
+import kotlin.jvm.JvmInline
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.flow.SharedFlow
@@ -102,8 +103,8 @@ public sealed interface KeyringRead {
 /**
  * Where this device keeps things — XDG directories on Linux, the app container on iOS.
  *
- * §4's on-device layout lives under [cacheRoot]: `sync_state.db`, `shards/`, `merged.db` and
- * `blobs/`.
+ * §4's on-device layout lives under [cacheRoot]: `lock`, `sync_state.db`, `shards/`, `merged.db`,
+ * `blobs/` and `work/`.
  */
 public interface Paths {
     public val cacheRoot: String
@@ -139,6 +140,45 @@ public sealed interface LockAttempt {
 }
 
 public interface LockHandle : AutoCloseable
+
+/**
+ * A request to stop, from outside the process.
+ *
+ * A port for the second of the three reasons: `SIGINT`/`SIGTERM` and a self-pipe are what this
+ * means on Linux, and nothing about them would survive a move to another platform. Like [RunLock]
+ * it is used by the composition root rather than by the domain — nothing under `ingest` knows it
+ * can be interrupted, because it does not need to: cancelling the scope is what unwinds a run,
+ * and the `finally` that empties the work directory is already there.
+ *
+ * It cannot make a run survivable in general — `SIGKILL` is not deliverable to a handler, and an
+ * out-of-memory kill is exactly that — which is why it sits beside the startup reclaim rather
+ * than instead of it.
+ */
+public interface Interrupts : AutoCloseable {
+    /**
+     * Suspends until the run is asked to stop.
+     *
+     * The second request is not this port's business: the default disposition is restored the
+     * moment the first arrives, so a second `^C` kills the process outright. That is deliberate
+     * and it is the only escape hatch there is — cancellation cannot interrupt a transcode that
+     * is already inside the encoder, so a clean stop waits for it.
+     */
+    public suspend fun awaitInterrupt(): Interrupted
+
+    /**
+     * Dies the way an unhandled signal would have: default disposition, signal re-raised at
+     * ourselves.
+     *
+     * Called once the run has unwound, so that what a shell, a parent process and `systemd` see
+     * is a process killed by a signal rather than one that chose an exit code. `ExitCode` (§7)
+     * therefore needs no member for "interrupted" — an interrupted run did not exit.
+     */
+    public fun surrender(interrupted: Interrupted): Nothing
+}
+
+/** Which signal asked, kept so that [Interrupts.surrender] re-raises the same one. */
+@JvmInline
+public value class Interrupted(public val signal: Int)
 
 /**
  * What a file *is*, and what a video container says about it — both from a bounded read.

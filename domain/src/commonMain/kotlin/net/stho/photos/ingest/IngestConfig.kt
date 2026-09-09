@@ -3,7 +3,6 @@ package net.stho.photos.ingest
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.days
 import kotlinx.io.files.Path
-import net.stho.photos.ports.Ids
 
 /**
  * Everything one run needs to know, resolved before it starts.
@@ -29,8 +28,6 @@ public class IngestConfig(
      * adapter rather than in a second copy under the domain.
      */
     public val cacheRoot: Path,
-    /** Where derivatives are staged before upload. Removed when the run ends. */
-    public val workRoot: Path,
     /**
      * Encoder workers. One per core, measured at 0.43 s/photo wall on 16 (§7).
      *
@@ -65,18 +62,22 @@ public class IngestConfig(
     public val jobs: Int = jobs.coerceAtLeast(1)
     public val uploadJobs: Int = uploadJobs.coerceAtLeast(1)
 
-    public companion object {
-        /**
-         * A fresh staging directory under [temporaryDirectory]. One per run, so debris from a run
-         * that died is a directory a tmp-cleaner can see rather than something to reason about.
-         *
-         * The directory is passed in rather than read from `$TMPDIR` here, for the same reason
-         * [Credentials] takes the environment as data: the domain needs a few values at startup,
-         * not a live query.
-         */
-        public fun newWorkRoot(temporaryDirectory: Path, ids: Ids): Path =
-            Path(temporaryDirectory, "photos-cli-${ids.next().toString().take(8)}")
-    }
+    /**
+     * Where derivatives are staged before upload. Emptied when the run starts and again when it
+     * ends.
+     *
+     * Under [cacheRoot] rather than `$TMPDIR`, and that is the whole fix for a run staging video
+     * transcodes in RAM: `/tmp` is tmpfs on a normal Linux desktop, so a 39-hour import used to
+     * hold every transcode in memory until its upload returned. It also buys the cleanup rule.
+     * The run lock lives in [cacheRoot], so a run that holds it is the only run that can be using
+     * this directory — which makes anything found here at startup debris from a run that died,
+     * with no pid to check and no age to guess at. `finally` cannot be the only cleanup: `SIGKILL`
+     * skips it, and an out-of-memory kill is exactly how a run staging into RAM ends.
+     *
+     * Derived rather than passed in, because a caller that could point it somewhere else could
+     * point two runs at one directory, and the lock that makes emptying it safe would not follow.
+     */
+    public val workRoot: Path = Path(cacheRoot, "work")
 }
 
 /**

@@ -59,11 +59,9 @@ class IngestCycleTest {
         var identifiers: Map<String, String> = emptyMap()
 
         suspend fun run(dryRun: Boolean = false): IngestReport {
-            val workRoot = Path(cacheRoot, "work")
             val config = IngestConfig(
                 libraryRoot = library.root,
                 cacheRoot = cacheRoot,
-                workRoot = workRoot,
                 jobs = 2,
                 uploadJobs = 1,
                 dryRun = dryRun,
@@ -76,7 +74,7 @@ class IngestCycleTest {
                     config = config,
                     s3 = zoneClient(zone.engine),
                     catalog = catalog,
-                    pipeline = FakePipeline(ids, workRoot),
+                    pipeline = FakePipeline(ids, config.workRoot),
                     classifier = MediaClassifier(probe, backend),
                     ids = ids,
                     drivers = testDrivers,

@@ -25,6 +25,18 @@ public sealed interface IngestEvent {
         public val pulls: Int,
     ) : IngestEvent
 
+    /**
+     * Staging left behind by a run that was killed, and has just been removed.
+     *
+     * Emitted only when there was something to remove, because that is the point of it: it is the
+     * one thing in the journal that says a previous run did not finish. A run that stopped
+     * cleanly emptied its own work directory in a `finally`, so it leaves nothing to report.
+     */
+    public data class Reclaimed(
+        public val files: Int,
+        public val bytes: Long,
+    ) : IngestEvent
+
     public data class Line(public val text: String) : IngestEvent
 
     public data class Status(public val text: String) : IngestEvent

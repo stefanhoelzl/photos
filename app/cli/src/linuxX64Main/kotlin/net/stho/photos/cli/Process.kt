@@ -51,14 +51,6 @@ internal fun workingDirectory(): Path = memScoped {
 }
 
 /**
- * Where a run stages derivatives before uploading them.
- *
- * `$TMPDIR` when a systemd unit set one — `PrivateTmp=` gives the unit its own, which is where a
- * 39-hour run's tens of gigabytes of intermediates should land — and `/tmp` otherwise.
- */
-internal fun temporaryDirectory(): Path = Path(variable("TMPDIR") ?: "/tmp")
-
-/**
  * Encoder workers, one per core.
  *
  * The default rather than a rule: §7 budgets ~400 MB per worker, so a machine with more cores than

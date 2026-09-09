@@ -599,11 +599,38 @@ transaction blocks the album list that is on screen while it runs.
 
 ```
 <cache>/
+  lock               flock; holds the running sync's pid (§7)
   sync_state.db      album_id → etag, fetched_at
   shards/<uuid>.db   the shards, ~12 MB — source of truth for a rebuild
   merged.db          derived; deletable at any moment
   blobs/             browse-to-cache (§6)
+  work/              staging for the run in progress; emptied at both ends
 ```
+
+**`work/` is here rather than in `$TMPDIR`, and that is not a tidiness choice.** `/tmp` is
+tmpfs on an ordinary Linux desktop — 16 GB of RAM on the development machine — so an ingest
+staging there holds every video transcode in memory until its upload returns. A run big enough
+to matter is a run big enough to be killed for it, and the kill is `SIGKILL`, which skips the
+`finally` that removes the directory: the staging then stays resident until the machine reboots.
+Both halves of that are fixed by the location. Peak use is bounded — each transcode and each
+thumbnail pack is deleted the moment its upload returns, so the high-water mark is `--jobs`
+transcodes plus one pack, not the run's total throughput — but bounded gigabytes of RAM is still
+the wrong place for them, and gigabytes of disk beside the shards is the right one.
+
+**The run lock is what makes the cleanup rule trivial.** `lock` and `work/` are in the same
+directory, so a run holding the lock is the only run that can be using the staging: everything
+found there at startup is debris, with no pid to read and no age to guess at. The reclaim happens
+before anything else a run does, including the marker guard and including `--dry-run`, and it says
+what it removed — the only thing in the journal that reports a previous run was killed. Removing
+it *is* what a `finally` cannot do, so both exist: the `finally` for every ordinary ending, the
+startup reclaim for `SIGKILL`.
+
+> `O_TMPFILE` would remove even that window — an unlinked inode is freed by the kernel however
+> the process dies — and it is rejected because everything downstream of staging wants a *name*:
+> the transcode shim takes an output path, a thumbnail pack is a SQLite database opened by path
+> (with its own WAL sidecars derived from that name), and uploads read by path. It would mean
+> `/proc/self/fd/N` threaded through the C shim, the SQL driver and the uploader, to close a
+> window that now costs disk rather than memory.
 
 `sync_state.db` exists so that the merged DB stays purely derived. Putting the ETags inside
 `merged.db` would make losing it mean re-fetching all 288 shards; keeping them beside the
@@ -1096,6 +1123,14 @@ what the zone contains; the other two decide nothing at all.
   now literally so: nothing is exec'd, so it is never an argument to a child process either.
 - Guards: `ConditionACPower=true` (never transcode on battery), `Nice=19`,
   `IOSchedulingClass=idle`, a `CPUQuota=` ceiling, and an `OnFailure=` notification unit.
+- `PrivateTmp=yes` as ordinary hardening, and for no other reason: derivatives stage in `work/`
+  under the cache directory (§4), not in `/tmp`, so there is no `TMPDIR=` to set here and nothing
+  about the unit's temporary directory that a long import depends on.
+- A run stopped with `SIGTERM` unwinds rather than being killed: it empties its staging, releases
+  the lock, and then dies *by the signal*, so what `systemd` records is a terminated process
+  rather than one of §7's exit codes. Whether `SuccessExitStatus=` should therefore name `SIGTERM`
+  is a question for the units themselves — an operator stopping a sync is not a failure, but an
+  out-of-memory kill should still reach `OnFailure=`.
 - `Wants=`/`After=network-online.target`. Linger is already enabled.
 
 ---

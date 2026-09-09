@@ -11,9 +11,11 @@ import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.types.int
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.curl.Curl
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
@@ -25,6 +27,7 @@ import net.stho.photos.adapter.linux.CImagingProbe
 import net.stho.photos.adapter.linux.DbusKeyring
 import net.stho.photos.adapter.linux.FlockRunLock
 import net.stho.photos.adapter.linux.NativeSqlDrivers
+import net.stho.photos.adapter.linux.PosixInterrupts
 import net.stho.photos.adapter.linux.XdgPaths
 import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.ingest.Credentials
@@ -33,6 +36,7 @@ import net.stho.photos.ingest.Ingest
 import net.stho.photos.ingest.IngestConfig
 import net.stho.photos.pipeline.MediaClassifier
 import net.stho.photos.ports.Ids
+import net.stho.photos.ports.Interrupted
 import net.stho.photos.ports.LockAttempt
 import net.stho.photos.storage.S3Client
 import net.stho.photos.storage.StorageUrl
@@ -118,7 +122,6 @@ internal class SyncCommand(private val console: Console = Console()) : CoreClikt
         val config = IngestConfig(
             libraryRoot = libraryRoot,
             cacheRoot = cacheDir?.let(::Path) ?: Path(paths.cacheRoot),
-            workRoot = IngestConfig.newWorkRoot(temporaryDirectory(), ids),
             jobs = jobs,
             uploadJobs = uploadJobs,
             albumFilter = albumFilter,
@@ -137,7 +140,53 @@ internal class SyncCommand(private val console: Console = Console()) : CoreClikt
             }
         }
 
-        return handle.use { ingesting(config, storage.value, password.value, ids) }
+        return handle.use { interruptible { ingesting(config, storage.value, password.value, ids) } }
+    }
+
+    /**
+     * Runs [body], and turns the first `SIGINT` or `SIGTERM` into an ordinary cancellation.
+     *
+     * Cancelling is all this does, because cancelling is all that is needed: every cleanup that
+     * matters is already in a `finally` or a `use` — the work directory, the encoder threads, the
+     * catalog, the lock — and structured concurrency runs the lot on the way out. Nothing under
+     * `:domain` learns that signals exist.
+     *
+     * The process then dies *by the signal* rather than choosing an exit code, which is why §7's
+     * table has no member for "interrupted": an interrupted run did not exit. Everything that
+     * reads `$?` — a shell, a parent script, `systemd` — sees what it expects from a process that
+     * was stopped.
+     *
+     * The waiting is the honest part. A transcode already inside the encoder is a blocking call
+     * into C that cancellation cannot reach, so a clean stop takes as long as the slowest of
+     * `--jobs` of them. The second signal is the way out, and the kernel handles that one.
+     */
+    private suspend fun <T> interruptible(body: suspend () -> T): T {
+        val interrupts = PosixInterrupts()
+        if (!interrupts.installed) console.error("this run cannot be interrupted cleanly")
+        var caught: Interrupted? = null
+        return interrupts.use {
+            try {
+                coroutineScope {
+                    val watcher = launch {
+                        caught = interrupts.awaitInterrupt()
+                        console.clearProgress()
+                        console.line("stopping: waiting for transcodes already running")
+                        console.line("  (press again to abort now)")
+                        // The scope the run is in, not this one: a bare `cancel()` here is the
+                        // watcher cancelling itself, and the run would carry on to the end.
+                        this@coroutineScope.cancel()
+                    }
+                    try {
+                        body()
+                    } finally {
+                        watcher.cancel()
+                    }
+                }
+            } catch (cancellation: CancellationException) {
+                // Cancelled by anything other than the watcher is not ours to translate.
+                interrupts.surrender(caught ?: throw cancellation)
+            }
+        }
     }
 
     /**

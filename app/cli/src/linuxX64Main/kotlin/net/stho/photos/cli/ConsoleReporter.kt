@@ -41,6 +41,10 @@ internal class ConsoleReporter(private val console: Console) {
     fun show(event: IngestEvent) {
         when (event) {
             is IngestEvent.Planned -> console.line(plan(event))
+            is IngestEvent.Reclaimed -> console.line(
+                "reclaimed ${formatBytes(event.bytes)} of staging from an interrupted run",
+            )
+
             is IngestEvent.Line -> {
                 console.clearProgress()
                 console.line(event.text)
