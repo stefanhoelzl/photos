@@ -31,3 +31,5 @@ include(":app:desktop")
 // tests and the end-to-end suite work from; `:tests:cli` drives the shipped binary.
 include(":tests:fixtures")
 include(":tests:cli")
+// The app's end-to-end suite, `:tests:cli`'s counterpart (decision 22).
+include(":tests:app")

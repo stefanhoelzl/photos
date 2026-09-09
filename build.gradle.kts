@@ -77,6 +77,55 @@ val fetchS3Mock by tasks.registering {
  * Without java the round-trip tests skip and everything else still runs: a machine that cannot
  * run a JVM should still be able to run the signer vectors and the offline tests.
  */
+/**
+ * The same server for a JVM test task.
+ *
+ * Kept apart from [configureS3Mock] because the endpoint reaches a Kotlin/Native test through
+ * the process environment and a JVM one through a system property -- and because the cast in
+ * the other function is to `KotlinNativeTest`, which a `Test` is not.
+ */
+fun configureS3MockJvm(task: Task) {
+    task.dependsOn(fetchS3Mock)
+    var process: Process? = null
+    task.doFirst {
+        val javaOk = runCatching {
+            ProcessBuilder("java", "-version").redirectErrorStream(true).start().waitFor() == 0
+        }.getOrDefault(false)
+        if (!javaOk) {
+            logger.lifecycle("S3Mock: java not found — app scenarios will skip")
+            return@doFirst
+        }
+        val port = java.net.ServerSocket(0).use { it.localPort }
+        val started = ProcessBuilder(
+            "java", "-Dhttp.port=$port", "-DinitialBuckets=my-photos",
+            "-Dserver.port=${java.net.ServerSocket(0).use { it.localPort }}",
+            "-jar", s3mockJar.asFile.path,
+        ).redirectOutput(ProcessBuilder.Redirect.DISCARD)
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
+        process = started
+        Runtime.getRuntime().addShutdownHook(Thread { started.destroyForcibly() })
+        val deadline = System.currentTimeMillis() + 60_000
+        var url: String? = null
+        while (System.currentTimeMillis() < deadline && started.isAlive) {
+            if (runCatching { java.net.Socket("127.0.0.1", port).close(); true }.getOrDefault(false)) {
+                url = "http://127.0.0.1:$port"
+                break
+            }
+            Thread.sleep(200)
+        }
+        if (url == null) {
+            started.destroyForcibly()
+            process = null
+            logger.lifecycle("S3Mock: did not become ready — app scenarios will skip")
+            return@doFirst
+        }
+        logger.lifecycle("S3Mock listening on 127.0.0.1:$port, bucket 'my-photos'")
+        (task as Test).systemProperty("photos.s3mock.endpoint", "$url/my-photos")
+    }
+    task.doLast { process?.destroy() }
+}
+
 fun configureS3Mock(task: Task) {
     task.dependsOn(fetchS3Mock)
     var process: Process? = null
@@ -158,6 +207,11 @@ project(":domain") {
 
 // The end-to-end suite needs one too. Its test task is opt-in -- `:tests:cli:e2e` -- and an
 // `onlyIf` skips the task and its actions together, so `build` never starts a second JVM.
+// The app suite needs a zone too, and its test task is an ordinary JVM `Test`.
+project(":tests:app") {
+    tasks.matching { it.name == "jvmTest" }.configureEach { configureS3MockJvm(this) }
+}
+
 project(":tests:cli") {
     tasks.matching { it.name == "linuxX64Test" }.configureEach { configureS3Mock(this) }
 }
