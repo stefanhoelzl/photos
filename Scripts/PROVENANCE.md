@@ -2,13 +2,33 @@
 
 Mostly milestone C's imaging stack, plus the two libraries the keyring client needs (§1).
 `build-native.sh` fetches and builds these from pinned source releases into
-`.tools/native/<host|musl>/`, which is gitignored. Nothing is installed system-wide and
+`.tools/native/<host|musl|konan>/`, which is gitignored. Nothing is installed system-wide and
 nothing needs `sudo`; this machine has none.
 
-Two prefixes exist because **the Static Linux SDK ships neither `XCTest` nor `Testing`**.
-`swift test` cannot be built for musl at all, so tests can only run against host glibc — while
-§7's deliverable is the musl binary. One recipe, two prefixes, is what keeps the tested
-configuration and the shipped one the same code rather than merely similar.
+**Three prefixes, one recipe** — which is what keeps the tested configuration and the shipped
+one the same code rather than merely similar.
+
+| prefix | toolchain | for | extras |
+|---|---|---|---|
+| `konan` | Kotlin/Native's bundled crosstool-NG **gcc 8.3.0 / glibc 2.19** | the shipped binary | + SQLite, OpenSSL, curl |
+| `host` | the host's gcc | the Swift tree, until the port retires it | — |
+| `musl` | the Swift Static Linux SDK's clang | the Swift tree's release binary, likewise | — |
+
+SQLite, OpenSSL and curl are built for `konan` **only**. The Swift tree takes HTTP from
+`FoundationNetworking` and SQLite from `Sources/CSQLite`, so building them into the other two
+prefixes would be minutes of build time nothing consumes — and untested minutes, since neither
+has been built against the Swift musl toolchain.
+
+`konan` exists because Kotlin/Native links `linuxX64` against that bundled toolchain and
+nothing else. Building the stack with the host's gcc instead produces a prefix that *looks*
+fine and fails at link time on eleven symbols — libmvec's `_ZGVbN2v_*`, `__isoc23_strtol`,
+`__libc_single_threaded`, `fcntl64` and the modern libstdc++ `__cxx11` ABI — none of which
+glibc 2.19 has. Building it with the same toolchain is also what gives the shipped binary its
+**GLIBC_2.17 floor** (§7): older than any desktop distribution still in use.
+
+It is deliberately **not** configured as a cross build. A glibc-2.19 binary runs on a modern
+glibc host, so configure's test programs execute normally and cmake's `try_run` needs no
+guard — the usual cross-compilation ceremony would buy nothing here.
 
 **Nothing third-party is committed to this repository.** Three things are easily confused:
 
@@ -19,22 +39,23 @@ configuration and the shipped one the same code rather than merely similar.
 | `Sources/CDBus` | the same, for libdbus-1 — but its modulemap *does* expose `<dbus/dbus.h>`, because the Secret Service client is Swift written against it directly | yes, ~600 bytes |
 | the libraries below | fetched as pinned source tarballs into gitignored `.tools/native/src` (~307 MB) and built here | **no** |
 
-That last row is the difference from `Sources/CSQLite`, which *is* vendored: SQLite is a single
-270k-line amalgamation, and milestone B committed it so the phone and the laptop run
-byte-identical SQLite. Vendoring seven imaging libraries instead would put 307 MB of other
-people's source in a Swift package, which is why this script exists.
+Vendoring these libraries instead would put 307 MB of other people's source in the repository,
+which is why this script exists.
 
 | library | version | why it is here |
 |---|---|---|
 | **libjpeg-turbo** | 3.1.0 | 94% of the library is JPEG. Built for the *classic* libjpeg API, not TurboJPEG, because the pipeline depends on `scale_num`/`scale_denom` shrink-on-load — that is what bounds decode memory on the 164 MP panorama and makes 34k photos cheap. |
 | **libheif** | 1.19.8 | HEIC decode and encode. `ENABLE_PLUGIN_LOADING=OFF`: libheif's default builds x265 and libde265 as `dlopen`-ed plugins, which a single static binary cannot use. |
 | **libde265** | 1.0.15 | libheif's HEVC decoder. 1,531 HEICs in the library. |
-| **x265** | 3.6 | HEVC encoder, for **both** previews and video. Choosing HEVC for video (decision 10) is what let libx264 out of the stack entirely — one video encoder instead of two. |
+| **x265** | 3.6 | HEVC encoder, for **both** previews and video. Choosing HEVC for video (decision 10) is what let libx264 out of the stack entirely — one video encoder instead of two. Its `.pc` is patched after install to add `-lpthread -lrt`: x265 uses pthreads and named semaphores but does not declare them, because on glibc ≥ 2.34 they live in libc. Against the `konan` prefix's 2.19 they do not, and ffmpeg's configure then fails its x265 link test and reports the misleading *"x265 not found using pkg-config"*. |
 | **ffmpeg** | 7.1.1 | Video decode/transcode, PNG and TIFF decode, and swscale — the single resampler for stills and video frames alike. Configured `--disable-everything` and then enumerated; see below. |
 | **lcms2** | 2.16 | The one colour conversion the pipeline performs: thumbnails to sRGB. ~1 MB of C, no dependencies. |
 | **libexif** | 0.6.24 | EXIF extraction. Apple's maker note is walked by hand on top of the raw bytes libexif hands back — a bounded read of one documented IFD, which is what keeps exiv2 (C++, GPL, another cross-build) out of the stack for the sake of 187 Live Photos. |
 | **libdbus-1** | 1.14.10 | The Secret Service client (§1) — the desktop keyring, read and written in-process instead of by exec'ing `secret-tool`, which is what makes the shipped binary self-sufficient. The reference D-Bus implementation, dependent on nothing but libc, and **not** glib: that is libsecret, which is what §7 refused. 204 KB in the final binary after `--gc-sections`. 1.14.x rather than 1.16, which dropped autotools for meson. Only the `dbus/` subdirectory is built — the daemon and the command-line tools are precisely what is being removed. |
 | **expat** | 2.6.4 | Not wanted for itself: dbus's `configure` requires an XML parser even when only the client library is being built, and refuses to proceed without one. No dependencies of its own, and nothing in our code includes it. |
+| **OpenSSL** | 3.0.16 | TLS for curl, and nothing else — the SigV4 signer uses its own HMAC. `no-shared` keeps it to the two archives curl links; `no-tests` halves the build. The 3.0 LTS line rather than 3.5: `no-docs` only arrived in 3.1, and longest-shipping is the same argument the old toolchain above rests on. |
+| **curl** | 8.11.1 | What Ktor's Kotlin/Native client speaks HTTP through. Everything optional is off — psl, idn2, http2, brotli, zstd, ldap — because this tool talks to one S3 endpoint and each of them would be another pinned source here for no request it makes. **`--with-ca-bundle` is required**: a statically linked curl has no distro default, so without a baked path every HTTPS request fails verification. The path compiled in is Debian/Ubuntu's; the CLI should probe the known locations at runtime rather than trust it. |
+| **SQLite** | 3.53.4 | Built here rather than taken from the distro, and **the reason is the link, not the SQL**. §3 establishes that nothing in this project needs a particular SQLite — the newest feature used is `ON CONFLICT … DO UPDATE`, from 3.24 — but a distro's `libsqlite3.so` is compiled against *that distro's* glibc (Ubuntu 24.04's wants `GLIBC_2.38`), while everything else here links against konan's 2.19 sysroot. The two cannot meet, so using the platform's library would raise the shipped binary's floor from 2.17 to whatever the build host happens to have — making portability a property of the machine instead of this recipe. Flags: `DQS=0` (a typo'd identifier becomes an error, not a silent string literal), `USE_URI=1` (required by SQLDelight's in-memory driver, which passes `file:name?mode=memory&cache=shared` and otherwise gets a *file* of that name), plus hardening and size. Deliberately absent: `ENABLE_MATH_FUNCTIONS` — no query in this project calls one. |
 | **cmake** | 3.31.6 | Build tool, fetched as a binary. |
 | **nasm** | 2.16.03 | Build tool, built from source. Needed for libjpeg-turbo's SIMD and x265's assembly. |
 

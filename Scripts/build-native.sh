@@ -20,7 +20,7 @@ BIN="$TOOLS/bin"
 
 TARGET="${1:-}"
 case "$TARGET" in
-    host|musl) ;;
+    host|musl|konan) ;;
     *) echo "usage: $0 <host|musl>" >&2; exit 2 ;;
 esac
 
@@ -42,6 +42,10 @@ HEIF_V=1.19.8
 FFMPEG_V=7.1.1
 EXPAT_V=2.6.4
 DBUS_V=1.14.10
+SQLITE_V=3530400
+SQLITE_YEAR=2026
+OPENSSL_V=3.0.16
+CURL_V=8.11.1
 
 log() { printf '\n\033[1m== %s\033[0m\n' "$*" >&2; }
 have() { [ -f "$PREFIX/.stamp/$1" ]; }
@@ -105,8 +109,10 @@ find_toolchain() {
     done
     return 1
 }
-SWIFT_TC="$(find_toolchain)" || { echo "no Swift toolchain with musl clang configs found" >&2; exit 1; }
-echo "toolchain: $SWIFT_TC" >&2
+if [ "$TARGET" != konan ]; then
+    SWIFT_TC="$(find_toolchain)" || { echo "no Swift toolchain with musl clang configs found" >&2; exit 1; }
+    echo "toolchain: $SWIFT_TC" >&2
+fi
 
 if [ "$TARGET" = musl ]; then
     SDK_ROOT="$(ls -d "$HOME"/.swiftpm/swift-sdks/*static-linux*.artifactbundle/*/swift-linux-musl 2>/dev/null | head -1)"
@@ -125,6 +131,29 @@ if [ "$TARGET" = musl ]; then
     HOST_TRIPLE=x86_64-linux-musl
     CROSS=1
     CXX_RUNTIME_LIBS="-lc++ -lc++abi -lunwind"
+elif [ "$TARGET" = konan ]; then
+    # Kotlin/Native links linuxX64 against its own bundled crosstool-NG toolchain -- gcc 8.3.0,
+    # glibc 2.19, kernel 4.9 headers. Building the imaging stack with that *same* toolchain is
+    # what makes the two agree at link time, and it is what drops the shipped binary's glibc
+    # floor to 2.17 (§7). Built with the host's gcc instead, the prefix pulls in libmvec,
+    # __isoc23_strtol, __libc_single_threaded and the modern libstdc++ __cxx11 ABI, none of
+    # which konan's sysroot has.
+    KTC="$(ls -d "$HOME"/.konan/dependencies/x86_64-unknown-linux-gnu-gcc-*-glibc-*/ 2>/dev/null | head -1)"
+    [ -n "$KTC" ] || { echo "konan gcc toolchain not found under ~/.konan/dependencies; link a linuxX64 binary once to fetch it" >&2; exit 1; }
+    KTC="${KTC%/}"; KP="$KTC/bin/x86_64-unknown-linux-gnu"
+    echo "toolchain: $KTC" >&2
+    CC="$KP-gcc"
+    CXX="$KP-g++"
+    AR="$KP-ar"
+    RANLIB="$KP-ranlib"
+    NM="$KP-nm"
+    STRIP="$KP-strip"
+    HOST_TRIPLE=x86_64-unknown-linux-gnu
+    # Deliberately NOT a cross build. A glibc-2.19 binary runs on a modern glibc host, so
+    # configure's test programs execute normally and every cross-compile guard below would be
+    # ceremony -- cmake try_run included.
+    CROSS=0
+    CXX_RUNTIME_LIBS="-lstdc++"
 else
     CC=gcc
     CXX=g++
@@ -261,6 +290,11 @@ if ! have x265; then
     cmake_build "$d/source" x265 \
         -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_ASSEMBLY=ON \
         -DHIGH_BIT_DEPTH=OFF -DENABLE_HDR10_PLUS=OFF
+    # x265 uses pthreads and named semaphores but does not say so in its .pc file, because on
+    # glibc >= 2.34 those symbols live in libc and no flag is needed. Against konan's glibc
+    # 2.19 they are still in libpthread, so ffmpeg's configure fails its x265 link test and
+    # reports the misleading "x265 not found using pkg-config".
+    sed -i 's/^Libs.private: \(.*\)/Libs.private: \1 -lpthread -lrt/' "$PREFIX/lib/pkgconfig/x265.pc"
     stamp x265
 fi
 
@@ -412,6 +446,88 @@ PCEOF
 # calls into x265, libheif calls into both x265 and libde265, and a static linker resolves
 # strictly left to right. Grouping them is what stops the correct order from being something
 # anyone has to know.
+# ------------------------------------------------- sqlite / openssl / curl (konan only)
+# These three exist for the Kotlin binary and nothing else: the Swift tree takes HTTP from
+# FoundationNetworking and SQLite from Sources/CSQLite, so building them into the host and musl
+# prefixes would be minutes of build time nothing consumes -- and openssl and curl have never
+# been built against the Swift musl toolchain, so it would be untested minutes at that.
+if [ "$TARGET" = konan ]; then
+
+# ---------------------------------------------------------------- sqlite
+# Built here rather than taken from the distro, and the reason is the link, not the SQL.
+# A distro libsqlite3.so is built against that distro's glibc -- Ubuntu 24.04's needs
+# GLIBC_2.38 -- while everything else here links against konan's 2.19 sysroot. The two cannot
+# meet, so using the platform's library would raise the shipped binary's floor from 2.17 to
+# whatever the build host happens to have, and make it a property of the machine rather than
+# of this recipe.
+#
+# Nothing is committed to the repository: this is a pinned tarball like the ten above.
+#
+# The flags are the small set that earns its place. DQS=0 turns a typo'd identifier into an
+# error instead of a silent string literal. USE_URI=1 is required by SQLDelight's in-memory
+# driver, which passes `file:name?mode=memory&cache=shared` and otherwise gets a *file* of
+# that name. The rest are hardening and size. Notably absent: ENABLE_MATH_FUNCTIONS, because
+# no query in this project calls one.
+if ! have sqlite; then
+    log "sqlite $SQLITE_V"
+    tb=$(fetch "https://sqlite.org/$SQLITE_YEAR/sqlite-autoconf-$SQLITE_V.tar.gz" "sqlite-autoconf-$SQLITE_V.tar.gz")
+    src=$(unpack "$tb" "sqlite-autoconf-$SQLITE_V")
+    CFLAGS="$COMMON_CFLAGS \
+        -DSQLITE_DQS=0 \
+        -DSQLITE_THREADSAFE=1 \
+        -DSQLITE_USE_URI=1 \
+        -DSQLITE_OMIT_LOAD_EXTENSION \
+        -DSQLITE_DEFAULT_MEMSTATUS=0 \
+        -DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1 \
+        -DSQLITE_LIKE_DOESNT_MATCH_BLOBS \
+        -DSQLITE_OMIT_DEPRECATED" \
+        autotools_build "$src" sqlite --disable-readline
+    CFLAGS="$COMMON_CFLAGS"
+    stamp sqlite
+fi
+
+# ---------------------------------------------------------------- openssl
+# Ktor's Kotlin/Native client speaks HTTP through curl, and curl needs a TLS stack. no-shared
+# keeps it to the two static archives curl links; no-tests halves the build.
+#
+# 3.0.x rather than 3.5: `no-docs` only arrived in 3.1, and the LTS line is the one every
+# distro has been shipping longest -- which is the same argument as the old toolchain above.
+if ! have openssl; then
+    log "openssl $OPENSSL_V"
+    tb=$(fetch "https://github.com/openssl/openssl/releases/download/openssl-$OPENSSL_V/openssl-$OPENSSL_V.tar.gz" "openssl-$OPENSSL_V.tar.gz")
+    src=$(unpack "$tb" "openssl-$OPENSSL_V")
+    rm -rf "$BUILD/openssl"; mkdir -p "$BUILD/openssl"
+    ( cd "$BUILD/openssl" && "$src/Configure" linux-x86_64 no-shared no-tests \
+        --prefix="$PREFIX" --libdir=lib --openssldir="$PREFIX/ssl" \
+        CC="$CC" CXX="$CXX" AR="$AR" RANLIB="$RANLIB" ) >"$BUILD/openssl.log" 2>&1 \
+        || { echo "configure failed for openssl; tail:" >&2; tail -30 "$BUILD/openssl.log" >&2; exit 1; }
+    make -C "$BUILD/openssl" -j"$JOBS" >>"$BUILD/openssl.log" 2>&1 \
+        || { echo "build failed for openssl; tail:" >&2; tail -30 "$BUILD/openssl.log" >&2; exit 1; }
+    make -C "$BUILD/openssl" install_sw >>"$BUILD/openssl.log" 2>&1
+    stamp openssl
+fi
+
+# ---------------------------------------------------------------- curl
+# Everything optional is off: this client talks to one S3 endpoint over HTTPS and needs none
+# of psl, idn2, http2, brotli, zstd or ldap. Each of them would be another pinned source in
+# this file for no request this tool makes.
+#
+# --with-ca-bundle is not optional for a *statically linked* curl: it has no distro default
+# and every HTTPS request would fail verification. The path below is Debian/Ubuntu; the CLI
+# should probe the handful of known locations at runtime rather than trust this one.
+if ! have curl; then
+    log "curl $CURL_V"
+    tb=$(fetch "https://curl.se/download/curl-$CURL_V.tar.xz" "curl-$CURL_V.tar.xz")
+    src=$(unpack "$tb" "curl-$CURL_V")
+    autotools_build "$src" curl \
+        --with-openssl="$PREFIX" --without-libpsl --without-libidn2 --without-nghttp2 \
+        --without-brotli --without-zstd --disable-ldap --disable-ldaps \
+        --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt
+    stamp curl
+fi
+
+fi  # konan-only block
+
 log "photos-native.pc"
 mkdir -p "$PREFIX/lib/pkgconfig"
 cat > "$PREFIX/lib/pkgconfig/photos-native.pc" <<PCEOF
