@@ -286,12 +286,11 @@ public class Reconciler(
         val pulls = mutableListOf<PullPlan>()
         for (shard in shards.filter { it.info.state == AlbumState.UPLOADED }
             .sortedBy { it.info.id.toString() }) {
-            val claimed = shard.info.sourcePath?.normalisedPath()
-            val resuming = !claimed.isNullOrEmpty()
-            val path = if (resuming) claimed!! else availablePath(shard, reserved)
+            val claimed = shard.info.sourcePath?.normalisedPath()?.ifEmpty { null }
+            val path = claimed ?: availablePath(shard, reserved)
             if (!matchesFilter(path)) continue
             reserved += path
-            pulls += PullPlan(shard, path, claimed = resuming)
+            pulls += PullPlan(shard, path, claimed = claimed != null)
         }
 
         return IngestPlan(
