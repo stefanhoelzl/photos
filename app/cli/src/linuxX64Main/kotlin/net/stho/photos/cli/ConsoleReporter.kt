@@ -144,9 +144,10 @@ internal class ConsoleReporter(private val console: Console) {
 private fun plan(event: IngestEvent.Planned): String {
     val parts = buildList {
         if (event.albums > 0) {
-            // `~` because the upload figure is predicted from the source bytes: a photograph's
-            // derived size is not known until it is derived (§5).
-            add("${event.albums} album(s), ${event.files} photos, ~${formatBytes(event.bytes)}")
+            // "to read", not "to upload": since §5 far less goes up than comes off the disk, and
+            // how much less is not knowable until it has been derived. The counter projects the
+            // upload once it has watched enough of this run to know.
+            add("${event.albums} album(s), ${event.files} photos, ${formatBytes(event.bytes)} to read")
         }
         if (event.deletions > 0) add("${event.deletions} album(s) to delete")
         if (event.pulls > 0) add("${event.pulls} album(s) to pull")

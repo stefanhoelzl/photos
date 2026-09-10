@@ -184,14 +184,11 @@ public class Ingest(
         // that has wedged.
         val work = plan.albums.filter(AlbumPlan::needsWrite)
         val files = work.sumOf { it.uploads.size }
-        // What will be *sent*, not what will be read. Since §5 the two differ by roughly 7×:
-        // a 3 MB photograph becomes a ~424 KB viewing image. Promising the disk figure would
-        // over-state the upload, and — because the meter's numerator counts bytes actually
-        // produced — would leave the bar stuck near a seventh of the way across and the estimate
-        // seven times too long. The derived size is unknowable before deriving, so this is an
-        // estimate and every line that shows it says `~`.
-        val sourceBytes = work.sumOf { album -> album.uploads.sumOf { Body.File(it).byteCount ?: 0L } }
-        val bytes = (sourceBytes * DerivativeSpec.ESTIMATED_UPLOAD_RATIO).toLong()
+        // Bytes to *read*, which is the only figure knowable before anything is derived — and
+        // it is real work, since every one of them is decoded, hashed and re-encoded. What will
+        // be *sent* is far less (§5) and cannot be predicted here; the meter projects it from
+        // the ratio the run observes as it goes.
+        val bytes = work.sumOf { album -> album.uploads.sumOf { Body.File(it).byteCount ?: 0L } }
         emit(
             IngestEvent.Planned(
                 albums = work.size, files = files, bytes = bytes,
@@ -419,7 +416,7 @@ public class Ingest(
                         // Transient, and only where a person is watching: the journal gets the
                         // per-album lines and nothing else.
                         val uploaded = outcome.getOrNull()?.uploadedBytes ?: 0L
-                        meter.finished(uploaded, album.sourcePath)
+                        meter.finished(uploaded, item.byteCount, album.sourcePath)
                             ?.let { emit(IngestEvent.Status(it)) }
                         item to outcome
                     }

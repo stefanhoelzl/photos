@@ -125,7 +125,7 @@ class ConsoleReporterTest {
 
         assertEquals(
             listOf(
-                "to do: 2 album(s), 30 photos, ~1.0 KB, 1 album(s) to delete, 1 album(s) to pull",
+                "to do: 2 album(s), 30 photos, 1.0 KB to read, 1 album(s) to delete, 1 album(s) to pull",
                 "nothing to do",
             ),
             recorder.out,

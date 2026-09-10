@@ -56,25 +56,41 @@ internal class ProgressMeter(private val clock: Clock) {
 
     private val mutex = Mutex()
     private var totalFiles = 0
-    private var totalBytes = 0L
+
+    /** Bytes on disk, which is the only total known before anything has been derived. */
+    private var totalSource = 0L
     private var doneFiles = 0
+
+    /** Bytes this run has produced — what actually goes to the zone. */
     private var doneBytes = 0L
+
+    /** Bytes on disk behind [doneBytes], which is what makes the two comparable. */
+    private var doneSource = 0L
     private var started: Instant = Instant.DISTANT_PAST
     private var lastEmit: Instant = Instant.DISTANT_PAST
 
-    suspend fun start(files: Int, bytes: Long): Unit = mutex.withLock {
+    suspend fun start(files: Int, sourceBytes: Long): Unit = mutex.withLock {
         totalFiles = files
-        totalBytes = bytes
+        totalSource = sourceBytes
         doneFiles = 0
         doneBytes = 0
+        doneSource = 0
         started = clock.now()
         lastEmit = Instant.DISTANT_PAST
     }
 
-    /** The line to redraw, or null when it is too soon to bother. */
-    suspend fun finished(bytes: Long, album: String): String? = mutex.withLock {
+    /**
+     * The line to redraw, or null when it is too soon to bother.
+     *
+     * [bytes] is what this item produced and [source] what it was made from. Both, because the
+     * total that matters — how much goes to the zone — cannot be known before deriving, and a
+     * constant guessing at it would be one more number to keep true as §5's profile changes.
+     * The run measures its own ratio instead, and re-projects the remainder from it.
+     */
+    suspend fun finished(bytes: Long, source: Long, album: String): String? = mutex.withLock {
         doneFiles++
         doneBytes += bytes
+        doneSource += source
         if (totalFiles == 0) return@withLock null
         val now = clock.now()
         if (now - lastEmit < 1.seconds && doneFiles != totalFiles) return@withLock null
@@ -82,21 +98,48 @@ internal class ProgressMeter(private val clock: Clock) {
 
         val elapsed = (now - started).toDouble(DurationUnit.SECONDS)
         val rate = if (elapsed > 0) doneBytes / elapsed else 0.0
+        val projected = projectedTotal()
         buildString {
             append(doneFiles).append('/').append(totalFiles)
             append("  ").append(formatBytes(doneBytes))
-            // `~`: the total is predicted from source bytes, since a derived size is not known
-            // until it is derived (§5). The numerator is real.
-            if (totalBytes > 0) append(" of ~").append(formatBytes(totalBytes))
+            // `~` because the far end is projected from this run's own ratio, not measured.
+            // Absent entirely until there is enough of a sample to project from: a total that
+            // is one photograph's guess is worse than no total.
+            if (projected != null) append(" of ~").append(formatBytes(projected))
             if (rate > 0) {
                 append("  ").append((rate / 1_048_576).fixed(2)).append(" MB/s")
-                val remaining = (totalBytes - doneBytes) / rate
-                if (remaining > 0 && remaining.isFinite()) {
+                val remaining = projected?.let { (it - doneBytes) / rate }
+                if (remaining != null && remaining > 0 && remaining.isFinite()) {
                     append("  ~").append(formatDuration(remaining.seconds)).append(" left")
                 }
             }
             append("  ").append(album)
         }
+    }
+
+    /**
+     * How much this run will send in total, projected from how much it has sent so far.
+     *
+     * The ratio of produced bytes to source bytes is a property of §5's profile and of this
+     * particular library, and it settles within a few photographs — so the run measures it
+     * rather than carrying a constant that would silently go stale the next time the profile
+     * moves. Null until [SAMPLE_BEFORE_PROJECTING] items are in, and null once the remainder is
+     * nothing, where the answer is simply what has been done.
+     */
+    private fun projectedTotal(): Long? {
+        if (doneFiles < SAMPLE_BEFORE_PROJECTING || doneSource <= 0) return null
+        val remainingSource = (totalSource - doneSource).coerceAtLeast(0)
+        // Double, because source bytes times produced bytes overflows a Long at this scale.
+        val ratio = doneBytes.toDouble() / doneSource.toDouble()
+        return doneBytes + (remainingSource * ratio).toLong()
+    }
+
+    private companion object {
+        /**
+         * Items to observe before showing a total. One worker-round's worth: enough that a
+         * single outlier — a panorama, a 200 MB video — cannot set the projection on its own.
+         */
+        const val SAMPLE_BEFORE_PROJECTING = 16
     }
 }
 

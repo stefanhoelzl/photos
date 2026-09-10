@@ -1259,6 +1259,14 @@ what the zone contains; the other two decide nothing at all.
   exits **75** rather than failing — the sync is happening, just not that one. The lock is
   advisory and process-scoped, so the kernel releases it however the run ends, including
   `kill -9`; there is no stale lock file to explain to anyone.
+- **The counter measures its own ratio rather than carrying a constant.** How much a
+  photograph shrinks when derived is a property of §5's profile *and* of this library, and it
+  is not knowable before deriving — so the plan line says what will be **read**, which is real
+  work and knowable, and the counter projects what will be **sent** from the ratio it observes
+  as it goes. It shows no total until it has watched enough items that one panorama cannot set
+  the projection, and says `~` when it does. A hard-coded ratio would have been one more number
+  to keep true the next time the profile moved.
+
 - **A run says what it intends before it does it**, then a line per album as each commits, so
   a 39-hour job is legible in the journal while it is still going rather than at the end. On a
   terminal a redrawing counter on stderr adds files, bytes, rate and an estimate; the journal
