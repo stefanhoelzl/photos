@@ -31,6 +31,7 @@ import net.stho.photos.catalog.ShardProbe
 import net.stho.photos.catalog.ShardWriteResult
 import net.stho.photos.catalog.ThumbPack
 import net.stho.photos.catalog.asBlobObjectId
+import net.stho.photos.catalog.ObjectId
 import net.stho.photos.catalog.blobKey
 import net.stho.photos.catalog.packThumbnails
 import net.stho.photos.library.IgnoreRule
@@ -111,6 +112,18 @@ public class Ingest(
      */
     public val events: SharedFlow<IngestEvent> = mutableEvents.asSharedFlow()
 
+    /**
+     * Every blob key the zone holds: listed once at the start of the run, and added to as this
+     * run writes (§2).
+     *
+     * One listing serves two jobs. Before a PUT it answers "is this content already there?",
+     * which under content addressing is decidable from the key alone — so a crashed import
+     * resumes without re-sending what it finished. At the end the sweep reuses it rather than
+     * taking a second listing.
+     */
+    private val blobsInZone = mutableSetOf<String>()
+    private var skippedUploads = 0
+
     // ------------------------------------------------------------------------------- the run
 
     public suspend fun run(): IngestReport {
@@ -180,6 +193,14 @@ public class Ingest(
             ),
         )
         meter.start(files, bytes)
+
+        // Listed here rather than at the top of the run: §7 promises a run that changes nothing
+        // costs exactly one request, and the early return above is what keeps that true. A run
+        // with no work has nothing to skip-upload and nothing to sweep, so it needs no listing.
+        s3.list(prefix = BLOB_PREFIX).collect { listed ->
+            if (!listed.isDirectoryMarker) blobsInZone += listed.key
+        }
+        report.blobsInZone = blobsInZone.size
 
         SystemFileSystem.createDirectories(config.workRoot)
         try {
@@ -321,12 +342,16 @@ public class Ingest(
                 }
             }
 
-            // Only now that the shard no longer points at them: dropped rows' blobs, and the pack
-            // the album used to have. The reverse order would leave the catalog naming objects
-            // that are gone (§2).
-            for (row in album.drop) deleteBlobs(row.objectIds)
-            val previousPack = album.existing?.info?.thumbsId
-            if (previousPack != null && previousPack != thumbsId) deleteBlobs(listOf(previousPack))
+            // Only now that the shard no longer points at them: dropped rows' blobs, and the
+            // pack the album used to have. The reverse order would leave the catalog naming
+            // objects that are gone (§2).
+            //
+            // Under content addressing a blob can have more than one referent, so "this album
+            // stopped pointing at it" is not "nobody points at it". Both lists are filtered
+            // against every other shard before anything is deleted.
+            val orphaned = album.drop.flatMap(PhotoRow::objectIds) +
+                listOfNotNull(album.existing?.info?.thumbsId?.takeIf { it != thumbsId })
+            deleteUnreferenced(orphaned, keeping = rows)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
@@ -414,41 +439,64 @@ public class Ingest(
         return produced
     }
 
-    /** Derive one item, then upload every blob it owns. Blobs before the shard, always. */
+    /**
+     * Derive one item, then upload every blob it owns. Blobs before the shard, always.
+     *
+     * Each id is the SHA-256 of the bytes it names (§2), so an upload of content the zone
+     * already holds is skipped rather than repeated under a fresh name — which is what makes a
+     * crashed run resumable and a profile bump send no thumbnail packs.
+     */
     private suspend fun process(item: MediaItem): Produced {
         val derived = withContext(encoders.value) { pipeline.derive(item) }
         var row = derived.row
         var bytes = 0L
 
         derived.video?.let { video ->
-            val id = ids.next()
-            bytes += upload(id.blobKey, Body.File(Path(video)))
+            val path = Path(video)
+            val id = ObjectId.ofContent(path)
+            bytes += upload(id, Body.File(path))
             row = row.copy(videoId = id)
-            Path(video).deleteQuietly()
+            path.deleteQuietly()
         }
         derived.liveVideo?.let { liveVideo ->
-            val id = ids.next()
-            bytes += upload(id.blobKey, Body.File(Path(liveVideo)))
+            val path = Path(liveVideo)
+            val id = ObjectId.ofContent(path)
+            bytes += upload(id, Body.File(path))
             row = row.copy(liveVideoId = id)
         }
         // The one untouched original left in the zone: a Live Photo's still, whose
         // `content.identifier` has to survive to pair with the MOV above (§5).
         derived.liveStill?.let { liveStill ->
-            val id = ids.next()
-            bytes += upload(id.blobKey, Body.File(Path(liveStill)))
+            val path = Path(liveStill)
+            val id = ObjectId.ofContent(path)
+            bytes += upload(id, Body.File(path))
             row = row.copy(liveStillId = id)
         }
 
-        val imageId = ids.next()
-        bytes += upload(imageId.blobKey, Body.Bytes(derived.image))
+        val imageId = ObjectId.ofContent(derived.image)
+        bytes += upload(imageId, Body.Bytes(derived.image))
         row = row.copy(imageId = imageId)
 
         return Produced(row, derived.thumbnail, bytes)
     }
 
-    private suspend fun upload(key: String, body: Body): Long = uploadPermits.withPermit {
-        s3.put(key, body)
-        body.byteCount ?: 0L
+    /**
+     * Write this blob unless the zone already holds it.
+     *
+     * Under content addressing "already holds it" is decidable from the key alone: the same key
+     * means the same bytes. The listing is taken once at the start of the run (§2), so this
+     * costs nothing per object — and a run that died halfway through an import re-derives
+     * everything but re-uploads only what never landed.
+     */
+    private suspend fun upload(id: ObjectId, body: Body): Long {
+        val key = id.blobKey
+        if (key in blobsInZone) {
+            skippedUploads++
+            return 0L
+        }
+        uploadPermits.withPermit { s3.put(key, body) }
+        blobsInZone += key
+        return body.byteCount ?: 0L
     }
 
     // ------------------------------------------------------------------------------ thumbnails
@@ -465,7 +513,7 @@ public class Ingest(
         album: AlbumPlan,
         produced: List<Produced>,
         rows: List<PhotoRow>,
-    ): Uuid? {
+    ): ObjectId? {
         if (rows.isEmpty()) return null
         val existingId = album.existing?.info?.thumbsId
         if (produced.isEmpty() && album.drop.isEmpty()) return existingId
@@ -483,15 +531,19 @@ public class Ingest(
         for (item in produced) thumbnails[item.row.id] = item.thumbnail
         if (thumbnails.isEmpty()) return null
 
-        val id = ids.next()
-        val packed = Path(config.workRoot, "pack-$id.db")
+        // Packed first, then named after what it contains. SQLite's output is byte-deterministic
+        // for an identical sequence of inserts, and libjpeg-turbo's is too — both measured — so
+        // repacking an album whose thumbnails did not change produces the same key and uploads
+        // nothing. That is what makes a profile bump send no thumbnail packs at all (§5).
+        val packed = Path(config.workRoot, "pack-${Uuid.random()}.db")
         thumbnails.packThumbnails(into = packed, drivers = drivers)
-        upload(id.blobKey, Body.File(packed))
+        val id = ObjectId.ofContent(packed)
+        upload(id, Body.File(packed))
         packed.deleteQuietly()
         return id
     }
 
-    private fun albumInfo(album: AlbumPlan, thumbsId: Uuid?, rows: List<PhotoRow>): AlbumInfo {
+    private fun albumInfo(album: AlbumPlan, thumbsId: ObjectId?, rows: List<PhotoRow>): AlbumInfo {
         val existing = album.existing?.info
         return AlbumInfo(
             id = album.id,
@@ -544,7 +596,7 @@ public class Ingest(
             // Shard first: the album stops existing before its objects do, so the catalog never
             // names a blob that is gone (§2).
             catalog.deleteShard(deletion.shard.info.id)
-            deleteBlobs(deletion.shard.objectIds)
+            deleteUnreferenced(deletion.shard.objectIds, keeping = emptyList())
             val photos = deletion.shard.photos.size
             report.deletedAlbums += IngestReport.DeletedAlbum(deletion.sourcePath, photos)
             emit(IngestEvent.Line("- ${deletion.sourcePath}  $photos photos deleted"))
@@ -556,14 +608,33 @@ public class Ingest(
     }
 
     /**
+     * Delete these blobs, except any another album still points at.
+     *
+     * Content addressing is what makes the filter necessary: two albums holding the same
+     * photograph reference one blob, so an album dropping a row is no longer proof that nobody
+     * wants its bytes. [keeping] covers the rows this same commit is writing, which the catalog
+     * has not been re-read for yet.
+     */
+    private suspend fun deleteUnreferenced(candidates: List<ObjectId>, keeping: List<PhotoRow>) {
+        if (candidates.isEmpty()) return
+        val stillWanted = catalog.referencedObjectIds() +
+            keeping.flatMap(PhotoRow::objectIds)
+        deleteBlobs(candidates.filterNot { it in stillWanted })
+    }
+
+    /**
      * A failed delete is swallowed on purpose: the shard no longer references the object, so it is
-     * now debris, and the sweep collects debris once it is a week old. Failing the album over an
+     * now debris, and the sweep collects debris on a later run. Failing the album over an
      * object nothing points at would be worse than leaving it.
      */
-    private suspend fun deleteBlobs(objectIds: List<Uuid>) {
+    private suspend fun deleteBlobs(objectIds: List<ObjectId>) {
         for (id in objectIds) {
             try {
                 s3.delete(id.blobKey)
+                // Keep the set honest: it is what the zone holds, and the sweep reads it at the
+                // end of the run. Leaving a deleted key in would have the sweep count it a
+                // second time and delete what is already gone.
+                blobsInZone -= id.blobKey
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -673,10 +744,12 @@ public class Ingest(
      * whatever that album owns, and the sweep would delete a readable album's photographs on the
      * strength of a shard it could not open.
      *
-     * A shard still [AlbumState.UPLOADING] *names* the blobs its upload has written so far, so
-     * they count as referenced and are never mistaken for debris however long the upload takes.
-     * Past the floor the shard itself is the debris: §8's presigned PUTs have expired, so the
-     * upload provably cannot still finish, and the album is deleted shard-first like any other.
+     * **There is no age floor on garbage.** §8's manifest names every blob an upload will write
+     * before it writes any of them, so an unreferenced blob is unambiguously garbage the moment
+     * it is unreferenced — there is no window in which it might belong to something in flight.
+     * The floor survives for one job only: deciding when an album still [AlbumState.UPLOADING]
+     * has been abandoned, where §8's presigned PUTs have provably expired. Garbage and liveness
+     * stop sharing a knob.
      */
     private suspend fun sweep(
         report: ReportBuilder,
@@ -716,18 +789,15 @@ public class Ingest(
         val live = if (dryRun) shards else shards - abandoned.toSet()
         val referenced = live.flatMapTo(mutableSetOf(), Shard::objectIds)
 
-        s3.list(prefix = BLOB_PREFIX).collect { listed ->
-            if (listed.isDirectoryMarker) return@collect
-            val id = listed.key.asBlobObjectId() ?: return@collect
-            if (id in referenced) return@collect
-            val modified = listed.lastModified
-            if (modified == null || modified >= floor) {
-                report.youngUnreferencedBlobs++
-                return@collect
-            }
+        // The listing taken at the start of the run, plus what this run wrote — not a second
+        // LIST. A fresh one could lag behind a shard this very run committed and read its blobs
+        // as unreferenced; the in-memory set cannot. Blobs a concurrent phone upload wrote are
+        // named by its `uploading` shard, so they are referenced regardless of when they landed.
+        for (key in blobsInZone.sorted()) {
+            val id = key.asBlobObjectId() ?: continue
+            if (id in referenced) continue
             report.sweptBlobs++
-            report.sweptBytes += listed.size
-            if (!dryRun) s3.delete(listed.key)
+            if (!dryRun) s3.delete(key)
         }
     }
 
@@ -784,6 +854,7 @@ private class ReportBuilder {
     var blockedByUnreadable: List<ShardProbe> = emptyList()
     var duplicateNames: List<String> = emptyList()
     var orphanedAlbums: List<Uuid> = emptyList()
+    var blobsInZone = 0
     var abandonedUploads = 0
     var sweptBlobs = 0
     var sweptBytes = 0L
@@ -807,6 +878,7 @@ private class ReportBuilder {
         contendedAlbums = contendedAlbums.toList(),
         duplicateNames = duplicateNames,
         orphanedAlbums = orphanedAlbums,
+        blobsInZone = blobsInZone,
         abandonedUploads = abandonedUploads,
         sweptBlobs = sweptBlobs,
         sweptBytes = sweptBytes,

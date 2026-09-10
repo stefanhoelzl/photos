@@ -3,6 +3,7 @@ package net.stho.photos.model
 import kotlin.time.Instant
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
+import net.stho.photos.catalog.ObjectId
 
 /** What kind of thing a photo row describes (§3). */
 public enum class MediaType(public val code: Int) {
@@ -73,13 +74,17 @@ public data class PhotoRow(
      */
     public val sourceBytes: Long? = null,
     /**
-     * Digest of the source file, recorded at ingest where the file is already being read.
+     * SHA-256 of the source file, recorded at ingest.
+     *
+     * Named for *which* content it means: since §2 the blob key is itself a content hash, so
+     * "content hash" alone would be ambiguous. This one covers the original — the copy nothing
+     * can reconstruct — while the key covers a derivative the laptop can rebuild from it.
      *
      * Deliberately never verified on a schedule: a full pass is ~100 GiB of reads against a
-     * timer that fires hourly. It is a forensic record for investigating a file already
-     * suspected of having changed, not a monitor (§7).
+     * timer that fires hourly. A forensic record for a file already suspected of having
+     * changed, not a monitor (§7).
      */
-    public val contentHash: String? = null,
+    public val originalHash: String? = null,
     public val mediaType: MediaType = MediaType.PHOTO,
     /**
      * The one image a reader displays: the 3200px HEIC, and for a video its poster still.
@@ -89,7 +94,7 @@ public data class PhotoRow(
      * While an album is still `uploading` or `uploaded` this points at the phone's
      * full-quality upload instead, which is what `encoding_version` distinguishes.
      */
-    public val imageId: Uuid? = null,
+    public val imageId: ObjectId? = null,
     /**
      * A Live Photo's source still, byte-for-byte, when [mediaType] is [MediaType.LIVE_PHOTO].
      *
@@ -97,11 +102,11 @@ public data class PhotoRow(
      * with its MOV by Apple's `content.identifier`, which re-encoding strips — so rather than
      * doing the maker-note surgery §5 set out to avoid, the 187 photos that need one keep one.
      */
-    public val liveStillId: Uuid? = null,
+    public val liveStillId: ObjectId? = null,
     /** The paired MOV, when [mediaType] is [MediaType.LIVE_PHOTO]. */
-    public val liveVideoId: Uuid? = null,
+    public val liveVideoId: ObjectId? = null,
     /** 1080p HEVC transcode, for video. */
-    public val videoId: Uuid? = null,
+    public val videoId: ObjectId? = null,
 ) {
     /**
      * The name this row's file has on disk: its source name when the blob is a derivative,
@@ -121,6 +126,6 @@ public data class PhotoRow(
      * Every blob this row owns. What deleting the album removes, and what the orphan sweep
      * counts as referenced.
      */
-    public val objectIds: List<Uuid>
+    public val objectIds: List<ObjectId>
         get() = listOfNotNull(imageId, liveStillId, liveVideoId, videoId)
 }

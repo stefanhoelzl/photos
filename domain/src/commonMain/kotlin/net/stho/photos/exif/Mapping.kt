@@ -4,6 +4,7 @@ import kotlin.math.abs
 import kotlin.time.Instant
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
+import net.stho.photos.catalog.ObjectId
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
@@ -128,12 +129,12 @@ public fun ExifTags.toPhotoRow(
     sourceFilename: String? = null,
     bytes: Long? = null,
     sourceBytes: Long? = null,
-    contentHash: String? = null,
+    originalHash: String? = null,
     mediaType: MediaType = MediaType.PHOTO,
-    imageId: Uuid? = null,
-    liveStillId: Uuid? = null,
-    liveVideoId: Uuid? = null,
-    videoId: Uuid? = null,
+    imageId: ObjectId? = null,
+    liveStillId: ObjectId? = null,
+    liveVideoId: ObjectId? = null,
+    videoId: ObjectId? = null,
 ): PhotoRow {
     val coordinate = coordinate()
     val size = dimensions()
@@ -148,7 +149,7 @@ public fun ExifTags.toPhotoRow(
         height = size?.height,
         bytes = bytes,
         sourceBytes = sourceBytes,
-        contentHash = contentHash,
+        originalHash = originalHash,
         mediaType = mediaType,
         imageId = imageId,
         liveStillId = liveStillId,

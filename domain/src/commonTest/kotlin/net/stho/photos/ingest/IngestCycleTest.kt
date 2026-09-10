@@ -21,6 +21,7 @@ import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.catalog.FakeZone
 import net.stho.photos.catalog.META_PREFIX
 import net.stho.photos.catalog.Shard
+import net.stho.photos.catalog.blobId
 import net.stho.photos.catalog.blobKey
 import net.stho.photos.catalog.deleteTemporaryDirectories
 import net.stho.photos.catalog.futureShard
@@ -346,16 +347,20 @@ class IngestCycleTest {
     // -------------------------------------------------------------------------------- the sweep
 
     /**
-     * Decision 15: unreferenced is not the same as abandoned. Below the age floor a blob is
-     * indistinguishable from one the phone is uploading right now, so it is left alone.
+     * §2 removed the age floor from garbage collection, and this is the assertion that says so.
+     *
+     * The floor existed because an unreferenced blob might have belonged to an upload in
+     * flight. §8's manifest names every blob before writing any of them, so it cannot: an
+     * unreferenced blob is garbage the moment it is unreferenced, however new. Age now decides
+     * one thing only, and it is not this — see the abandoned-upload test.
      */
     @Test
-    fun theSweepTakesOldCrashDebrisAndSparesYoungBlobs() = runTest {
+    fun theSweepTakesUnreferencedBlobsWhateverTheirAge() = runTest {
         val cycle = cycle("sweep")
         cycle.run()
 
-        val old = Uuid.random().blobKey
-        val young = Uuid.random().blobKey
+        val old = blobId("old").blobKey
+        val young = blobId("young").blobKey
         cycle.zone.insert(old, ByteArray(100), age = 30.days)
         cycle.zone.insert(young, ByteArray(100), age = 1.minutes)
 
@@ -366,10 +371,9 @@ class IngestCycleTest {
 
         val report = cycle.run()
 
-        assertEquals(1, report.sweptBlobs)
-        assertEquals(1, report.youngUnreferencedBlobs)
+        assertEquals(2, report.sweptBlobs)
         assertFalse(cycle.zone.contains(old))
-        assertTrue(cycle.zone.contains(young))
+        assertFalse(cycle.zone.contains(young), "a young orphan is still an orphan")
     }
 
     /**
@@ -389,7 +393,7 @@ class IngestCycleTest {
             Path(forgeDirectory, "${forged.info.id}.db").readBytes(),
             "future-1",
         )
-        val orphan = Uuid.random().blobKey
+        val orphan = blobId("orphan").blobKey
         cycle.zone.insert(orphan, ByteArray(100), age = 30.days)
 
         val report = cycle.run()

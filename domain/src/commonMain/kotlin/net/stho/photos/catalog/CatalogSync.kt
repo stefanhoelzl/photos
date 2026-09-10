@@ -383,7 +383,7 @@ public class CatalogSync(
     }
 
     /** Every blob id the catalog references, for `--prune`'s orphan sweep (§7). */
-    public suspend fun referencedObjectIds(): Set<Uuid> = mutex.withLock {
+    public suspend fun referencedObjectIds(): Set<ObjectId> = mutex.withLock {
         loadShards().shards.flatMapTo(mutableSetOf(), Shard::objectIds)
     }
 

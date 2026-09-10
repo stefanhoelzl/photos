@@ -14,6 +14,8 @@ import net.stho.photos.catalog.AlbumState
 import net.stho.photos.catalog.BLOB_PREFIX
 import net.stho.photos.catalog.META_PREFIX
 import net.stho.photos.catalog.Shard
+import net.stho.photos.catalog.ObjectId
+import net.stho.photos.catalog.asBlobObjectId
 import net.stho.photos.catalog.blobKey
 import net.stho.photos.catalog.packThumbnails
 import net.stho.photos.catalog.readShard
@@ -35,7 +37,7 @@ import net.stho.photos.storage.list
 internal data class ZoneState(
     val albums: List<Shard>,
     /** Every key under `blob/`, by id, with its size. */
-    val blobs: Map<Uuid, Long>,
+    val blobs: Map<ObjectId, Long>,
 ) {
     /** Albums by their `source_path` where they have one, else by name. */
     val byPath: Map<String, Shard>
@@ -60,9 +62,7 @@ internal suspend fun S3Client.readZone(scratch: Path): ZoneState {
     }
     val blobs = list(prefix = BLOB_PREFIX).toList()
         .filterNot(S3Object::isDirectoryMarker)
-        .mapNotNull { listed ->
-            Uuid.parseOrNull(listed.key.removePrefix(BLOB_PREFIX))?.let { it to listed.size }
-        }
+        .mapNotNull { listed -> listed.key.asBlobObjectId()?.let { it to listed.size } }
         .toMap()
     return ZoneState(shards, blobs)
 }
@@ -96,10 +96,10 @@ internal class GivenAlbum(private val name: String) {
 
     internal suspend fun materialise(s3: S3Client, scratch: Path) {
         val rows = photos.map { photo ->
-            val imageId = Uuid.random()
             // A real HEIC, for the same reason the thumbnail pack is real: a forged zone that a
             // shape assertion can tell apart from a genuine one is a fixture that proves nothing.
             val image = syntheticHeic(photo.width, photo.height)
+            val imageId = ObjectId.ofContent(image)
             s3.put(imageId.blobKey, Body.Bytes(image))
             PhotoRow(
                 id = Uuid.random(),
@@ -117,9 +117,10 @@ internal class GivenAlbum(private val name: String) {
         // could not have written and asserting against it would prove nothing.
         val edge = DerivativeSpec.THUMBNAIL_EDGE
         val thumbnails = rows.associate { it.id to syntheticJpeg(edge, edge) }
-        val thumbsId = Uuid.random()
-        val pack = Path(scratch, "given-thumbs-$thumbsId.db")
+        // Packed first, then named after what it holds — the same order the CLI uses (§2).
+        val pack = Path(scratch, "given-thumbs-${Uuid.random()}.db")
         thumbnails.packThumbnails(pack, NativeSqlDrivers())
+        val thumbsId = ObjectId.ofContent(pack)
         s3.put(thumbsId.blobKey, Body.File(pack))
 
         val shard = Shard(

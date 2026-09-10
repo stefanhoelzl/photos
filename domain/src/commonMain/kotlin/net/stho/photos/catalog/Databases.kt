@@ -56,6 +56,16 @@ internal val mediaTypeAdapter: ColumnAdapter<MediaType, Long> =
         override fun encode(value: MediaType): Long = value.code.toLong()
     }
 
+/** A key this build cannot read is a malformed shard, not something to guess at (§2). */
+internal val objectIdAdapter: ColumnAdapter<ObjectId, String> =
+    object : ColumnAdapter<ObjectId, String> {
+        override fun decode(databaseValue: String): ObjectId =
+            ObjectId.parse(databaseValue)
+                ?: throw ShardFailure.Malformed("unreadable object id '$databaseValue'")
+
+        override fun encode(value: ObjectId): String = value.toString()
+    }
+
 /** An unknown state is a malformed shard, not a silent default. */
 internal val albumStateAdapter: ColumnAdapter<AlbumState, String> =
     object : ColumnAdapter<AlbumState, String> {

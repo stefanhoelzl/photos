@@ -18,7 +18,7 @@ private val mergedAlbumAdapter = AlbumTable.Adapter(
     date_minAdapter = instantAdapter,
     date_maxAdapter = instantAdapter,
     cover_photo_idAdapter = uuidAdapter,
-    thumbs_idAdapter = uuidAdapter,
+    thumbs_idAdapter = objectIdAdapter,
 )
 
 private val mergedPhotoAdapter = MergedPhoto.Adapter(
@@ -28,10 +28,10 @@ private val mergedPhotoAdapter = MergedPhoto.Adapter(
     widthAdapter = IntColumnAdapter,
     heightAdapter = IntColumnAdapter,
     media_typeAdapter = mediaTypeAdapter,
-    image_idAdapter = uuidAdapter,
-    live_still_idAdapter = uuidAdapter,
-    live_video_idAdapter = uuidAdapter,
-    video_idAdapter = uuidAdapter,
+    image_idAdapter = objectIdAdapter,
+    live_still_idAdapter = objectIdAdapter,
+    live_video_idAdapter = objectIdAdapter,
+    video_idAdapter = objectIdAdapter,
 )
 
 /**
@@ -106,7 +106,7 @@ public class CatalogWriter(public val path: Path, drivers: SqlDrivers) : AutoClo
                     bytes = photo.bytes,
                     media_type = photo.mediaType,
                     source_bytes = photo.sourceBytes,
-                    content_hash = photo.contentHash,
+                    original_hash = photo.originalHash,
                     image_id = photo.imageId,
                     live_still_id = photo.liveStillId,
                     live_video_id = photo.liveVideoId,
@@ -223,12 +223,12 @@ public class CatalogReader(public val path: Path, drivers: SqlDrivers) : AutoClo
     /** Photos with coordinates, for the map's photo layer. */
     public fun placedPhotos(): List<PlacedPhoto> = queries.selectPlacedPhotos {
         albumId, id, filename, sourceFilename, takenAt, lat, lon, width, height, bytes,
-        sourceBytes, contentHash, mediaType, imageId, liveStillId, liveVideoId, videoId ->
+        sourceBytes, originalHash, mediaType, imageId, liveStillId, liveVideoId, videoId ->
         PlacedPhoto(
             albumId,
             PhotoRow(
                 id, filename, sourceFilename, takenAt, lat, lon, width, height, bytes,
-                sourceBytes, contentHash, mediaType, imageId, liveStillId, liveVideoId, videoId,
+                sourceBytes, originalHash, mediaType, imageId, liveStillId, liveVideoId, videoId,
             ),
         )
     }.executeAsList()

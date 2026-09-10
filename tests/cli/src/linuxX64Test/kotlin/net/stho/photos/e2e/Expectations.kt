@@ -10,6 +10,7 @@ import kotlinx.io.files.SystemFileSystem
 import net.stho.photos.adapter.linux.CImagingProbe
 import net.stho.photos.adapter.linux.imageDimensions
 import net.stho.photos.catalog.AlbumState
+import net.stho.photos.catalog.ObjectId
 import net.stho.photos.catalog.Shard
 import net.stho.photos.catalog.ThumbPack
 import net.stho.photos.catalog.blobKey
@@ -139,9 +140,9 @@ internal class ZoneExpectations {
     private fun checkBlobIntegrity(scenario: String, state: ZoneState) {
         val referenced = state.albums.flatMap(Shard::objectIds).toSet()
         val present = state.blobs.keys
-        val orphans = (present - referenced).map(Uuid::toString).toSet()
-        val dangling = (referenced - present).map(Uuid::toString).toSet()
-        val empty = state.blobs.filterValues { it == 0L }.keys.map(Uuid::toString).toSet()
+        val orphans = (present - referenced).map(Any::toString).toSet()
+        val dangling = (referenced - present).map(Any::toString).toSet()
+        val empty = state.blobs.filterValues { it == 0L }.keys.map(Any::toString).toSet()
         if (orphans.isNotEmpty() || dangling.isNotEmpty() || empty.isNotEmpty()) {
             throw BlobsStranded(scenario, orphans, dangling, empty)
         }
@@ -186,7 +187,7 @@ internal class ZoneExpectations {
         }
     }
 
-    private suspend fun checkImage(scenario: Scenario, row: PhotoRow, imageId: Uuid) {
+    private suspend fun checkImage(scenario: Scenario, row: PhotoRow, imageId: ObjectId) {
         val file = Path(scenario.scratch, "image-${Uuid.random()}.heic")
             .write(scenario.s3.fetch(imageId))
         if (CImagingProbe().sniff(file.toString()) != MediaFormat.HEIF) {
@@ -206,7 +207,7 @@ internal class ZoneExpectations {
         }
     }
 
-    private suspend fun checkVideo(scenario: Scenario, row: PhotoRow, videoId: Uuid) {
+    private suspend fun checkVideo(scenario: Scenario, row: PhotoRow, videoId: ObjectId) {
         val file = Path(scenario.scratch, "video-${Uuid.random()}.mp4")
             .write(scenario.s3.fetch(videoId))
         val format = CImagingProbe().sniff(file.toString())
@@ -265,5 +266,5 @@ internal class ExpectedAlbum {
     }
 }
 
-private suspend fun S3Client.fetch(id: Uuid): ByteArray =
+private suspend fun S3Client.fetch(id: ObjectId): ByteArray =
     (get(id.blobKey) as GetResult.Content).bytes

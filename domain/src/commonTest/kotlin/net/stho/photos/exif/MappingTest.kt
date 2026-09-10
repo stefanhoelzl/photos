@@ -8,6 +8,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
+import net.stho.photos.catalog.blobId
 import net.stho.photos.model.MediaType
 
 private fun tags(vararg pairs: Pair<String, ExifValue>) = ExifTags(mapOf(*pairs))
@@ -211,7 +212,7 @@ class ToPhotoRowTest {
 
     @Test
     fun aFullTagSetBecomesAFullRow() {
-        val imageId = Uuid.random()
+        val imageId = blobId()
         val row = tags(
             "DateTimeOriginal" to text("2013:07:04 18:12:11"),
             "GPSLatitude" to real(47.99), "GPSLatitudeRef" to text("N"),

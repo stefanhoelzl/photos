@@ -40,6 +40,13 @@ public data class IngestReport(
     public val orphanedAlbums: List<Uuid> = emptyList(),
     public val sweptBlobs: Int = 0,
     public val sweptBytes: Long = 0,
+    /** Blobs the zone already held when the run started (§2). */
+    public val blobsInZone: Int = 0,
+    /**
+     * Uploads skipped because the zone already held that exact content — a resumed import, or a
+     * profile bump that left thumbnails untouched (§2).
+     */
+    public val skippedUploads: Int = 0,
     /**
      * Phone uploads abandoned before they finished: still [AlbumState.UPLOADING] past the
      * sweep's floor, so the presigned PUTs they were using have expired (§8).

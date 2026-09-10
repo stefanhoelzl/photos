@@ -10,6 +10,7 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlin.time.TimeSource
 import kotlin.uuid.Uuid
+import net.stho.photos.catalog.blobId
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 import net.stho.photos.model.MediaType
@@ -137,7 +138,7 @@ private fun leaf(name: String, parent: Uuid?, photos: Int, base: Instant): Shard
         name = name,
         parent = parent,
         sourcePath = name,
-        thumbsId = Uuid.random(),
+        thumbsId = blobId(),
         addedAt = base,
     ),
     photos = List(photos) { offset ->
@@ -154,7 +155,7 @@ private fun leaf(name: String, parent: Uuid?, photos: Int, base: Instant): Shard
             height = 3000,
             bytes = 3_145_728,
             mediaType = MediaType.PHOTO,
-            imageId = Uuid.random(),
+            imageId = blobId(),
         )
     },
 )

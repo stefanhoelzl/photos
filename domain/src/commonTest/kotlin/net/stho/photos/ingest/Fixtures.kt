@@ -10,6 +10,8 @@ import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.write
 import net.stho.photos.catalog.AlbumInfo
 import net.stho.photos.catalog.AlbumState
+import net.stho.photos.catalog.ObjectId
+import net.stho.photos.catalog.blobId
 import net.stho.photos.derivative.DerivativeSpec
 import net.stho.photos.catalog.SHARD_SCHEMA_VERSION
 import net.stho.photos.catalog.Shard
@@ -103,7 +105,7 @@ internal class LibraryFixture(label: String = "library") {
         photos: List<String>,
         id: Uuid = Uuid.random(),
         parent: Uuid? = null,
-        thumbsId: Uuid? = Uuid.random(),
+        thumbsId: ObjectId? = blobId(),
         bytes: Long = 64,
         state: AlbumState = AlbumState.ENCODED,
         encodingVersion: Int = DerivativeSpec.ENCODING_VERSION,
@@ -133,7 +135,7 @@ internal class LibraryFixture(label: String = "library") {
         bytes = 4_096,
         sourceBytes = sourceBytes,
         mediaType = MediaType.PHOTO,
-        imageId = Uuid.random(),
+        imageId = blobId(),
     )
 
     /**
@@ -148,8 +150,8 @@ internal class LibraryFixture(label: String = "library") {
         bytes = 999_999,
         sourceBytes = sourceBytes,
         mediaType = MediaType.VIDEO,
-        imageId = Uuid.random(),
-        videoId = Uuid.random(),
+        imageId = blobId(),
+        videoId = blobId(),
     )
 
     /** A carved CR2: `.heic` in the zone, `.CR2` on disk. */
@@ -160,7 +162,7 @@ internal class LibraryFixture(label: String = "library") {
         bytes = 400_000,
         sourceBytes = sourceBytes,
         mediaType = MediaType.PHOTO,
-        imageId = Uuid.random(),
+        imageId = blobId(),
     )
 }
 

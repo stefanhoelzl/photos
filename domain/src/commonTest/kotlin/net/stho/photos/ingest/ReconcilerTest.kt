@@ -13,6 +13,7 @@ import kotlin.uuid.Uuid
 import kotlinx.io.files.Path
 import net.stho.photos.catalog.AlbumInfo
 import net.stho.photos.catalog.AlbumState
+import net.stho.photos.catalog.blobId
 import net.stho.photos.catalog.SHARD_SCHEMA_VERSION
 import net.stho.photos.catalog.Shard
 import net.stho.photos.catalog.ShardProbe
@@ -373,7 +374,7 @@ class ReconcilerTest {
             id = Uuid.random(),
             name = name,
             sourcePath = sourcePath,
-            thumbsId = Uuid.random(),
+            thumbsId = blobId(),
             state = state,
             encodingVersion = 0,
             addedAt = fixtureAddedAt,

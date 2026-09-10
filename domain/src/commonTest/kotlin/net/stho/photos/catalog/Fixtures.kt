@@ -57,10 +57,10 @@ internal fun photo(
     height = 3000,
     bytes = 3_145_728,
     mediaType = mediaType,
-    imageId = Uuid.random(),
-    liveStillId = if (mediaType == MediaType.LIVE_PHOTO) Uuid.random() else null,
-    liveVideoId = if (mediaType == MediaType.LIVE_PHOTO) Uuid.random() else null,
-    videoId = if (mediaType == MediaType.VIDEO) Uuid.random() else null,
+    imageId = blobId(),
+    liveStillId = if (mediaType == MediaType.LIVE_PHOTO) blobId() else null,
+    liveVideoId = if (mediaType == MediaType.LIVE_PHOTO) blobId() else null,
+    videoId = if (mediaType == MediaType.VIDEO) blobId() else null,
 )
 
 internal fun album(
@@ -68,7 +68,7 @@ internal fun album(
     parent: Uuid? = null,
     photos: List<PhotoRow> = emptyList(),
     coverPhotoId: Uuid? = null,
-    thumbsId: Uuid? = Uuid.random(),
+    thumbsId: ObjectId? = blobId(),
     schemaVersion: Int = SHARD_SCHEMA_VERSION,
 ): Shard = Shard(
     info = AlbumInfo(
@@ -314,3 +314,13 @@ internal fun explainQueryPlan(path: Path, sql: String): List<String> {
         driver.close()
     }
 }
+
+/**
+ * A blob id for a fixture, shaped like the real thing: content-addressed, from a unique seed.
+ *
+ * `ObjectId.temporary()` would also type-check, but temp ids are §8's placeholders and no
+ * `encoded` shard ever holds one — a fixture using them would be a state the system cannot
+ * reach (§2).
+ */
+internal fun blobId(seed: String = Uuid.random().toString()): ObjectId =
+    ObjectId.ofContent(seed.encodeToByteArray())

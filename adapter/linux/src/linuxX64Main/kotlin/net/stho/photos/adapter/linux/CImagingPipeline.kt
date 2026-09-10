@@ -18,6 +18,7 @@ import net.stho.photos.model.MediaType
 import net.stho.photos.pipeline.Derivatives
 import net.stho.photos.pipeline.MediaItem
 import net.stho.photos.pipeline.PipelineEvent
+import net.stho.photos.storage.sha256Hex
 import net.stho.photos.pipeline.withExtension
 import net.stho.photos.ports.Ids
 import net.stho.photos.ports.ImageBackend
@@ -133,6 +134,10 @@ public class CImagingPipeline(
             sourceFilename = sourceFilename,
             bytes = image.size.toLong(),
             sourceBytes = item.byteCount,
+            // The file is read once more to digest it. That is a real cost on first import and
+            // it buys the one integrity record nothing else can reconstruct: every other blob
+            // in the zone is a derivative this pipeline can rebuild from the original (§7).
+            originalHash = Path(item.path).sha256Hex(),
             mediaType = mediaType,
         ).copy(
             // The decoded *source* is the authority, not the decoded buffer: shrink-on-load
@@ -206,6 +211,7 @@ public class CImagingPipeline(
                 sourceFilename = item.filename,
                 bytes = SystemFileSystem.metadataOrNull(output)?.size,
                 sourceBytes = item.byteCount,
+                originalHash = Path(item.path).sha256Hex(),
                 mediaType = MediaType.VIDEO,
             ).copy(
                 width = poster.width,

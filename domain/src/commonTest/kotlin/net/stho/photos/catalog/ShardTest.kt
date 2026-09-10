@@ -186,7 +186,7 @@ class StorageKeyTest {
 
     @Test
     fun blobKeysCarryNoExtension() {
-        val id = Uuid.random()
+        val id = blobId("a photograph")
         assertEquals("blob/$id", id.blobKey)
         assertEquals(id, id.blobKey.asBlobObjectId())
     }

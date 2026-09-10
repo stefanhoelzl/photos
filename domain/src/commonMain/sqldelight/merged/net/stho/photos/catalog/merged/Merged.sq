@@ -1,6 +1,7 @@
 import kotlin.Int;
 import kotlin.time.Instant;
 import kotlin.uuid.Uuid;
+import net.stho.photos.catalog.ObjectId;
 import net.stho.photos.model.MediaType;
 
 -- The merged database (§3): on-device, derived from every shard, never uploaded.
@@ -15,7 +16,7 @@ CREATE TABLE IF NOT EXISTS album (
   lat            REAL,
   lon            REAL,
   cover_photo_id TEXT AS Uuid,
-  thumbs_id      TEXT AS Uuid
+  thumbs_id      TEXT AS ObjectId
 );
 
 CREATE INDEX IF NOT EXISTS ix_album_parent ON album(parent);
@@ -33,12 +34,12 @@ CREATE TABLE IF NOT EXISTS photo (
   height          INTEGER AS Int,
   bytes           INTEGER,
   source_bytes    INTEGER,
-  content_hash    TEXT,
+  original_hash   TEXT,
   media_type      INTEGER AS MediaType NOT NULL,
-  image_id        TEXT AS Uuid,
-  live_still_id   TEXT AS Uuid,
-  live_video_id   TEXT AS Uuid,
-  video_id        TEXT AS Uuid,
+  image_id        TEXT AS ObjectId,
+  live_still_id   TEXT AS ObjectId,
+  live_video_id   TEXT AS ObjectId,
+  video_id        TEXT AS ObjectId,
   PRIMARY KEY (album_id, id)
 );
 
@@ -66,7 +67,7 @@ INSERT INTO album (
 insertPhoto:
 INSERT INTO photo (
   album_id, id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
-  source_bytes, content_hash, media_type, image_id, live_still_id, live_video_id, video_id
+  source_bytes, original_hash, media_type, image_id, live_still_id, live_video_id, video_id
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- An album's pin is the centroid of its tagged photos; a container's is the centroid of all its
@@ -133,12 +134,12 @@ SELECT name, group_concat(album_id) FROM album
 
 selectPhotosInAlbum:
 SELECT id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
-       source_bytes, content_hash, media_type, image_id, live_still_id, live_video_id, video_id
+       source_bytes, original_hash, media_type, image_id, live_still_id, live_video_id, video_id
 FROM photo WHERE album_id = ? ORDER BY taken_at IS NULL, taken_at, filename;
 
 selectPhotoById:
 SELECT id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
-       source_bytes, content_hash, media_type, image_id, live_still_id, live_video_id, video_id
+       source_bytes, original_hash, media_type, image_id, live_still_id, live_video_id, video_id
 FROM photo WHERE id = ?;
 
 -- A container owns no photos, so its cover is resolved by descending into children until one is
@@ -151,13 +152,13 @@ WITH RECURSIVE descendant(album_id) AS (
     SELECT a.album_id FROM album a JOIN descendant d ON a.parent = d.album_id
 )
 SELECT p.id, p.filename, p.source_filename, p.taken_at, p.lat, p.lon, p.width, p.height, p.bytes,
-       p.source_bytes, p.content_hash, p.media_type, p.image_id, p.live_still_id, p.live_video_id, p.video_id
+       p.source_bytes, p.original_hash, p.media_type, p.image_id, p.live_still_id, p.live_video_id, p.video_id
 FROM photo p WHERE p.album_id IN (SELECT album_id FROM descendant)
 ORDER BY p.taken_at IS NULL, p.taken_at, p.filename LIMIT 1;
 
 selectPlacedPhotos:
 SELECT album_id, id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
-       source_bytes, content_hash, media_type, image_id, live_still_id, live_video_id, video_id
+       source_bytes, original_hash, media_type, image_id, live_still_id, live_video_id, video_id
 FROM photo WHERE lat IS NOT NULL;
 
 countPhotos:

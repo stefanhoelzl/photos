@@ -48,7 +48,7 @@ public data class AlbumInfo(
     /** Overrides the default cover, which is otherwise the album's earliest photo. */
     public val coverPhotoId: Uuid? = null,
     /** The blob holding this album's packed thumbnails, or null before one exists. */
-    public val thumbsId: Uuid? = null,
+    public val thumbsId: ObjectId? = null,
     /**
      * Where this album is in its lifecycle, and so who owns it (§7). A laptop-made album is
      * born [AlbumState.ENCODED]; only the phone ever writes the other two.
@@ -91,7 +91,7 @@ public data class Album(
     public val latitude: Double?,
     public val longitude: Double?,
     public val coverPhotoId: Uuid?,
-    public val thumbsId: Uuid?,
+    public val thumbsId: ObjectId?,
 )
 
 /** The contents of one shard. */
@@ -104,7 +104,7 @@ public data class Shard(
         get() = info.encodingVersion < DerivativeSpec.ENCODING_VERSION
 
     /** Every blob the album owns, thumbnail pack included. */
-    public val objectIds: List<Uuid>
+    public val objectIds: List<ObjectId>
         get() = photos.flatMap(PhotoRow::objectIds) + listOfNotNull(info.thumbsId)
 }
 
@@ -118,8 +118,8 @@ public const val BLOB_PREFIX: String = "blob/"
 /** This album's shard key: `meta/<album-uuid>.db`. */
 public val Uuid.shardKey: String get() = "$META_PREFIX$this.db"
 
-/** This object's blob key: `blob/<object-uuid>`, with no extension (§2). */
-public val Uuid.blobKey: String get() = "$BLOB_PREFIX$this"
+/** This object's blob key: `blob/<id>`, with no extension (§2). */
+public val ObjectId.blobKey: String get() = "$BLOB_PREFIX$this"
 
 /**
  * The album id in `meta/<uuid>.db`, or null for anything else — a directory marker, a stray key,
@@ -135,10 +135,10 @@ public fun String.asShardAlbumId(): Uuid? {
 }
 
 /**
- * The object id in `blob/<uuid>`, or null for anything else. What the orphan sweep uses to tell a
+ * The object id in `blob/<id>`, or null for anything else. What the orphan sweep uses to tell a
  * blob from the `blob/` directory marker or a stray key.
  */
-public fun String.asBlobObjectId(): Uuid? =
-    if (startsWith(BLOB_PREFIX)) Uuid.parseOrNull(substring(BLOB_PREFIX.length)) else null
+public fun String.asBlobObjectId(): ObjectId? =
+    if (startsWith(BLOB_PREFIX)) ObjectId.parse(substring(BLOB_PREFIX.length)) else null
 
 private fun Uuid.Companion.parseOrNull(text: String): Uuid? = runCatching { parse(text) }.getOrNull()
