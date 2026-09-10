@@ -1292,8 +1292,17 @@ what the zone contains; the other two decide nothing at all.
 
 - `OnCalendar=hourly`, `Persistent=true`, `RandomizedDelaySec=5m`. A no-op run is one LIST —
   which is exactly what the ETag cache beside the shards buys.
-- `SuccessExitStatus=75`, which covers both deferrals: a keyring still locked before the
-  first login, and an hourly firing that lands while a long run still holds the lock.
+- `SuccessExitStatus=75`, which covers all three deferrals: a keyring still locked before the
+  first login, an hourly firing that lands while a long run still holds the lock, and a zone
+  that cannot be reached at all — no DNS, no route, a refused connection.
+
+  > That third one is why the transport has to raise a failure this project owns. Ktor's curl
+  > engine throws a plain `IllegalStateException`, which is outside §1's hierarchy, so an
+  > offline run used to leave the exit-code contract entirely and die on Kotlin/Native's
+  > uncaught handler — `SIGABRT`, a core dump, sixteen frames of stack. On this timer that is a
+  > page every hour for a laptop that is merely asleep or travelling. The same type mismatch
+  > silently disabled the retry that was written to cover DNS and TLS: it tested for
+  > `IOException`, which curl never raises.
 - The full reconciliation, deletions included. There is no second command to withhold: the
   marker guard is what makes that safe.
 - No `.path` unit: `systemd.path` is not recursive (it would see a new album folder but not

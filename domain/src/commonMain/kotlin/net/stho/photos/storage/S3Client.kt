@@ -125,22 +125,24 @@ public class S3Client(
      */
     public suspend fun download(key: String, to: Path, progress: ProgressListener? = null): ETag? {
         val request = sign("GET", keyPath(key))
-        return http.prepareRequest(request.url) {
-            method = HttpMethod.Get
-            request.headers.forEach { (name, value) -> header(name, value) }
-            if (progress != null) onDownload(progress)
-        }.execute { response ->
-            if (response.status.value != 200) throw response.asFailure(key)
-            SystemFileSystem.sink(to).buffered().use { sink ->
-                val channel = response.bodyAsChannel()
-                val chunk = ByteArray(1 shl 16)
-                while (true) {
-                    val read = channel.readAvailable(chunk, 0, chunk.size)
-                    if (read <= 0) break
-                    sink.write(chunk, 0, read)
+        return reachingZone {
+            http.prepareRequest(request.url) {
+                method = HttpMethod.Get
+                request.headers.forEach { (name, value) -> header(name, value) }
+                if (progress != null) onDownload(progress)
+            }.execute { response ->
+                if (response.status.value != 200) throw response.asFailure(key)
+                SystemFileSystem.sink(to).buffered().use { sink ->
+                    val channel = response.bodyAsChannel()
+                    val chunk = ByteArray(1 shl 16)
+                    while (true) {
+                        val read = channel.readAvailable(chunk, 0, chunk.size)
+                        if (read <= 0) break
+                        sink.write(chunk, 0, read)
+                    }
                 }
+                response.headers[HttpHeaders.ETag]?.asETag()
             }
-            response.headers[HttpHeaders.ETag]?.asETag()
         }
     }
 
@@ -270,15 +272,17 @@ public class S3Client(
         progress: ProgressListener? = null,
     ): HttpResponse {
         val request = sign(method, path, query, headers, body)
-        val response = http.request(request.url) {
-            this.method = HttpMethod.parse(method)
-            request.headers.forEach { (name, value) -> header(name, value) }
-            when (val payload = request.body) {
-                Body.Empty -> Unit
-                is Body.Bytes -> setBody(payload.value)
-                is Body.File -> setBody(FileContent(payload.path))
+        val response = reachingZone {
+            http.request(request.url) {
+                this.method = HttpMethod.parse(method)
+                request.headers.forEach { (name, value) -> header(name, value) }
+                when (val payload = request.body) {
+                    Body.Empty -> Unit
+                    is Body.Bytes -> setBody(payload.value)
+                    is Body.File -> setBody(FileContent(payload.path))
+                }
+                if (progress != null) onUpload(progress)
             }
-            if (progress != null) onUpload(progress)
         }
         if (response.status.value !in accepting) throw response.asFailure(key)
         return response

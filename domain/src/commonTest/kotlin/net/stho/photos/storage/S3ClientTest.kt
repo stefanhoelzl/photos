@@ -2,6 +2,7 @@ package net.stho.photos.storage
 
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import net.stho.photos.StorageUnreachableFailure
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -14,6 +15,26 @@ import kotlinx.io.files.SystemFileSystem
 import net.stho.photos.S3HttpFailure
 
 class S3ClientKeyTest {
+
+    /**
+     * A transport that never reaches a server must arrive as one of this project's failures.
+     *
+     * Ktor's curl engine raises a plain `IllegalStateException`, which is outside
+     * `PhotosFailure` — so before this it escaped the CLI's exit-code translation entirely and
+     * reached Kotlin/Native's uncaught handler, aborting the process with a core dump. An
+     * hourly timer on a laptop that is merely asleep would page on every firing.
+     */
+    @Test
+    fun aTransportThatNeverAnswersIsOneOfOurFailures() = runTest {
+        val engine = MockEngine { throw IllegalStateException("Reason: Could not resolve hostname") }
+
+        val failure = assertFailsWith<StorageUnreachableFailure> {
+            testClient(engine).head("meta/a.db")
+        }
+
+        // The message keeps the clause worth reading and drops the request it quotes back (§1).
+        assertEquals("cannot reach the storage zone: Could not resolve hostname", failure.message)
+    }
 
     @Test
     fun addressesTheZoneAsTheFirstPathSegment() = runTest {

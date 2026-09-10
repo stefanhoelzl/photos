@@ -17,6 +17,25 @@ import net.stho.photos.ingest.ByteMismatch
 public sealed class PhotosFailure(override val message: String) : Exception(message)
 
 /**
+ * The storage API could not be reached at all — DNS, TLS, a refused or dropped connection.
+ *
+ * Distinct from [S3HttpFailure], which means the zone answered and said no. Nothing answered
+ * here, so there is nothing to correct and nothing to log out of: the honest reading is *not
+ * now*, which is the same shape as a keyring that has not been unlocked yet, and it takes the
+ * same exit code.
+ *
+ * It exists because the alternative is worse than a bad message. Ktor's curl engine raises a
+ * plain `IllegalStateException`, which is outside this hierarchy — so before this type, an
+ * offline run left the exit-code contract entirely and died on Kotlin/Native's uncaught handler
+ * with `SIGABRT`, a core dump and sixteen frames of stack. On the hourly timer §7 is written
+ * for, that is a page every hour for a laptop that is merely asleep or travelling.
+ */
+public class StorageUnreachableFailure(
+    /** What the transport actually said, kept for the journal. */
+    public val reason: String,
+) : PhotosFailure("cannot reach the storage zone: $reason")
+
+/**
  * An HTTP failure from the storage API.
  *
  * §1 requires that sync and upload failures report the HTTP status and name the cause —

@@ -75,10 +75,12 @@ confirmation step, and no run happens at all without a readable
 than an unmounted mount point.
 
 Exit codes: `0` clean · `1` finished with failures · `2` usage · `3` aborted before writing
-anything · `75` deferred — another sync holds the lock, or the keyring cannot be reached: no
-session bus yet, nothing answering on it, or a collection still locked because nobody has
-logged in. A keyring that *does* answer and holds no such item is a real error, not a
-deferral, and says so.
+anything · `75` deferred — another sync holds the lock, the storage zone cannot be reached at
+all (no DNS, no route, a refused connection: a laptop asleep or away from network), or the
+keyring cannot be reached: no session bus yet, nothing answering on it, or a collection still
+locked because nobody has logged in. Both of the last two are *not now* rather than *not
+working*. A keyring that **does** answer and holds no such item is a real error, not a
+deferral, and so is a zone that answers `403` — both say so.
 
 Only one sync runs at a time (an `flock` in the cache directory), which matters because the
 first import outlasts the hour between timer firings. A run prints what it intends, then a
@@ -89,7 +91,7 @@ an estimate.
 
 ```sh
 Scripts/build-native.sh          # once: imaging stack, sqlite, openssl, curl, dbus
-./gradlew build                  # 313 tests
+./gradlew build                  # 314 tests
 ./gradlew :app:cli:linkReleaseExecutableLinuxX64
 ./gradlew :tests:cli:e2e         # 14 scenarios against the shipped binary — opt-in
 ```

@@ -11,6 +11,7 @@ import net.stho.photos.PhotosFailure
 import net.stho.photos.S3HttpFailure
 import net.stho.photos.ShardFailure
 import net.stho.photos.ShardUnavailableFailure
+import net.stho.photos.StorageUnreachableFailure
 import net.stho.photos.StorageUrlFailure
 import net.stho.photos.ingest.ExitCode
 import net.stho.photos.ports.LockAttempt
@@ -36,6 +37,12 @@ internal fun PhotosFailure.exitCode(): Int = when (this) {
     // Could not *look*: no session bus, nothing owning org.freedesktop.secrets, or a collection
     // still locked because nobody has logged in. Not now, rather than not working.
     is CredentialFailure.KeyringUnavailable -> ExitCode.DEFERRED
+
+    // Nothing answered: no DNS, no route, a refused or dropped connection. Exactly the same
+    // shape of "not now" as an unlocked keyring, and the same answer — a laptop that is asleep,
+    // travelling or on hotel wifi must not page anyone on the hourly timer. Retries have already
+    // been exhausted by the time this arrives.
+    is StorageUnreachableFailure -> ExitCode.DEFERRED
 
     // A path the operator gave that is not a directory. Nothing else to do about it.
     is CredentialFailure.MissingLibraryRoot -> ExitCode.USAGE
