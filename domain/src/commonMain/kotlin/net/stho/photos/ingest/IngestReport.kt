@@ -47,6 +47,8 @@ public data class IngestReport(
      * profile bump that left thumbnails untouched (§2).
      */
     public val skippedUploads: Int = 0,
+    /** What those skipped uploads would have sent. */
+    public val skippedBytes: Long = 0,
     /**
      * Phone uploads abandoned before they finished: still [AlbumState.UPLOADING] past the
      * sweep's floor, so the presigned PUTs they were using have expired (§8).

@@ -93,6 +93,25 @@ class ConsoleReporterTest {
         assertEquals("── 0 album(s)", recorder.out.last())
     }
 
+    /**
+     * §2's two wins are invisible unless the run says so. A resumed import and a profile bump
+     * both do most of their work by *not* sending anything, and a run that reports only what it
+     * uploaded reads as though it did nothing at all.
+     */
+    @Test
+    fun workAvoidedIsStillReported() {
+        val recorder = Recorder()
+
+        ConsoleReporter(recorder.console).render(
+            IngestReport(skippedUploads = 1204, skippedBytes = 2_097_152),
+        )
+
+        assertTrue(
+            recorder.out.any { "1204 object(s) already in the zone" in it && "2.0 MB" in it },
+            "the run said nothing about what it skipped: ${recorder.out}",
+        )
+    }
+
     /** §7: a run says what it intends before it does it — even when it intends nothing. */
     @Test
     fun thePlanIsSaidBeforeTheRun() {
@@ -106,7 +125,7 @@ class ConsoleReporterTest {
 
         assertEquals(
             listOf(
-                "to do: 2 album(s), 30 photos, 1.0 KB, 1 album(s) to delete, 1 album(s) to pull",
+                "to do: 2 album(s), 30 photos, ~1.0 KB, 1 album(s) to delete, 1 album(s) to pull",
                 "nothing to do",
             ),
             recorder.out,

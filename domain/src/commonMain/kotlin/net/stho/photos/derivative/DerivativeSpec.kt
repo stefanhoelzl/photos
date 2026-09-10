@@ -99,6 +99,21 @@ public object DerivativeSpec {
      */
     public const val IMAGE_QUALITY: Int = 45
 
+    /**
+     * What a source file's bytes shrink to once derived, as a fraction — for estimating a run
+     * before it has derived anything.
+     *
+     * A photograph's derived size is not knowable until it is encoded, so a run cannot state
+     * what it will upload without predicting it. Measured over the representative 150-file
+     * sample at this profile: **13.7% of source bytes**. Stills only, which is 98.4% of the
+     * library; video is transcoded on different terms and is rare enough not to move the
+     * estimate.
+     *
+     * Only ever used for the progress total and the "to do" line, both of which say `~`. It
+     * drifts when the profile changes, which is exactly when [ENCODING_VERSION] is bumped.
+     */
+    public const val ESTIMATED_UPLOAD_RATIO: Double = 0.137
+
     // ---------------------------------------------------------------- video
 
     /**

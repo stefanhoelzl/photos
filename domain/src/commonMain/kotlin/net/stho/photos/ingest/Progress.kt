@@ -85,7 +85,9 @@ internal class ProgressMeter(private val clock: Clock) {
         buildString {
             append(doneFiles).append('/').append(totalFiles)
             append("  ").append(formatBytes(doneBytes))
-            if (totalBytes > 0) append(" of ").append(formatBytes(totalBytes))
+            // `~`: the total is predicted from source bytes, since a derived size is not known
+            // until it is derived (§5). The numerator is real.
+            if (totalBytes > 0) append(" of ~").append(formatBytes(totalBytes))
             if (rate > 0) {
                 append("  ").append((rate / 1_048_576).fixed(2)).append(" MB/s")
                 val remaining = (totalBytes - doneBytes) / rate

@@ -110,6 +110,21 @@ internal class ConsoleReporter(private val console: Console) {
             unresolved("ignore rule \"${rule.pattern}\"", "matched nothing")
         }
 
+        // The two things content addressing buys are invisible unless the run says so: a
+        // resumed import, and a profile bump that leaves thumbnails alone (§2).
+        if (report.skippedUploads > 0) {
+            console.line(
+                "${report.skippedUploads} object(s) already in the zone, " +
+                    "${formatBytes(report.skippedBytes)} not re-sent",
+            )
+        }
+        if (report.abandonedUploads > 0) {
+            unresolved(
+                "abandoned upload(s)",
+                "${report.abandonedUploads} album(s) never finished uploading and were removed",
+            )
+        }
+
         val skipped = report.sweepSkipped
         if (skipped != null) {
             unresolved("orphan sweep skipped", skipped)
@@ -129,7 +144,9 @@ internal class ConsoleReporter(private val console: Console) {
 private fun plan(event: IngestEvent.Planned): String {
     val parts = buildList {
         if (event.albums > 0) {
-            add("${event.albums} album(s), ${event.files} photos, ${formatBytes(event.bytes)}")
+            // `~` because the upload figure is predicted from the source bytes: a photograph's
+            // derived size is not known until it is derived (§5).
+            add("${event.albums} album(s), ${event.files} photos, ~${formatBytes(event.bytes)}")
         }
         if (event.deletions > 0) add("${event.deletions} album(s) to delete")
         if (event.pulls > 0) add("${event.pulls} album(s) to pull")

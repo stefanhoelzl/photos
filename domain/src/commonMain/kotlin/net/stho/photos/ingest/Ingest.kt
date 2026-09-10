@@ -184,7 +184,14 @@ public class Ingest(
         // that has wedged.
         val work = plan.albums.filter(AlbumPlan::needsWrite)
         val files = work.sumOf { it.uploads.size }
-        val bytes = work.sumOf { album -> album.uploads.sumOf { Body.File(it).byteCount ?: 0L } }
+        // What will be *sent*, not what will be read. Since §5 the two differ by roughly 7×:
+        // a 3 MB photograph becomes a ~424 KB viewing image. Promising the disk figure would
+        // over-state the upload, and — because the meter's numerator counts bytes actually
+        // produced — would leave the bar stuck near a seventh of the way across and the estimate
+        // seven times too long. The derived size is unknowable before deriving, so this is an
+        // estimate and every line that shows it says `~`.
+        val sourceBytes = work.sumOf { album -> album.uploads.sumOf { Body.File(it).byteCount ?: 0L } }
+        val bytes = (sourceBytes * DerivativeSpec.ESTIMATED_UPLOAD_RATIO).toLong()
         emit(
             IngestEvent.Planned(
                 albums = work.size, files = files, bytes = bytes,
@@ -485,13 +492,18 @@ public class Ingest(
      */
     private suspend fun upload(id: ObjectId, body: Body, report: ReportBuilder): Long {
         val key = id.blobKey
+        val size = body.byteCount ?: 0L
         if (key in blobsInZone) {
             report.skippedUploads++
-            return 0L
+            report.skippedBytes += size
+            // Returned as work done even though nothing was sent. The meter measures progress
+            // through the run, and deriving a photograph the zone already holds is progress —
+            // a resumed import would otherwise sit at zero while finishing correctly.
+            return size
         }
         uploadPermits.withPermit { s3.put(key, body) }
-        blobsInZone[key] = body.byteCount ?: 0L
-        return body.byteCount ?: 0L
+        blobsInZone[key] = size
+        return size
     }
 
     // ------------------------------------------------------------------------------ thumbnails
@@ -839,6 +851,7 @@ private class ReportBuilder {
     var orphanedAlbums: List<Uuid> = emptyList()
     var blobsInZone = 0
     var skippedUploads = 0
+    var skippedBytes = 0L
     var abandonedUploads = 0
     var sweptBlobs = 0
     var sweptBytes = 0L
@@ -863,6 +876,7 @@ private class ReportBuilder {
         orphanedAlbums = orphanedAlbums,
         blobsInZone = blobsInZone,
         skippedUploads = skippedUploads,
+        skippedBytes = skippedBytes,
         abandonedUploads = abandonedUploads,
         sweptBlobs = sweptBlobs,
         sweptBytes = sweptBytes,
