@@ -772,8 +772,10 @@ x265 is already linked.
 
 **PSNR picked the tier's size; it did not pick its quality.** HEVC intra artifacts are
 structured rather than noise-like, and PSNR does not see them the way a person does. The ladder
-was judged on 1:1 crops of already-delivered 2000px files — faces and hair, compressed once
-already by the photographer, which is the hardest case for visible loss:
+was judged by eye on 1:1 crops, twice: first on already-delivered 2000px files — faces and hair,
+compressed once already by the photographer, which is the hardest case for visible loss — and
+then confirmed on camera originals downscaled to 3200px, which is the harder case for fine
+texture. Both passed at q45.
 
 ```
     q30    62 KiB   16% of source   33.8 dB
