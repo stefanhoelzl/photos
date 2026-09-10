@@ -12,6 +12,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.newFixedThreadPoolContext
 import kotlinx.coroutines.sync.withPermit
@@ -96,6 +97,7 @@ public class Ingest(
     private val encoders = lazy { newFixedThreadPoolContext(config.jobs, "photos-derive") }
 
     private val uploadPermits = Semaphore(config.uploadJobs)
+    private val deletePermits = Semaphore(config.deleteJobs)
     private val meter = ProgressMeter(clock)
 
     // replay = 1 because the *plan* is the first thing emitted: a collector that subscribes
@@ -619,19 +621,41 @@ public class Ingest(
      * object nothing points at would be worse than leaving it.
      */
     private suspend fun deleteBlobs(objectIds: List<ObjectId>) {
-        for (id in objectIds) {
-            try {
-                s3.delete(id.blobKey)
-                // Keep the set honest: it is what the zone holds, and the sweep reads it at the
-                // end of the run. Leaving a deleted key in would have the sweep count it a
-                // second time and delete what is already gone.
-                blobsInZone -= id.blobKey
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                // Debris, and the sweep's business.
+        deleteAll(objectIds.map(ObjectId::blobKey), swallowing = true)
+    }
+
+    /**
+     * Deletes these keys, [IngestConfig.deleteJobs] at a time.
+     *
+     * Concurrent for the opposite reason uploads are not (§9): a delete carries no bytes, so it
+     * is not competing for the upstream link — it is a round trip, and round trips overlap.
+     * Serially this is the slowest thing a run can do, and a profile bump orphans the whole
+     * library at once (§5).
+     *
+     * [swallowing] is for blobs the catalog has already stopped naming: they are debris either
+     * way, and failing an album over an object nothing points at would be worse than leaving it
+     * for the next sweep. The sweep itself does not swallow — it is the thing that reports.
+     */
+    private suspend fun deleteAll(keys: List<String>, swallowing: Boolean) {
+        if (keys.isEmpty()) return
+        coroutineScope {
+            for (key in keys) {
+                launch {
+                    deletePermits.withPermit {
+                        try {
+                            s3.delete(key)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (failure: Exception) {
+                            if (!swallowing) throw failure
+                        }
+                    }
+                }
             }
         }
+        // Keep the set honest: it is what the zone holds, and the sweep reads it at the end of
+        // the run. Leaving a deleted key in would have the sweep count it a second time.
+        blobsInZone -= keys.toSet()
     }
 
     // ------------------------------------------------------------------ pulling a phone album down
@@ -784,13 +808,13 @@ public class Ingest(
         // LIST. A fresh one could lag behind a shard this very run committed and read its blobs
         // as unreferenced; the in-memory set cannot. Blobs a concurrent phone upload wrote are
         // named by its `uploading` shard, so they are referenced regardless of when they landed.
-        for ((key, size) in blobsInZone.entries.sortedBy { it.key }) {
-            val id = key.asBlobObjectId() ?: continue
-            if (id in referenced) continue
+        val doomed = blobsInZone.entries.sortedBy { it.key }
+            .filter { (key, _) -> key.asBlobObjectId()?.let { it !in referenced } == true }
+        for ((_, size) in doomed) {
             report.sweptBlobs++
             report.sweptBytes += size
-            if (!dryRun) s3.delete(key)
         }
+        if (!dryRun) deleteAll(doomed.map { it.key }, swallowing = false)
     }
 
     // -------------------------------------------------------------------------------- helpers

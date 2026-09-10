@@ -1458,9 +1458,20 @@ Measured on a real zone from a domestic connection: **uploads are limited by the
 upstream link, not by bunny.net, and running more concurrent uploads makes throughput slightly
 *worse*.** Downloads scale mildly with concurrency.
 
+**Deletion is the exception, and it is the opposite shape.** Measured while emptying the live
+zone: a single DELETE costs **~1.4 s**, and 64 in flight sustained **~45/s**. It carries no
+bytes, so it never touches the upstream link the uploads are limited by — it is round-trip
+latency, and round trips overlap.
+
+> The number matters because of what §5 made routine. A profile bump re-derives every album,
+> orphaning ~34,000 blobs at once; serially that is about **thirteen hours** of deleting against
+> a three-hour import. `deleteJobs` therefore defaults to 64 where `uploadJobs` defaults to 1,
+> and the two carry opposite reasoning for it.
+
 Design consequence: **the ingest tool's parallelism is for derivative generation (CPU-bound),
 not for uploading.** Overlap encoding with a small number of upload connections; adding upload
-workers buys nothing. Measure the actual link before planning a bulk import — see `INGEST.md`.
+workers buys nothing — but do not carry that conclusion over to deletion. Measure the actual
+link before planning a bulk import — see `INGEST.md`.
 
 ## 10. Milestones
 

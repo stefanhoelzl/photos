@@ -1,6 +1,7 @@
 package net.stho.photos.ingest
 
 import kotlin.time.Duration
+import net.stho.photos.catalog.AlbumState
 import kotlin.time.Duration.Companion.days
 import kotlinx.io.files.Path
 
@@ -42,6 +43,17 @@ public class IngestConfig(
      */
     uploadJobs: Int = 1,
     /**
+     * Delete connections. **Sixty-four**, and the opposite reasoning to [uploadJobs]: a delete
+     * carries no bytes, so it is not competing for the upstream link — it is one round trip to
+     * Frankfurt and back, and round trips overlap.
+     *
+     * Measured against the live zone while emptying it: a single delete costs **~1.4 s**, and
+     * 64 in flight sustained **~45/s**. Serially that is 34,000 blobs in about thirteen hours,
+     * which is what a profile bump orphans (§5) against a three-hour import. The retry policy
+     * covers 429 and 5xx, so a server that dislikes the rate says so and the run backs off.
+     */
+    deleteJobs: Int = 64,
+    /**
      * Restricts the run to albums whose source path contains this, case-insensitively. It scopes
      * deletions and pulls as well as uploads: a scoped run that deleted everything outside its
      * scope would be a trap.
@@ -50,17 +62,20 @@ public class IngestConfig(
     /** Plan and print, change nothing. The only safety surface there is (§7). */
     public val dryRun: Boolean = false,
     /**
-     * How old an unreferenced blob must be before the sweep may delete it.
+     * How long an album may sit at [AlbumState.UPLOADING] before it counts as abandoned.
      *
      * Seven days is not a guess: presigned URLs live at most 7 days (§1) and §8's background
-     * uploads run against them, so a blob older than that cannot belong to an upload that can
-     * still complete. Below it, an unreferenced blob is indistinguishable from one the phone is
-     * uploading right now.
+     * uploads run against them, so past that the upload provably cannot finish.
+     *
+     * It no longer gates garbage collection. §8 names every blob an upload will write before
+     * writing any of them, so an unreferenced blob cannot belong to something in flight and is
+     * collected at once however new (§2). Liveness and garbage stopped sharing this knob.
      */
     public val sweepAge: Duration = 7.days,
 ) {
     public val jobs: Int = jobs.coerceAtLeast(1)
     public val uploadJobs: Int = uploadJobs.coerceAtLeast(1)
+    public val deleteJobs: Int = deleteJobs.coerceAtLeast(1)
 
     /**
      * Where derivatives are staged before upload. Emptied when the run starts and again when it
