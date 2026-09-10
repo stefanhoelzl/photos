@@ -9,7 +9,7 @@ behaviour is verified against a live storage zone rather than assumed.
 Specifics of the library being ingested — inventory, derivative sizing, geocoding data, the
 first-run plan — live in **`INGEST.md`**, which is not committed.
 
-**Mockups** are the visual companion to §6 and §8 — 17 screens, self-contained, open directly
+**Mockups** are the visual companion to §6 and §8 — 26 screens, self-contained, open directly
 with no server:
 
 | file | contents | committed |
@@ -648,7 +648,8 @@ transaction blocks the album list that is on screen while it runs.
   sync_state.db      album_id → etag, fetched_at
   shards/<uuid>.db   the shards, ~12 MB — source of truth for a rebuild
   merged.db          derived; deletable at any moment
-  blobs/             browse-to-cache (§6)
+  blobs/             images and video; what a clear empties (§6)
+  packs/             thumbnail packs; always kept, never evicted (§6)
   work/              staging for the run in progress; emptied at both ends
 ```
 
@@ -740,8 +741,11 @@ Rejected: 320px and 512px thumbs (a 512px tier is 3.7× larger, and a 1,645-phot
 reach ~77 MiB, breaking §3's one-request-per-album property).
 
 > The 2-column pinch density cannot be served sharply by *any* thumbnail tier — a 580px tile at
-> 3× would need ~576px thumbs. It now fetches viewing images for its tiles; that is §6's
-> decision, not this one's.
+> 3× would need ~576px thumbs. It draws the **cached viewing image where one is already on
+> disk**, and the upscaled thumb otherwise: the grid never *asks* for a blob, so it stays a
+> local read that works offline and needs no per-tile loading state. That is §6's decision, not
+> this one's — and it only became available once §6 started downloading an opened album's images
+> anyway.
 
 For this library's actual totals see `INGEST.md`.
 
@@ -837,9 +841,10 @@ to remember to run — which is what makes a quality decision reversible rather 
 
 ## 6. iOS app
 
-> See **`mockups/placeholder.html`** for all 17 screens rendered at device size — album list,
-> container, grid, pinch density, both viewer states, both map representations, set-cover
-> dialog, settings, log out, first-run setup, and the five upload steps. They fix layout and
+> See **`mockups/placeholder.html`** for all 26 screens rendered at device size — album list,
+> container, grid, pinch density, the album row's swipe actions, an album downloading, both
+> viewer states, both map representations, set-cover dialog, settings, log out, first-run setup,
+> and the five upload steps. They fix layout and
 > content, not chrome: they were drawn before this section settled on Compose, so a button in
 > them is an iOS button and in the build it is Material 3.
 
@@ -924,15 +929,21 @@ GETs §2 already relies on, cached like everything else.
 
 **Colour carries meaning; it is never decoration.** Standard bar buttons are **monochrome** —
 the glyph takes the on-surface colour. Blue-for-tappable is not used: if every affordance is
-tinted, tint says nothing, and the four colours below have to keep meaning something.
+tinted, tint says nothing, and the colours below have to keep meaning something.
 
 | context | glyph | background |
 |---|---|---|
 | nav bars | on-surface | surface |
 | over a photo | white | **dimming scrim** |
-| destructive (clear cache) | **error red** | surface |
-| active state (photo is the cover) | **gold** | surface |
-| progress fill | tinted | — |
+| start work (download an album) | **green** | surface |
+| active state (this photo *is* the cover; pause) | **blue** | surface |
+| destructive (clear an album) | **error red** | surface |
+| progress fill | **blue**, green when complete | — |
+
+> **Gold is retired.** It carried "active state" alone, on the filled set-as-cover star. When
+> the cache controls arrived they needed a colour for *running*, and blue was already the
+> progress fill — so gold and blue would have been two colours for one meaning, which is exactly
+> the decoration this rule forbids. Blue took the job and the star turned blue with it.
 
 ### Fullscreen viewer
 
@@ -947,8 +958,8 @@ both, so the viewer has no escalation step and no second loading state.
 > is uniformly no — a badge that always says the same thing carries no information. What the
 > laptop holds is a property of the archive, not of the photograph on screen.
 
-**Set as album cover** is a star: outlined when the photo is not the cover, **filled and gold
-when it is**. Setting a cover from inside a sub-album opens a dialog to choose whether it covers
+**Set as album cover** is a star: outlined when the photo is not the cover, **filled and blue
+when it is** (see the colour table above — gold is retired). Setting a cover from inside a sub-album opens a dialog to choose whether it covers
 the sub-album or its parent container.
 
 > The star means *favourite* in Photos. There is no favourites feature here, so nothing
@@ -956,24 +967,140 @@ the sub-album or its parent container.
 
 ### Caching and storage
 
-**Browse-to-cache. Nothing is downloaded ahead of time, and nothing is auto-evicted.**
-Whatever you view is kept until you clear it. The catalog and all thumbnail DBs (~0.5 GB) are
-always kept, so every grid opens instantly and offline.
+**Two triggers pull images, and only two: opening an album, or asking for it on the list.**
+Nothing else fetches an image. **Leaving an album stops its pending downloads**, keeping
+whatever landed; an explicit request does not stop, because that is the whole difference
+between the two. **Nothing is ever auto-evicted** — what is downloaded is kept until it is
+cleared, and the row controls are the only route.
+
+An album's download covers **everything its photo rows reference** — `image_id`, `video_id`,
+`live_still_id`, `live_video_id` — so "cached" means the album genuinely works offline rather
+than working until the first video.
+
+> This replaces browse-to-cache, and with it the line that said an album could only become
+> available offline by browsing it first. Preparing for a flight is now one gesture.
+
+**Thumbnail packs are unchanged and are not part of any of this.** Every album's pack is
+fetched in the background at launch, unconditionally, never stopped by navigation and never
+evicted (~0.5 GB) — that is what makes every grid open instantly and offline. Packs are
+therefore **excluded from an album's cache state**: they arrive whether or not anyone asked,
+so counting them would leave every row looking partly cached and "nothing held" would never be
+true of anything.
 
 > Never evicting is what makes §5's cap a phone decision rather than a bill. At 424 KiB per
-> viewing image, browsing a thousand photos keeps 0.42 GB permanently; byte-for-byte originals
-> would have kept 3.1 GB for the same browsing, and the tier that used to sit between them
-> existed largely to avoid exactly that.
+> viewing image, a thousand photos keeps 0.42 GB permanently; byte-for-byte originals would
+> have kept 3.1 GB, and the tier that used to sit between them existed largely to avoid that.
 
-Settings is **one screen**: storage totals, credentials, sync, and the album list last — each
-row with **one button, a clear button, shown only on albums that have something cached**.
+#### The download queue
 
-> Consequence, stated plainly: an album can only become available offline by browsing it first.
-> There is no way to deliberately prepare for a flight.
+One queue serves packs and images alike, ordered by what is on screen. **The ladder, highest
+first:**
+
+| tier | what |
+|---|---|
+| 0 | the open photo's blobs |
+| 1 | the viewer's ±3 neighbours |
+| 2 | packs for the album rows on screen |
+| 3 | the open album's images |
+| 4 | the remaining background pack sweep |
+| 5 | explicitly requested albums, in request order |
+
+An explicit request is last because everything above it is something the person is looking at
+right now, and the whole sweep is ~0.45 GB — about a minute, not a wait worth restructuring for.
+
+**Three worker roles, not one pool**, because the two size classes have opposite bottlenecks.
+Measured against the live zone from a domestic link:
+
+| concurrency | small blobs | large blobs |
+|---|---|---|
+| 1 | 2.33 MB/s · 168 ms each · **100 ms of it TTFB** | 6.36 MB/s |
+| 2 | 3.88 MB/s | **7.49 MB/s** |
+| 4 | 5.17 MB/s · 241 ms each | 7.12 MB/s · 3.7 s each |
+| 8 | 7.84 MB/s · 413 ms each | — |
+
+A small blob spends most of its life waiting for the first byte, so concurrency is what reaches
+link rate; a large one saturates on one or two streams and after that only grows its own
+latency. So: **1 `immediate`** worker serving tiers 0–1 and nothing else, **4 `small`** workers
+for blobs ≤ 4 MiB, and **1 `general`** worker that may take anything — which is what stops four
+video transcodes from occupying every worker at once.
+
+> The link tops out at **7–8 MB/s** however it is reached, which confirms the 7.5 MB/s used
+> throughout this document.
+
+**4 MiB is the size boundary, and it was measured rather than guessed.** Across 6,525 real
+rows: 90.4% of blobs are under 1 MiB and 99.4% under 2 MiB; only **24 are ≥ 4 MiB and 11 are
+≥ 8 MiB**, every one of them video, the largest 73.9 MiB. A 1 MiB boundary would have classed
+9.6% of blobs large — mostly harmless 1–2 MiB stills. **They cluster**, which is what makes the
+role split necessary rather than theoretical: one album holds seven blobs ≥ 4 MiB totalling
+214.5 MiB in 475 rows, so opening it puts four big videos in flight at once.
+
+**Re-order, never cancel — except the immediate worker.** An in-flight fetch on `small` or
+`general` always finishes, so no partial transfer is thrown away. The immediate worker is the
+exception, and it has to be: swiping from one 73.9 MiB video to the next would otherwise hold a
+worker for ten seconds on something already off screen. Having exactly one such worker is also
+what bounds it — a new tier-0 target *replaces* the old rather than adding to it.
+
+**A blob that will not download is given up on after three attempts** and skipped for the rest
+of the session, retried on the next launch. A queue that retries for ever cannot drain, and a
+row showing an error is more use than a strip frozen at 97%.
+
+**The scheduler lives in the shared tier, not in an adapter.** The ladder, the roles and the
+retry policy are the part that can be wrong, so they sit in `:ui/state` where a test with no
+zone and no filesystem can hold every fetch open and assert on which ones started. The platform
+port is four methods: `has`, `fetch`, `delete`, `present`.
+
+**On iOS, tiers 0–4 run in-process and tier 5 runs on a background `URLSession`.** Tiers 0–4
+exist to serve what is on screen and are pointless when the app is not; tier 5 is already last
+and has no ordering requirement, which is precisely what a background session can offer — it
+cannot be reordered, but nothing needs it to be. A persisted set of requested album ids means a
+download survives the app being killed.
+
+#### Where the controls live
+
+**On the album list, and nowhere else.** Settings keeps account, storage totals, sync and log
+out — it has no album list. One list means nothing has to keep two renderings of the same 288
+albums consistent, the hierarchy comes free, and asking for an album happens where you are
+already looking at it. **A container's control applies to every descendant**, which is how a
+person thinks about a trip.
+
+Each row carries **one strip on its trailing edge, and the strip *is* the progress bar**:
+
+| strip | means |
+|---|---|
+| grey | nothing held |
+| part blue | this much of the album is held, by bytes |
+| part blue, **pulsing** | …and bytes are moving right now |
+| full green | every blob is on disk; the album works offline |
+
+That is the entire cache vocabulary, and it replaced a separate gauge plus a line of prose on
+every row — so **the row's caption is what the album contains and nothing else**. It fills by
+bytes rather than by count, because an album whose one video is missing is not nearly done.
+
+> Motion means one thing everywhere in the app: bytes are moving for *this* item. A queued but
+> waiting album shows a still bar, which is what keeps a pulsing row worth looking at in a list
+> of 288.
+
+**Swipe-left reveals icon-only actions, and tapping the strip does the same.** Which actions
+appear is a function of state, so each row offers exactly what applies:
+
+| album state | revealed |
+|---|---|
+| nothing cached | **download** |
+| partial, stopped | **download** · **clear** |
+| partial, running | **pause** · **clear** |
+| complete | **clear** |
+| nothing to fetch (§10's emptied album) | nothing |
+
+**Swipe-right is unused**: it collides with the interactive back gesture, which matters at every
+level of this list rather than only at the root. The strip's hit area is grown to 44pt without
+growing the 4pt mark, and *that* is what makes the actions discoverable — there is no static
+affordance for a swipe on any platform, and being visible is what a gesture is not. **Clear also
+pauses**, is allowed at any time including on the album currently open, and asks for no
+confirmation: it is reversible by re-downloading and nothing in the zone is touched.
 
 iOS offers no system-level per-app cache clear (only Offload/Delete App), and a
 `Settings.bundle` cannot help — it is a static plist with no buttons, no dynamic rows and no
-images — so this screen is the only route.
+images — so these controls are the only route.
 
 ---
 
@@ -1522,7 +1649,13 @@ with a temporary directory and nothing else.
 
 **E · iOS read-only app** = B — first point the project is useful. Can start on fixtures, and
 runs on the Linux desktop harness (§6) long before it runs on a phone.
-It must render an album with **zero photos**: emptying a directory leaves one (§7).
+It must render an album with **zero photos**: emptying a directory leaves one (§7) — which also
+means offering it no cache controls, since it has nothing to fetch and nothing to remove.
+
+> **E.2 is the download queue** (§6): the ladder, the three worker roles, the per-album strip on
+> the album list, and Settings losing its album list. It is built and running on the harness
+> against the live zone. Two pieces of it are iOS-only and therefore unbuilt: tier 5's
+> background `URLSession`, and persisting the requested-album set across a kill.
 
 **F · Map** = B — parallel with E.
 
@@ -1592,8 +1725,11 @@ dependency stack is verified on Linux. Two things need Apple hardware:
 
 - **whether a Compose lazy grid sustains §6's prefetch at scale on a device.** The tile is a
   13 KB thumbnail from the packed blob, which is the cheap case; what the harness cannot answer
-  is the 2-column pinch density, where §5 now has the grid fetching **424 KiB viewing images**
-  per tile at scroll speed.
+  is the 2-column pinch density, where the grid decodes an already-cached **424 KiB viewing
+  image** per tile at scroll speed. It fetches nothing — the bytes are on disk or the thumb is
+  used — but the decode is real work, which is why the tile is decoded *to tile size* rather
+  than to 3200px: a full decode is ~30 MB of pixels, and a shallow cache of those would be
+  hundreds of megabytes for pixels no tile displays.
 - **whether the platform SQLite on iOS behaves as §3 assumes.** The SQL floor is 2018, so this
   is expected rather than doubted, but it is untested.
 
