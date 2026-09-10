@@ -107,7 +107,7 @@ internal class ProgressMeter(private val clock: Clock) {
             // is one photograph's guess is worse than no total.
             if (projected != null) append(" of ~").append(formatBytes(projected))
             if (rate > 0) {
-                append("  ").append((rate / 1_048_576).fixed(2)).append(" MB/s")
+                append("  ").append((rate / 1_000_000).fixed(2)).append(" MB/s")
                 val remaining = projected?.let { (it - doneBytes) / rate }
                 if (remaining != null && remaining > 0 && remaining.isFinite()) {
                     append("  ~").append(formatDuration(remaining.seconds)).append(" left")
@@ -143,9 +143,16 @@ internal class ProgressMeter(private val clock: Clock) {
     }
 }
 
-/** Human byte sizes, in the units the design's own numbers are quoted in. */
+/**
+ * Human byte sizes, decimal — so `GB` means 10⁹ bytes and not 2³⁰.
+ *
+ * Decimal because of what these numbers are compared against. §9 bills at $0.01/GB and
+ * bunny.net means the decimal GB there, so a run reporting 19.2 GB uploaded and an invoice
+ * computed on 19.2 GB agree; dividing by 1024 while writing `GB` had them differ by 7.4% with
+ * nothing on screen to explain it. Link speeds are quoted decimal for the same reason.
+ */
 public fun formatBytes(bytes: Long): String {
-    val units = listOf(1_073_741_824L to "GB", 1_048_576L to "MB", 1024L to "KB")
+    val units = listOf(1_000_000_000L to "GB", 1_000_000L to "MB", 1000L to "KB")
     for ((scale, suffix) in units) {
         if (bytes >= scale) return "${(bytes.toDouble() / scale).fixed(1)} $suffix"
     }

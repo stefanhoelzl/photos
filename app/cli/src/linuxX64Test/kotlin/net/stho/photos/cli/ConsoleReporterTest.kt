@@ -66,7 +66,7 @@ class ConsoleReporterTest {
             IngestReport(
                 albums = listOf(
                     IngestReport.AlbumOutcome(
-                        "Rauhöd", 2, 1, 2_097_152, created = true, duration = 1.seconds,
+                        "Rauhöd", 2, 1, 2_000_000, created = true, duration = 1.seconds,
                     ),
                 ),
                 deletedAlbums = listOf(IngestReport.DeletedAlbum("Alpen", 4)),
@@ -103,7 +103,7 @@ class ConsoleReporterTest {
         val recorder = Recorder()
 
         ConsoleReporter(recorder.console).render(
-            IngestReport(skippedUploads = 1204, skippedBytes = 2_097_152),
+            IngestReport(skippedUploads = 1204, skippedBytes = 2_000_000),
         )
 
         assertTrue(

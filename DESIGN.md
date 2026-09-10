@@ -444,7 +444,7 @@ CREATE TABLE thumb (
 );
 ```
 
-At ~13.1 KB per thumbnail a 100-photo album is ~1.3 MB and a 1,750-photo album ~22.4 MB, so
+At ~13.1 KiB per thumbnail a 100-photo album is ~1.3 MiB and a 1,750-photo album ~22.4 MiB, so
 **one request opens an album's entire grid, offline** — about 3.0 s for the largest album at
 the measured 7.5 MB/s. Shard the pack only if an album exceeds a few
 thousand photos.
@@ -698,8 +698,8 @@ Two tiers, and neither is an original:
 
 | tier | typical size | where | purpose |
 |---|---|---|---|
-| **256×256 q75 JPEG** | ~13.1 KB | packed per album, one blob | the grid |
-| **3200px HEIC q45** | ~424 KB | one blob per photo | everything else |
+| **256×256 q75 JPEG** | ~13.1 KiB | packed per album, one blob | the grid |
+| **3200px HEIC q45** | ~424 KiB | one blob per photo | everything else |
 
 **The zone is not a backup, and stopped pretending to be one.** The laptop library holds every
 original; §7's pull is what keeps that true for photographs that arrive from the phone. Once the
@@ -713,14 +713,14 @@ and a 1.2× upscale on a 4K desktop panel. It takes the still-image tier from **
 
 > Rejected: 4096px (10.2 h, native on a 4K panel, but HEIC's advantage over JPEG collapses to
 > −6% at that fidelity); 2560px (7.0 h, but only 1.25× the linear pixels of the tier it
-> replaced); and keeping originals byte-for-byte, which costs 19.5 h and 3.07 MB per photo of
+> replaced); and keeping originals byte-for-byte, which costs 19.5 h and 3.07 MiB per photo of
 > never-evicted device cache to store pixels nothing displays.
 
 **Why one viewing tier and not two.** The old design had a 2048px preview *because* the tier
 above it was a 3.3 MB camera original — far too heavy to swipe through, so something had to sit
-between the grid and the archive. At 424 KB that reason is gone: one image serves the swipe and
+between the grid and the archive. At 424 KiB that reason is gone: one image serves the swipe and
 the deep zoom, the viewer loses its two states, and there is no escalation to get wrong. The
-rungs now sit 13 KB → 424 KB, which is the order-of-magnitude spacing a two-rung ladder wants;
+rungs now sit 13 KiB → 424 KiB, which is the order-of-magnitude spacing a two-rung ladder wants;
 inserting a preview would have put one rung 2.9× below another.
 
 **Thumbnails are a square centre crop, not a fitted image.** Every consumer in §6 is a square
@@ -732,7 +732,7 @@ leaves it 256×171, and a 4-column grid tile on a 3× iPhone is 287 device pixel
 upscale. Filling the box is 1.12×. The crop is not irreversible: originals remain on the laptop,
 and re-thumbnailing an album mints a new `thumbs_id` (§2).
 
-> Measured across 16,181 photos in the live zone: **13.1 KB per thumbnail**, per-album median
+> Measured across 16,181 photos in the live zone: **13.1 KiB per thumbnail**, per-album median
 > 14.0 KB with p10 10.8 and p90 16.9. An earlier figure of 11.59 KB came from a 120-photo
 > sample, which the spread was wide enough to miss.
 
@@ -857,7 +857,7 @@ is the thing being used:
 
 Everything else is drawn, including the three hardest screens. `LazyVerticalGrid` exposes
 `layoutInfo`, so the grid's prefetch is driven from visible-item state rather than from a
-callback that fires once a cell is already on screen — far too late for the 424 KB fetch the
+callback that fires once a cell is already on screen — far too late for the 424 KiB fetch the
 2-column pinch density needs (§5).
 Drag-to-select is a `pointerInput` gesture. The fullscreen viewer's zoom + page +
 drag-to-dismiss is an ordinary composition of `HorizontalPager` and `transformable`.
@@ -938,7 +938,7 @@ One screen, two states. Chrome is identical in both — back, then gear/share/se
 filmstrip, and a bottom line carrying the date. A **LIVE badge appears once**, top-left, and is
 the only thing that differs.
 
-Swiping loads the 3200px image, and deep zoom needs nothing further: at 424 KB one blob serves
+Swiping loads the 3200px image, and deep zoom needs nothing further: at 424 KiB one blob serves
 both, so the viewer has no escalation step and no second loading state.
 
 > The `Original …` badge is gone. It answered "is this the real file?", and since §5 the answer
@@ -958,7 +958,7 @@ the sub-album or its parent container.
 Whatever you view is kept until you clear it. The catalog and all thumbnail DBs (~0.5 GB) are
 always kept, so every grid opens instantly and offline.
 
-> Never evicting is what makes §5's cap a phone decision rather than a bill. At 424 KB per
+> Never evicting is what makes §5's cap a phone decision rather than a bill. At 424 KiB per
 > viewing image, browsing a thousand photos keeps 0.42 GB permanently; byte-for-byte originals
 > would have kept 3.1 GB for the same browsing, and the tier that used to sit between them
 > existed largely to avoid exactly that.
@@ -1427,6 +1427,12 @@ verified.
 
 bunny.net storage: **$0.01/GB/month** (single-region HDD), no per-request fees, $1/month minimum.
 
+> **Units, since this section is where they bite.** bunny's GB is decimal — 10⁹ bytes — and so
+> is everything the CLI prints, precisely so a run reporting 19.2 GB uploaded and an invoice
+> computed on 19.2 GB are the same number. Per-item measurements elsewhere in this document are
+> written `KiB`/`MiB` because that is how they were taken; 424 KiB is 434 KB. The rule is that
+> a unit here means what it says, rather than every figure sharing one base.
+
 **The minimum is what actually bills.** This library at §5's tiers is ~17.9 GiB — thumbs 0.5,
 viewing images 13.8, video 3.1, Live-Photo stills 0.5 — which is $0.19 of a $1.00 invoice.
 Byte-for-byte originals would have been ~115 GiB and $1.23. So the whole storage dimension of
@@ -1434,7 +1440,7 @@ Byte-for-byte originals would have been ~115 GiB and $1.23. So the whole storage
 upload hours, and the never-evicting device cache of §6.
 
 > Stated plainly because it is easy to get backwards: the tier sizes in §5 matter, but not for
-> what they cost to store. 424 KB per photo instead of 3.07 MB is 3.0 h of first import instead
+> what they cost to store. 424 KiB per photo instead of 3.07 MiB is 3.0 h of first import instead
 > of 19.5, and 0.42 MB of permanent phone cache per photo viewed instead of 3.07.
 
 **Egress is billed only through the CDN — direct reads from the storage API are free.** This is
@@ -1479,7 +1485,7 @@ configuration that actually ships, by running the shipped binary over a syntheti
 > **What that no longer covers, stated plainly.** An earlier draft added a dev-only harness
 > that ran the pipeline over the real library and compared per-tier counts and sizes against
 > the figures in `INGEST.md`. It is not part of this design. So the aggregate properties those
-> figures describe — a thumbnail averaging ~13.1 KB, a viewing image ~424 KB across 34,607
+> figures describe — a thumbnail averaging ~13.1 KiB, a viewing image ~424 KiB across 34,607
 > photos —
 > are **not checked by anything automated**. A change that leaves every unit test green while
 > shifting the output distribution, a quality constant or a resize path, would not be caught
@@ -1573,7 +1579,7 @@ dependency stack is verified on Linux. Two things need Apple hardware:
 
 - **whether a Compose lazy grid sustains §6's prefetch at scale on a device.** The tile is a
   13 KB thumbnail from the packed blob, which is the cheap case; what the harness cannot answer
-  is the 2-column pinch density, where §5 now has the grid fetching **424 KB viewing images**
+  is the 2-column pinch density, where §5 now has the grid fetching **424 KiB viewing images**
   per tile at scroll speed.
 - **whether the platform SQLite on iOS behaves as §3 assumes.** The SQL floor is 2018, so this
   is expected rather than doubted, but it is untested.

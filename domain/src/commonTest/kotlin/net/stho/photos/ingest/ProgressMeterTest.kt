@@ -61,12 +61,9 @@ class ProgressMeterTest {
         // 20 done: 2,000,000 bytes sent from 20,000,000 read. The remaining 80,000,000 project
         // to 8,000,000, for 10,000,000 in total — a tenth of the source, which is the ratio it
         // was fed and which no constant anywhere told it.
-        //
-        // Shown as "9.5 MB" because `formatBytes` divides by 1024 and labels the result MB, so
-        // every figure the CLI prints is really the MiB of the same number.
         val shown = assertNotNull(line)
         assertTrue("20/100" in shown, shown)
-        assertTrue("of ~9.5 MB" in shown, "projected the wrong total: $shown")
+        assertTrue("of ~10.0 MB" in shown, "projected the wrong total: $shown")
         assertTrue("left" in shown, "an estimate should follow a projection: $shown")
     }
 
@@ -86,8 +83,25 @@ class ProgressMeterTest {
         val shown = assertNotNull(line)
         // Half done, so the projection is twice what has been sent — and nowhere near the
         // 40 MB that came off the disk.
-        assertTrue("of ~5.2 MB" in shown, shown)
+        assertTrue("of ~5.5 MB" in shown, shown)
         assertTrue("40.0 MB" !in shown, "the disk figure leaked into the upload total: $shown")
+    }
+
+    /**
+     * §9 bills at $0.01/GB and means the decimal GB, so a run reporting 19.2 GB and an invoice
+     * computed on 19.2 GB have to be the same number. Dividing by 1024 while writing `GB` put
+     * them 7.4% apart with nothing on screen to say why.
+     */
+    @Test
+    fun bytesArePrintedInTheUnitsTheyClaim() {
+        assertEquals("1.0 KB", formatBytes(1_000))
+        assertEquals("1.0 MB", formatBytes(1_000_000))
+        assertEquals("1.0 GB", formatBytes(1_000_000_000))
+        assertEquals("999 B", formatBytes(999))
+        // The discriminating case: 2³⁰ bytes is one GiB, and one GiB is 1.1 GB. Under the
+        // divide-by-1024 this replaces it printed "1.0 GB", which is what a GiB is not.
+        assertEquals("1.1 GB", formatBytes(1_073_741_824))
+        assertEquals("19.2 GB", formatBytes(19_219_978_650))
     }
 
     @Test
