@@ -22,10 +22,16 @@ import net.stho.photos.ui.state.Screen
  * something was drawn.
  *
  *   GET  /state           the current screen, sort, query, album names, sync status, notice
- *   POST /nav?to=albums   push a screen: albums | settings | album/<uuid> | back
+ *   POST /nav?to=albums   push a screen: albums | settings | album/<uuid> |
+ *                         photo/<uuid>/<index> | back
  *   POST /sort            cycle the sort, exactly as the icon does
  *   POST /search?q=text   type into the search field
  *   POST /refresh         pull-to-refresh, which the desktop has no gesture for
+ *   POST /cache?album=<uuid>&action=download|pause|clear
+ *                         the album row's cache controls, which are a swipe or a tap on the
+ *                         strip -- neither of which this server can perform. It calls the same
+ *                         model method the tap does, so what the suite drives is real behaviour
+ *                         rather than a stand-in.
  *   GET  /screenshot      the same composition rendered offscreen, as a PNG
  */
 public class ControlServer(
@@ -43,6 +49,18 @@ public class ControlServer(
                 to == "back" -> model.back()
                 to == "albums" -> model.navigate { it.root() }
                 to == "settings" -> model.openSettings()
+                // The viewer was the one screen the harness could not reach at all, which made
+                // its loading state unreviewable without a device.
+                to.startsWith("photo/") -> {
+                    val parts = to.removePrefix("photo/").split("/")
+                    val id = parts.getOrNull(0)?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+                    val at = parts.getOrNull(1)?.toIntOrNull()
+                    if (id == null || at == null) {
+                        return@createContext exchange.reply(400, "expected photo/<uuid>/<index>")
+                    }
+                    model.navigate { it.push(Screen.Grid(id, to)) }
+                    model.openPhoto(at)
+                }
                 to.startsWith("album/") -> {
                     val id = runCatching { Uuid.parse(to.removePrefix("album/")) }.getOrNull()
                     if (id == null) return@createContext exchange.reply(400, "bad album id")
@@ -50,6 +68,20 @@ public class ControlServer(
                 }
                 else -> return@createContext exchange.reply(400, "unknown destination")
             }
+            exchange.replyJson(state())
+        }
+        server.createContext("/cache") { exchange ->
+            val id = runCatching { Uuid.parse(exchange.query("album").orEmpty()) }.getOrNull()
+                ?: return@createContext exchange.reply(400, "bad album id")
+            val album = model.state.value.albums.firstOrNull { it.id == id }
+                ?: return@createContext exchange.reply(404, "no such album")
+            val action = when (exchange.query("action")) {
+                "download" -> net.stho.photos.ui.state.CacheAction.Download
+                "pause" -> net.stho.photos.ui.state.CacheAction.Pause
+                "clear" -> net.stho.photos.ui.state.CacheAction.Clear
+                else -> return@createContext exchange.reply(400, "unknown action")
+            }
+            model.act(album, action)
             exchange.replyJson(state())
         }
         server.createContext("/sort") { model.cycleSort(); it.replyJson(state()) }
@@ -104,14 +136,22 @@ public class ControlServer(
             is Screen.Photo -> "photo/${s.albumId}/${s.index}"
             is Screen.Settings -> "settings"
         }
-        val albums = ui.albums.joinToString(",") { """{"id":"${it.id}","name":${it.name.json()},"photos":${it.photoCount}}""" }
+        val albums = ui.albums.joinToString(",") {
+            val cache = ui.cacheOf(it)
+            val actions = ui.actionsOf(it).joinToString(",") { action -> "\"$action\"" }
+            """{"id":"${it.id}","name":${it.name.json()},"photos":${it.photoCount},""" +
+                """"cache":{"held":${cache.heldBytes},"total":${cache.totalBytes},""" +
+                """"moving":${cache.moving},"complete":${cache.complete}},"actions":[$actions]}"""
+        }
         val notice = ui.notice?.let {
             """{"kind":"${it.kind}","title":${it.title.json()},"detail":${it.detail.json()}}"""
         } ?: "null"
         return """
             {"screen":"$screen","sort":"${ui.sort}","query":${ui.query.json()},
              "subtitle":${ui.subtitle.json()},"sync":${ui.sync.toString().json()},
-             "notice":$notice,"albums":[$albums]}
+             "notice":$notice,
+             "storage":{"media":${ui.storage.media},"packs":${ui.storage.packs},"albumsHeld":${ui.storage.albumsHeld}},
+             "albums":[$albums]}
         """.trimIndent()
     }
 

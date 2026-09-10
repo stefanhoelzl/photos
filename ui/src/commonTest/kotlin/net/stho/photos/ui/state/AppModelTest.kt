@@ -91,7 +91,7 @@ class AppModelTest {
     @Test
     fun aFirstSyncSaysItIsLoadingRatherThanThatThereIsNothing() = runTest {
         val syncer = SteppingSyncer()
-        val model = AppModel(FakeCatalog(emptyList()), syncer, FakeThumbnails(), FakePreviews(), FakeVideos(), own(this))
+        val model = AppModel(FakeCatalog(emptyList()), syncer, FakeThumbnails(), FakePreviews(), FakeVideos(), own(this).let { s -> idleQueue(s) }, own(this))
         model.start()
 
         syncer.report(fetched = 12, total = 288)
@@ -106,7 +106,7 @@ class AppModelTest {
     @Test
     fun aLaterSyncNeverHidesTheCatalogItAlreadyHas() = runTest {
         val syncer = SteppingSyncer()
-        val model = AppModel(FakeCatalog(listOf(album("Iceland", 2024))), syncer, FakeThumbnails(), FakePreviews(), FakeVideos(), own(this))
+        val model = AppModel(FakeCatalog(listOf(album("Iceland", 2024))), syncer, FakeThumbnails(), FakePreviews(), FakeVideos(), own(this).let { s -> idleQueue(s) }, own(this))
         model.start()
 
         syncer.report(fetched = 1, total = 288)
@@ -117,7 +117,7 @@ class AppModelTest {
     @Test
     fun theSubtitleNamesThePackQueueWhileItDrains() = runTest {
         val thumbs = FakeThumbnails()
-        val model = AppModel(FakeCatalog(listOf(album("Iceland", 2024))), FakeSyncer(SyncOutcome.Succeeded(1, 1)), thumbs, FakePreviews(), FakeVideos(), own(this))
+        val model = AppModel(FakeCatalog(listOf(album("Iceland", 2024))), FakeSyncer(SyncOutcome.Succeeded(1, 1)), thumbs, FakePreviews(), FakeVideos(), own(this).let { s -> idleQueue(s) }, own(this))
         model.start()
         thumbs.outstanding.value = 254
         thumbs.arrivals.value = 34
@@ -172,7 +172,7 @@ class AppModelTest {
     ): AppModel {
         val own = CoroutineScope(UnconfinedTestDispatcher(scope.testScheduler))
         scopes += own
-        return AppModel(FakeCatalog(albums), FakeSyncer(outcome), FakeThumbnails(), FakePreviews(), FakeVideos(), own)
+        return AppModel(FakeCatalog(albums), FakeSyncer(outcome), FakeThumbnails(), FakePreviews(), FakeVideos(), idleQueue(own), own)
     }
 
     private class FakeCatalog(private val albums: List<Album>) : Catalog {
@@ -182,7 +182,25 @@ class AppModelTest {
         override fun photos(inAlbum: Uuid): List<PhotoRow> = emptyList()
         override fun album(id: Uuid): Album? = albums.firstOrNull { it.id == id }
         override fun totals() = Totals(albums.size, albums.sumOf { it.photoCount })
+        override fun blobs(): Map<Uuid, List<BlobRef>> = emptyMap()
     }
+
+    /**
+     * A queue over a store with nothing in it and nothing to fetch.
+     *
+     * The ladder has its own suite; what these tests care about is that the model still renders
+     * when every album reads as holding nothing.
+     */
+    private fun idleQueue(scope: CoroutineScope) = CacheQueue(
+        store = object : BlobStore {
+            override fun has(id: net.stho.photos.catalog.ObjectId) = false
+            override suspend fun fetch(id: net.stho.photos.catalog.ObjectId) = Unit
+            override fun delete(id: net.stho.photos.catalog.ObjectId) = Unit
+            override fun present() = emptySet<net.stho.photos.catalog.ObjectId>()
+        },
+        scope = scope,
+        backoff = { },
+    )
 
     /**
      * Packs that are always present and always empty.

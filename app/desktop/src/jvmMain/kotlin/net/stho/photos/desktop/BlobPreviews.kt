@@ -18,6 +18,7 @@ import kotlinx.io.files.SystemFileSystem
 import net.stho.photos.catalog.blobKey
 import net.stho.photos.model.PhotoRow
 import net.stho.photos.storage.S3Client
+import net.stho.photos.ui.state.CacheQueue
 import net.stho.photos.ui.state.Preview
 import net.stho.photos.ui.state.Previews
 import net.stho.photos.ui.state.Videos
@@ -38,9 +39,9 @@ import org.jetbrains.skia.ImageInfo
  * 2048px frame is ~16 MB of pixels, so this is deliberately shallow.
  */
 public class BlobPreviews(
-    private val s3: S3Client,
     cacheRoot: Path,
     private val decoder: PreviewDecoder,
+    private val queue: CacheQueue,
     private val scope: CoroutineScope,
 ) : Previews, Videos {
 
@@ -82,29 +83,18 @@ public class BlobPreviews(
         }
     }
 
+    /**
+     * Wait for the queue to land the blob, then decode it.
+     *
+     * This used to download the blob itself. It does not any more, and that is the point: the
+     * queue is the only thing that fetches, so the viewer cannot race the ladder for a second
+     * copy of what a worker is already pulling — and the open photo is tier 0, so waiting is
+     * the fastest route rather than a concession.
+     */
     private suspend fun fetchAndDecode(photo: PhotoRow): Preview? {
         val blob = photo.imageId ?: return null
-        val file = Path(directory, blob.toString())
-        if (!SystemFileSystem.exists(file)) {
-            // A scratch name of its own per attempt, so two downloads of the same blob can
-            // never rename each other's file out from under themselves.
-            val partial = Path(directory, "$blob.${Uuid.random()}.part")
-            try {
-                s3.download(blob.blobKey, to = partial)
-                SystemFileSystem.atomicMove(partial, file)
-            } catch (cancelled: CancellationException) {
-                // Cancellation is not a failure and must not be swallowed: leaving the album
-                // abandons a prefetch by design, and reporting it as an error would bury the
-                // one line that means something.
-                SystemFileSystem.delete(partial, mustExist = false)
-                throw cancelled
-            } catch (failure: Exception) {
-                SystemFileSystem.delete(partial, mustExist = false)
-                System.err.println("preview ${photo.filename}: $failure")
-                return null
-            }
-        }
-        val image = decoder.decode(file) ?: return null
+        queue.awaitHeld(blob)
+        val image = decoder.decode(Path(directory, blob.toString())) ?: return null
         return Preview(photo.id, image).also { decoded[photo.id] = it }
     }
 
@@ -115,16 +105,14 @@ public class BlobPreviews(
      * whole-album prefetch belongs to E.2, which also brings the button that clears what it
      * leaves behind.
      */
-    override fun prefetch(photos: List<PhotoRow>, index: Int) {
-        prefetching?.cancel()
-        prefetching = scope.launch {
-            val window = (index - NEIGHBOURS)..(index + NEIGHBOURS)
-            for (position in window) {
-                if (position == index) continue
-                photos.getOrNull(position)?.let { load(it) }
-            }
-        }
-    }
+    /**
+     * Nothing, deliberately.
+     *
+     * §6's ±3 is tier 1 on the ladder now, and the model places it — so a second prefetch here
+     * would only queue the same blobs a second time, from a component that cannot see what the
+     * person is looking at.
+     */
+    override fun prefetch(photos: List<PhotoRow>, index: Int): Unit = Unit
 
     /**
      * §5 keeps video *originals* on the laptop, so what the zone holds — and what this
@@ -132,22 +120,8 @@ public class BlobPreviews(
      */
     override suspend fun localFile(photo: PhotoRow): String? {
         val blob = photo.videoId ?: return null
-        val file = Path(directory, blob.toString())
-        if (!SystemFileSystem.exists(file)) {
-            val partial = Path(directory, "$blob.${Uuid.random()}.part")
-            try {
-                s3.download(blob.blobKey, to = partial)
-                SystemFileSystem.atomicMove(partial, file)
-            } catch (cancelled: CancellationException) {
-                SystemFileSystem.delete(partial, mustExist = false)
-                throw cancelled
-            } catch (failure: Exception) {
-                SystemFileSystem.delete(partial, mustExist = false)
-                System.err.println("video ${photo.filename}: $failure")
-                return null
-            }
-        }
-        return file.toString()
+        queue.awaitHeld(blob)
+        return Path(directory, blob.toString()).toString()
     }
 
     /** Leaving the album abandons the queue *and* whatever it had already started. */

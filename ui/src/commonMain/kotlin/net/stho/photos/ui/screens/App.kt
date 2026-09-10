@@ -45,8 +45,11 @@ public fun App(model: AppModel, thumbnails: Thumbnails) {
                             loading = (ui.sync as? SyncStatus.Running)
                                 ?.takeIf { ui.albums.isEmpty() }
                                 ?.let { it.fetched to it.total },
+                            cache = ui::cacheOf,
+                            actions = ui::actionsOf,
                             onSearch = model::search,
                             onOpen = model::open,
+                            onAction = model::act,
                         )
                     }
 
@@ -58,8 +61,11 @@ public fun App(model: AppModel, thumbnails: Thumbnails) {
                         AlbumList(
                             ui.albums, ui.query, false, thumbnails, arrivals,
                             loading = null,
+                            cache = ui::cacheOf,
+                            actions = ui::actionsOf,
                             onSearch = model::search,
                             onOpen = model::open,
+                            onAction = model::act,
                         )
                     }
 
@@ -82,6 +88,7 @@ public fun App(model: AppModel, thumbnails: Thumbnails) {
                             index = screen.index,
                             preview = ui.preview,
                             videoPath = ui.videoPath,
+                            moving = ui.openPhotoMoving,
                             thumbnails = ui.thumbnails,
                             onSelect = model::showPhoto,
                         )
@@ -89,7 +96,7 @@ public fun App(model: AppModel, thumbnails: Thumbnails) {
 
                     is Screen.Settings -> {
                         NavBar("Settings", null, onBack = model::back) {}
-                        SettingsScreen(ui.sync, ui.totals)
+                        SettingsScreen(ui.sync, ui.totals, ui.storage)
                     }
                 }
             }

@@ -14,24 +14,32 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import net.stho.photos.ui.state.StorageTotals
 import net.stho.photos.ui.state.SyncStatus
 import net.stho.photos.ui.state.Totals
 
 /**
- * Settings in E.1: account, sync, log out — and **no storage handling at all**.
+ * Settings: account, storage totals, sync, log out — and **no album list**.
  *
- * There is nothing to manage yet: caching is plain browse-to-cache, and the totals, the
- * per-album rows and both of their buttons arrive with E.2, the milestone that gives them
- * something to do.
+ * The per-album controls are not here. They live on the album list itself, where a person is
+ * already looking at the album they want, which is also what stops two renderings of the same
+ * 288 albums from having to agree with each other. What is left here is the totals, which are
+ * about the device rather than about any one album.
  *
  * The sync row is load-bearing rather than decorative: a toast is transient, so this is the
  * durable record of a failure, and it is what makes a missed toast harmless.
  */
 @Composable
-public fun SettingsScreen(sync: SyncStatus, totals: Totals) {
+public fun SettingsScreen(sync: SyncStatus, totals: Totals, storage: StorageTotals) {
     Column(Modifier.fillMaxSize()) {
         SectionHeader("Library")
         Cell("Albums", "${totals.albums} · ${totals.photos} photos")
+        SectionHeader("Storage")
+        Cell("Cached images + video", storage.media.asSize())
+        Cell("Catalog + thumbnails", "${storage.packs.asSize()} · always kept")
+        // Nothing is ever evicted automatically (§6), so this number only ever grows by
+        // something the person did -- which is what makes stating it useful rather than alarming.
+        Cell("Albums held", "${storage.albumsHeld} of ${totals.albums}")
         SectionHeader("Sync")
         when (sync) {
             is SyncStatus.Never -> Cell("Last sync", "never")
@@ -43,6 +51,15 @@ public fun SettingsScreen(sync: SyncStatus, totals: Totals) {
             }
         }
     }
+}
+
+
+/** Decimal GB, because §9's units rule is that a number means what it says. */
+private fun Long.asSize(): String = when {
+    this >= 1_000_000_000L -> "${(this / 100_000_000L) / 10.0} GB"
+    this >= 1_000_000L -> "${this / 1_000_000L} MB"
+    this > 0L -> "${this / 1_000L} kB"
+    else -> "nothing yet"
 }
 
 @Composable

@@ -15,12 +15,20 @@ import androidx.compose.ui.graphics.Color
  * stock baseline palette and introduce a hue this design never chose. The app follows the
  * system theme and offers no appearance setting — the OS already owns that preference.
  *
- * Colour carries meaning and is never decoration (§6). Bar glyphs are on-surface; the four
- * colours that mean something are error (destructive), gold (this photo *is* the cover),
- * the accent (progress and the one tappable word in a toast), and the dimming scrim.
+ * Colour carries meaning and is never decoration (§6), and there are three working colours:
+ *
+ * | colour | meaning |
+ * |---|---|
+ * | **green** | start work — download an album |
+ * | **blue** | active state — this photo *is* the cover, and pause |
+ * | **error red** | destructive — clear an album |
+ *
+ * **Gold is retired.** It used to carry "active state" alone, on the filled set-as-cover star.
+ * Blue took that job when the cache controls arrived and needed a colour for *running*: two
+ * colours for one meaning is exactly the decoration this rule forbids, so one of them had to go.
  */
-private val Gold = Color(0xFFFFD60A)
-private val GoldLight = Color(0xFF8A6D00)
+private val Green = Color(0xFF30D158)
+private val GreenLight = Color(0xFF1D7F3D)
 
 private val Dark = darkColorScheme(
     primary = Color(0xFF0A84FF),
@@ -31,8 +39,8 @@ private val Dark = darkColorScheme(
     onSecondary = Color(0xFF0B0D10),
     secondaryContainer = Color(0xFF222933),
     onSecondaryContainer = Color(0xFFE9EDF2),
-    tertiary = Gold,
-    onTertiary = Color(0xFF201A00),
+    tertiary = Green,
+    onTertiary = Color(0xFF00210B),
     background = Color(0xFF000000),
     onBackground = Color(0xFFE9EDF2),
     surface = Color(0xFF000000),
@@ -64,7 +72,7 @@ private val Light = lightColorScheme(
     onSecondary = Color.White,
     secondaryContainer = Color(0xFFE3E6EA),
     onSecondaryContainer = Color(0xFF14171C),
-    tertiary = GoldLight,
+    tertiary = GreenLight,
     onTertiary = Color.White,
     background = Color(0xFFFFFFFF),
     onBackground = Color(0xFF14171C),
@@ -88,8 +96,19 @@ private val Light = lightColorScheme(
     scrim = Color(0xFF000000),
 )
 
-/** The gold that means "this photo is the album's cover" — the one active-state colour (§6). */
-public val ColorScheme.cover: Color get() = tertiary
+/**
+ * Active state: this photo *is* the album's cover, and an album is downloading.
+ *
+ * One colour for one meaning — it was gold until the cache controls needed a colour for
+ * "running", and having two active-state colours would have made neither of them mean anything.
+ */
+public val ColorScheme.active: Color get() = primary
+
+/** Start work: the download control. The only place green appears. */
+public val ColorScheme.start: Color get() = tertiary
+
+/** Kept so the viewer's star reads at the call site as what it is. */
+public val ColorScheme.cover: Color get() = active
 
 @Composable
 public fun PhotosTheme(

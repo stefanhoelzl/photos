@@ -14,11 +14,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -47,6 +49,8 @@ public fun Viewer(
     preview: Preview?,
     videoPath: String?,
     thumbnails: Map<Uuid, ByteArray>,
+    /** A worker is fetching this photo's blob right now, so the placeholder pulses. */
+    moving: Boolean,
     onSelect: (Int) -> Unit,
 ) {
     val photo = photos.getOrNull(index) ?: return
@@ -55,7 +59,24 @@ public fun Viewer(
         // than fills, because it is the only one showing the whole photograph (§5).
         // The poster first, then the player over it once the transcode has arrived: §5's
         // preview *is* a video's poster frame, so there is never a blank rectangle.
-        preview?.let { Image(it.image, null, Modifier.fillMaxSize().padding(bottom = 96.dp), contentScale = ContentScale.Fit) }
+        if (preview != null) {
+            Image(preview.image, null, Modifier.fillMaxSize().padding(bottom = 96.dp), contentScale = ContentScale.Fit)
+        } else {
+            // The same photograph-shaped mark the album list and the grid use, on the surface
+            // the wait is longest on. It pulses only while bytes are actually moving, so a
+            // still glyph means the fetch is queued rather than stalled.
+            Box(
+                Modifier.fillMaxSize().padding(bottom = 96.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.image,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.size(72.dp).alpha(pulseAlpha(moving)),
+                )
+            }
+        }
         if (photo.mediaType == MediaType.VIDEO && videoPath != null) {
             LocalVideoSurface.current.Render(videoPath, Modifier.fillMaxSize().padding(bottom = 96.dp))
         }

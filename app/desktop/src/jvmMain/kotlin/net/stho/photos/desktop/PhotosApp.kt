@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.io.files.Path
 import net.stho.photos.adapter.linux.FfmImaging
 import net.stho.photos.adapter.linux.JdbcSqlDrivers
@@ -20,6 +21,7 @@ import net.stho.photos.ui.screens.LocalVideoSurface
 import net.stho.photos.ui.screens.PhotosTheme
 import net.stho.photos.ui.screens.VideoSurface
 import net.stho.photos.ui.state.AppModel
+import net.stho.photos.ui.state.CacheQueue
 
 /**
  * The composition root, as a value.
@@ -46,25 +48,53 @@ public class PhotosApp(
     private val catalog = MergedCatalogSource(sync, drivers)
     private val imaging = decodeLibrary?.let { FfmImaging(it) }
 
-    public val packs: PackFetcher = PackFetcher(s3, cacheRoot, drivers, sync.mergedPath, scope)
+    /**
+     * The queue's platform half. It also decides where a blob lands, so the pack queue below
+     * declares its ids as packs before asking for them.
+     */
+    private val store = FileBlobStore(s3, cacheRoot)
+
+    /** The scheduler itself lives in `:ui/state`; this is only the wiring. */
+    public val queue: CacheQueue = CacheQueue(store = store, scope = scope)
+
+    public val packs: PackFetcher = PackFetcher(cacheRoot, drivers, sync.mergedPath, queue, store)
 
     private val blobs = BlobPreviews(
-        s3 = s3,
         cacheRoot = cacheRoot,
         // Without the shim, Skia alone: it reads JPEG and PNG, so a suite that never opens a
         // HEIC preview needs no native library at all.
         decoder = imaging?.let(::ShimPreviewDecoder) ?: PreviewDecoder { null },
+        queue = queue,
         scope = scope,
     )
 
     public val model: AppModel = AppModel(
         catalog = catalog,
-        syncer = CatalogSyncer(sync) { packs.fetchAll(catalog.everyAlbum()) },
+        syncer = CatalogSyncer(sync) { packs.sweep(catalog.everyAlbum()) },
         thumbnails = packs,
         previews = blobs,
         videos = blobs,
+        queue = queue,
         scope = scope,
     )
+
+    init {
+        // The nav bar counts packs down as they land. The queue knows what is held; only this
+        // root knows which of those ids are packs, so the counting happens here.
+        scope.launch {
+            // `everyAlbum()` opens the merged DB, so it is read once rather than per arrival:
+            // doing it per blob put a database open on the download workers' own dispatcher
+            // several hundred times during a first run.
+            var albums = catalog.everyAlbum()
+            // A StateFlow already conflates; the delay below is what coalesces a burst, since
+            // emissions arriving while the collector is suspended replace one another.
+            queue.held.collect { held ->
+                if (albums.isEmpty()) albums = catalog.everyAlbum()
+                packs.noteArrivals(held, albums)
+                kotlinx.coroutines.delay(150)
+            }
+        }
+    }
 
     /** What the window shows, and what `GET /screenshot` renders. */
     @Composable

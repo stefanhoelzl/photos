@@ -1,7 +1,10 @@
 package net.stho.photos.ui.state
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -54,7 +57,32 @@ public data class AppUi(
     val totals: Totals = Totals(0, 0),
     val packsDone: Int = 0,
     val packsOutstanding: Int = 0,
+    /**
+     * Per-album cache state, which is the whole of what an album row's strip draws.
+     *
+     * Containers aggregate their children, so a container row is as informative as a leaf and
+     * its control means "all eight sub-albums" (§2 gives it no blobs of its own).
+     */
+    val cache: Map<Uuid, AlbumCache> = emptyMap(),
+    /** Albums explicitly asked for, so a row knows to offer pause rather than download. */
+    val wanted: Set<Uuid> = emptySet(),
+    /** What the device holds, for the one screen that talks about the device (§6). */
+    val storage: StorageTotals = StorageTotals.none,
+    /**
+     * Whether a worker is fetching the open photo's own blob right now.
+     *
+     * The viewer draws a placeholder until the image arrives, and pulses it while bytes are
+     * moving — the same rule the album strip uses, so motion means one thing on every surface.
+     */
+    val openPhotoMoving: Boolean = false,
 ) {
+    /** What this album's row draws. Unknown albums read as holding nothing, never as complete. */
+    public fun cacheOf(album: Album): AlbumCache = cache[album.id] ?: AlbumCache.nothing
+
+    /** Icon-only actions the row offers, which is a function of state and nothing else. */
+    public fun actionsOf(album: Album): List<CacheAction> =
+        actionsFor(cacheOf(album), wanted = album.id in wanted)
+
     val screen: Screen get() = stack.current
 
     /** The nav bar's second line: a count, then the sort state, so no menu has to name it (§6). */
@@ -84,15 +112,36 @@ public class AppModel(
     private val thumbnails: Thumbnails,
     private val previews: Previews,
     private val videos: Videos,
+    private val queue: CacheQueue,
     private val scope: CoroutineScope,
     private val clock: Clock = Clock.System,
 ) {
+    /**
+     * Every album's blobs, re-read when the catalog changes rather than per redraw.
+     *
+     * 34,607 rows is one query and a few MB; doing it per visible row would put the merged DB
+     * in the draw path of the app's densest screen.
+     */
+    private var blobs: Map<Uuid, List<BlobRef>> = emptyMap()
+
+    /**
+     * Every album, flat, cached alongside [blobs].
+     *
+     * Re-walking the hierarchy meant one SQLite open per album, and the cache view is recomputed
+     * whenever a blob lands — so on a first run that was ~120 database opens several hundred
+     * times over, on the same dispatcher the download workers use. The workers starved and the
+     * queue stopped draining entirely. The tree only changes when the catalog does.
+     */
+    private var albumTree: List<Album> = emptyList()
+
     private val _state = MutableStateFlow(AppUi())
     public val state: StateFlow<AppUi> = _state.asStateFlow()
 
     /** Reads what is already on disk, then syncs. The catalog is local, so nothing waits. */
     public fun start() {
+        refreshCatalogView()
         reload()
+        refreshCache()
         refresh()
         // A pack landing changes what is already on screen -- a placeholder cover becomes a
         // photograph -- so the model reloads rather than leaving the UI to poll.
@@ -102,6 +151,127 @@ public class AppModel(
                 reload()
             }
         }
+        // What is on disk and what is moving both change without anything on screen being
+        // touched, so the rows follow the queue rather than being pushed by whoever changed it.
+        //
+        // Conflated and coalesced, because these fire twice per blob and a first run lands
+        // hundreds: recomputing per event put the rollup on the workers' own dispatcher often
+        // enough to stall the queue. `conflate` drops superseded values and the delay bounds
+        // how often the rollup runs; the last value always arrives, so nothing is missed.
+        scope.launch {
+            combine(queue.held, queue.active) { held, active -> held to active }
+                .conflate()
+                .collect { (held, active) ->
+                    refreshCache(held, active)
+                    delay(COALESCE_MS)
+                }
+        }
+        scope.launch { queue.wanted.collect { wanted -> _state.update { it.copy(wanted = wanted) } } }
+    }
+
+    /** Re-derive every row's strip from the queue's two sets and the catalog's sizes. */
+    private fun refreshCache(
+        held: Set<net.stho.photos.catalog.ObjectId> = queue.held.value,
+        active: Set<net.stho.photos.catalog.ObjectId> = queue.active.value,
+    ) {
+        // Every album, not just the level on screen: a root container's strip is the sum of
+        // descendants that are nowhere near the current list. Read from the cached tree rather
+        // than re-walked -- see [albumTree].
+        val albums = albumTree
+        val cache = cacheByAlbum(albums, blobs, held, active)
+        // The same join the strips use, summed: one directory read against the catalog's sizes,
+        // and no `stat` anywhere.
+        var media = 0L
+        var packs = 0L
+        for (refs in blobs.values) {
+            for (ref in refs) {
+                if (ref.id !in held) continue
+                if (ref.kind == BlobKind.Pack) packs += ref.bytes else media += ref.bytes
+            }
+        }
+        val holding = albums.count { (cache[it.id]?.heldBytes ?: 0L) > 0L }
+        _state.update { current ->
+            val open = (current.screen as? Screen.Photo)
+                ?.let { current.photos.getOrNull(it.index) }
+                ?.objectIds.orEmpty()
+            current.copy(
+                cache = cache,
+                storage = StorageTotals(media, packs, holding),
+                openPhotoMoving = open.any { id -> id in active },
+            )
+        }
+    }
+
+    /** The two things a rebuild can change, read once rather than per queue event. */
+    private fun refreshCatalogView() {
+        blobs = catalog.blobs()
+        albumTree = allAlbums()
+        refreshCache()
+    }
+
+    private fun allAlbums(): List<Album> {
+        val out = mutableListOf<Album>()
+        fun walk(parent: Uuid?) {
+            for (album in catalog.albums(under = parent)) {
+                out += album
+                walk(album.id)
+            }
+        }
+        walk(null)
+        return out
+    }
+
+    // ------------------------------------------------------------------ the cache controls
+
+    /**
+     * Ask for an album, which is one of only two things that fetch images (§6).
+     *
+     * Lowest tier, and it survives navigating away — that is exactly what distinguishes it from
+     * opening the album, which stops when you leave.
+     */
+    public fun download(album: Album) {
+        queue.request(album.id, blobsUnder(album))
+    }
+
+    /** Stop a request, keeping every byte that landed. */
+    public fun pause(album: Album) {
+        queue.stop(album.id)
+    }
+
+    /**
+     * Clear an album, which also stops it.
+     *
+     * No confirmation: re-downloading restores it and nothing in the zone is touched. Allowed on
+     * the album currently open, where the blobs simply re-fetch as browsing continues.
+     */
+    public fun clearCache(album: Album) {
+        queue.clear(album.id, blobsUnder(album))
+    }
+
+    /** One entry point for the row's controls, so the screen names an action and nothing else. */
+    public fun act(album: Album, action: CacheAction) {
+        when (action) {
+            CacheAction.Download -> download(album)
+            CacheAction.Pause -> pause(album)
+            CacheAction.Clear -> clearCache(album)
+        }
+    }
+
+    /**
+     * An album's blobs, plus every descendant's — so a container's control means all of them.
+     *
+     * Walked over the cached tree, not the database: this runs on the control server's thread
+     * as well as on a tap, and hitting SQLite once per descendant made that request hang.
+     */
+    private fun blobsUnder(album: Album): List<BlobRef> {
+        val children = albumTree.groupBy { it.parent }
+        val out = mutableListOf<BlobRef>()
+        fun walk(id: Uuid) {
+            out += blobs[id].orEmpty()
+            children[id].orEmpty().forEach { walk(it.id) }
+        }
+        walk(album.id)
+        return out
     }
 
     public fun refresh() {
@@ -112,6 +282,9 @@ public class AppModel(
             }
             when (outcome) {
                 is SyncOutcome.Succeeded -> {
+                    // A rebuild can add, remove or re-encode blobs, so the sizes the rows draw
+                    // from are re-read here rather than being assumed stable for the session.
+                    refreshCatalogView()
                     // One update, not two. Setting the status and *then* reloading leaves a
                     // window where the sync reads as finished while the list is still empty --
                     // which is exactly what a screen, or a test, would sample and believe.
@@ -152,6 +325,9 @@ public class AppModel(
         // Tapping is what promotes an album's pack: the queue's order becomes what the person
         // is actually looking at (§6).
         thumbnails.prioritise(album)
+        album.thumbsId?.let { pack ->
+            queue.visiblePacks(listOf(BlobRef(pack, CacheQueue.packBytes(album.photoCount), album.id)))
+        }
         val screen =
             // §2: an album has sub-albums XOR photos, never both -- so the row it was tapped on
             // already says which screen this is, and no probe is needed.
@@ -178,6 +354,7 @@ public class AppModel(
             it.copy(stack = it.stack.replace(screen.copy(index = index)), preview = null, videoPath = null)
         }
         loadPreview(index)
+        viewing(index, state.value.photos)
     }
 
     public fun back(): Unit = navigate { it.pop() }
@@ -190,11 +367,49 @@ public class AppModel(
         _state.update { it.copy(stack = change(it.stack), query = "", preview = null, videoPath = null) }
         // Leaving the album abandons the prefetch queue; staying inside it (grid ↔ photo)
         // keeps the pack and whatever has already been fetched.
-        if (_state.value.screen.albumOf() != leaving.albumOf()) {
+        val arrived = _state.value.screen.albumOf()
+        if (arrived != leaving.albumOf()) {
             previews.cancelPrefetch()
             _state.update { it.copy(thumbnails = emptyMap()) }
+            // Leaving an album stops its pending downloads, keeping whatever landed (§6). What
+            // is still missing is derived from disk when you come back, so nothing is remembered.
+            queue.leaveAlbum()
+            if (arrived != null) startAlbumImages(arrived)
         }
         reload()
+    }
+
+    /**
+     * An opened album's images, once its *own* pack has landed.
+     *
+     * Not once the whole sweep has: waiting for all 288 would make the first album opened on a
+     * cold launch sit about a minute before a single image arrived. The ladder already puts this
+     * above the remaining sweep, so it does not have to wait for it either.
+     */
+    private fun startAlbumImages(albumId: Uuid) {
+        val album = catalog.album(albumId) ?: return
+        if (album.photoCount == 0) return
+        if (!thumbnails.has(album)) return
+        queue.openAlbum(blobs[albumId].orEmpty())
+    }
+
+    /**
+     * Tier 0 and tier 1: the open photo, then the ±3 either side.
+     *
+     * The immediate worker serves both and is the only one that cancels, so swiping past a
+     * 73.9 MiB video abandons it rather than holding a worker for ten seconds on something
+     * already off screen.
+     */
+    private fun viewing(index: Int, photos: List<PhotoRow>) {
+        val albumId = (state.value.screen as? Screen.Photo)?.albumId ?: return
+        val known = blobs[albumId].orEmpty().associateBy { it.id }
+        fun refs(photo: PhotoRow?) = photo?.objectIds.orEmpty().mapNotNull { known[it] }
+        queue.viewing(
+            open = refs(photos.getOrNull(index)),
+            neighbours = ((index - NEIGHBOURS)..(index + NEIGHBOURS))
+                .filter { it != index }
+                .flatMap { refs(photos.getOrNull(it)) },
+        )
     }
 
     private fun Screen.albumOf(): Uuid? = when (this) {
@@ -307,5 +522,13 @@ public class AppModel(
     private fun Screen.parentAlbum(): Uuid? = when (this) {
         is Screen.Container -> albumId
         else -> null
+    }
+
+    private companion object {
+        /** §6's ±3 either side, which is what a swipe lands on. */
+        const val NEIGHBOURS = 3
+
+        /** How long the rollup waits before recomputing again, to coalesce a burst of arrivals. */
+        const val COALESCE_MS = 150L
     }
 }

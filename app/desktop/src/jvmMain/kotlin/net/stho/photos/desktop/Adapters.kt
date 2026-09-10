@@ -8,6 +8,9 @@ import net.stho.photos.catalog.CatalogReader
 import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.model.PhotoRow
 import net.stho.photos.ports.SqlDrivers
+import net.stho.photos.ui.state.BlobKind
+import net.stho.photos.ui.state.BlobRef
+import net.stho.photos.ui.state.CacheQueue
 import net.stho.photos.ui.state.Catalog
 import net.stho.photos.ui.state.Notice
 import net.stho.photos.ui.state.SyncOutcome
@@ -38,6 +41,31 @@ public class MergedCatalogSource(
 
     /** Every album, flat — what the pack queue works from. */
     public fun everyAlbum(): List<Album> = read(emptyList()) { it.allAlbums() }
+
+    /**
+     * Every blob each album owns, with what fetching it will cost.
+     *
+     * Read in one pass and held by the model rather than re-queried per redraw: the album list
+     * is the app's densest screen and its strip is drawn from this on every frame.
+     *
+     * A photo row states which objects it owns through its four id columns, so this does not
+     * infer anything from `media_type`. `photo.bytes` is §3's size of the blob a tap fetches —
+     * exact for that one, and the only figure the zone gives us — so the companions a Live Photo
+     * adds are charged the same. They are ~2.7 MB against a 424 KiB still, which the strip
+     * would otherwise under-report; erring towards the larger number keeps a row from reading
+     * complete while something is still missing.
+     */
+    override fun blobs(): Map<Uuid, List<BlobRef>> = read(emptyMap()) { reader ->
+        reader.allAlbums().associate { album ->
+            val pack = album.thumbsId?.let {
+                BlobRef(it, CacheQueue.packBytes(album.photoCount), album.id, BlobKind.Pack)
+            }
+            val media = reader.photos(album.id).flatMap { photo ->
+                photo.objectIds.map { BlobRef(it, photo.bytes ?: 0L, album.id, BlobKind.Media) }
+            }
+            album.id to (listOfNotNull(pack) + media)
+        }
+    }
 
     /**
      * Before the first sync there is no merged DB at all, and a screen asking for albums then

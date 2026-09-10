@@ -91,8 +91,23 @@ class RenderTest {
     ): AppModel {
         val own = CoroutineScope(UnconfinedTestDispatcher(scope.testScheduler))
         scopes += own
-        return AppModel(FakeCatalog(albums), FakeSyncer(outcome), FakeThumbnails(), FakePreviews(), FakeVideos(), own).also { it.start() }
+        return AppModel(FakeCatalog(albums), FakeSyncer(outcome), FakeThumbnails(), FakePreviews(), FakeVideos(), idleQueue(own), own).also { it.start() }
     }
+
+    /**
+     * A queue over a store with nothing in it: these tests render screens, and the ladder has
+     * its own suite. Every album therefore draws as holding nothing, which is a real state.
+     */
+    private fun idleQueue(scope: CoroutineScope) = net.stho.photos.ui.state.CacheQueue(
+        store = object : net.stho.photos.ui.state.BlobStore {
+            override fun has(id: net.stho.photos.catalog.ObjectId) = false
+            override suspend fun fetch(id: net.stho.photos.catalog.ObjectId) = Unit
+            override fun delete(id: net.stho.photos.catalog.ObjectId) = Unit
+            override fun present() = emptySet<net.stho.photos.catalog.ObjectId>()
+        },
+        scope = scope,
+        backoff = { },
+    )
 
     private val scopes = mutableListOf<CoroutineScope>()
 
@@ -112,6 +127,7 @@ class RenderTest {
             FakeThumbnails(present = packed, thumbnails = thumbs),
             FakePreviews(),
             FakeVideos(),
+            idleQueue(own),
             own,
         ).also { model ->
             model.start()
@@ -131,7 +147,7 @@ class RenderTest {
         }
         return AppModel(
             FakeCatalog(emptyList()), syncer, FakeThumbnails(present = false),
-            FakePreviews(), FakeVideos(), own,
+            FakePreviews(), FakeVideos(), idleQueue(own), own,
         ).also { it.start() }
     }
 
@@ -158,6 +174,7 @@ class RenderTest {
         override fun photos(inAlbum: Uuid): List<PhotoRow> = photos
         override fun album(id: Uuid): Album? = album
         override fun totals() = Totals(1, photos.size)
+        override fun blobs(): Map<Uuid, List<net.stho.photos.ui.state.BlobRef>> = emptyMap()
     }
 
     private val sampleAlbums = listOf(
@@ -191,6 +208,7 @@ class RenderTest {
         override fun photos(inAlbum: Uuid): List<PhotoRow> = emptyList()
         override fun album(id: Uuid): Album? = albums.firstOrNull { it.id == id }
         override fun totals() = Totals(albums.size, albums.sumOf { it.photoCount })
+        override fun blobs(): Map<Uuid, List<net.stho.photos.ui.state.BlobRef>> = emptyMap()
     }
 
     /**

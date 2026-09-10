@@ -1,51 +1,41 @@
 package net.stho.photos.desktop
 
 import kotlin.uuid.Uuid
-import net.stho.photos.catalog.ObjectId
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 import net.stho.photos.catalog.Album
 import net.stho.photos.catalog.CatalogReader
 import net.stho.photos.catalog.ThumbPack
-import net.stho.photos.catalog.blobKey
 import net.stho.photos.ports.SqlDrivers
-import net.stho.photos.storage.S3Client
+import net.stho.photos.ui.state.BlobKind
+import net.stho.photos.ui.state.BlobRef
+import net.stho.photos.ui.state.CacheQueue
 import net.stho.photos.ui.state.Thumbnails
 
 /**
- * Every album's thumbnail pack, fetched in the background and kept for ever (§6).
+ * Every album's thumbnail pack: how one is *read*, and how the sweep asks for the rest.
  *
- * §4's sync loop fetches shards; this is the step it gains for the app, and the one LIST it
- * already does is still enough to see a pack change — a pack is a blob referenced by
- * `album_info.thumbs_id`, so nothing can change without that shard's ETag moving.
+ * It used to own a queue of its own — an urgent channel, a background channel and a drain loop.
+ * That queue is gone: ordering downloads is one problem, not one per asset type, and the ladder
+ * that decides it now lives in `:ui/state` where a test can reach it. What is left here is the
+ * part that really is about packs — resolving a cover, unpacking a pack — plus the two counters
+ * the nav bar reads.
  *
- * Packs live in their own directory, not in `blobs/`: policy is what the directory expresses.
- * These are always kept, while everything in `blobs/` is browse-to-cache and, from E.2,
- * clearable.
- *
- * The queue is ordered by what the person is looking at. Tapping an album promotes it, which is
- * what makes §6's "nothing is ever disabled while loading" bearable: the album opens on
- * placeholders and fills a second later rather than after the other 287.
+ * Packs are still always kept and never evicted (§6): that is what makes the grid open instantly
+ * and offline, and it is expressed by [BlobKind.Pack], which a clear skips.
  */
 public class PackFetcher(
-    private val s3: S3Client,
-    private val cacheRoot: Path,
+    cacheRoot: Path,
     private val drivers: SqlDrivers,
     private val mergedPath: Path,
-    private val scope: CoroutineScope,
+    private val queue: CacheQueue,
+    private val store: FileBlobStore,
 ) : Thumbnails {
 
     private val directory = Path(cacheRoot, "packs")
-    private val urgent = Channel<Album>(Channel.UNLIMITED)
-    private val queued = Channel<Album>(Channel.UNLIMITED)
     private val _arrivals = MutableStateFlow(0)
     override val arrivals: StateFlow<Int> = _arrivals.asStateFlow()
     private val _outstanding = MutableStateFlow(0)
@@ -53,15 +43,14 @@ public class PackFetcher(
 
     init {
         SystemFileSystem.createDirectories(directory)
-        scope.launch { drain() }
     }
 
     override fun has(album: Album): Boolean =
-        album.thumbsId?.let { SystemFileSystem.exists(pathFor(it)) } == true
+        album.thumbsId?.let { SystemFileSystem.exists(store.packPath(it)) } == true
 
     override fun cover(album: Album): ByteArray? {
         val thumbs = album.thumbsId ?: return null
-        val path = pathFor(thumbs)
+        val path = store.packPath(thumbs)
         if (!SystemFileSystem.exists(path)) return null
         // §3 resolves a cover by descending into children until a photo is found, unless one
         // was set explicitly -- which is the reader's rule, not something to re-derive here.
@@ -73,62 +62,49 @@ public class PackFetcher(
 
     override fun all(album: Album): Map<Uuid, ByteArray> {
         val thumbs = album.thumbsId ?: return emptyMap()
-        val path = pathFor(thumbs)
+        val path = store.packPath(thumbs)
         if (!SystemFileSystem.exists(path)) return emptyMap()
         return runCatching { ThumbPack(path, drivers).unpack() }.getOrDefault(emptyMap())
     }
 
+    /**
+     * Move this album's pack to the head of the queue.
+     *
+     * §6: nothing is ever disabled while loading, so opening an album with no pack yet is
+     * allowed — and this is what makes that bearable rather than a minute of placeholders.
+     */
     override fun prioritise(album: Album) {
-        if (album.thumbsId != null && !has(album)) {
-            urgent.trySend(album)
-            _outstanding.update { it + 1 }
-        }
+        val ref = album.packRef() ?: return
+        store.expectPack(ref.id)
+        queue.visiblePacks(listOf(ref))
     }
 
-    /** Everything the catalog knows about, queued behind whatever was tapped. */
-    public fun fetchAll(albums: List<Album>) {
-        val wanted = albums.filter { it.thumbsId != null && !has(it) }
-        _outstanding.update { it + wanted.size }
-        wanted.forEach { queued.trySend(it) }
+    /**
+     * The background sweep: every album's pack, behind whatever is on screen.
+     *
+     * ~0.45 GB across the library, about a minute at the measured link rate — which is what
+     * makes it acceptable for an explicit download to sit below it on the ladder.
+     */
+    public fun sweep(albums: List<Album>) {
+        val wanted = albums.mapNotNull { it.packRef() }.filterNot { store.has(it.id) }
+        wanted.forEach { store.expectPack(it.id) }
+        _outstanding.value = wanted.size
+        queue.sweepPacks(wanted)
     }
 
-    private suspend fun drain() {
-        while (true) {
-            // Urgent first, and only then the background queue: `tryReceive` is what makes the
-            // ordering a priority rather than a race.
-            val next = urgent.tryReceive().getOrNull()
-                ?: queued.tryReceive().getOrNull()
-                ?: urgent.receive()
-            fetch(next)
-        }
+    /** Called by the composition root as packs land, so the nav bar can count them down. */
+    public fun noteArrivals(held: Set<net.stho.photos.catalog.ObjectId>, albums: List<Album>) {
+        val packs = albums.mapNotNull { it.thumbsId }
+        val landed = packs.count { it in held }
+        _arrivals.value = landed
+        _outstanding.value = (packs.size - landed).coerceAtLeast(0)
     }
 
-    private suspend fun fetch(album: Album) {
-        val thumbs = album.thumbsId ?: return
-        val path = pathFor(thumbs)
-        if (SystemFileSystem.exists(path)) return
-        // A scratch name per attempt, so two fetches of one pack cannot rename each other's
-        // file out from under themselves.
-        val partial = Path(directory, "$thumbs.${Uuid.random()}.part")
-        try {
-            s3.download(thumbs.blobKey, to = partial)
-            SystemFileSystem.atomicMove(partial, path)
-            _arrivals.update { it + 1 }
-        } catch (cancelled: CancellationException) {
-            // Closing the window cancels the queue by design. Swallowing cancellation would
-            // break structured concurrency, and reporting it buries the lines that mean
-            // something under one per queued album.
-            SystemFileSystem.delete(partial, mustExist = false)
-            throw cancelled
-        } catch (failure: Exception) {
-            // A pack that will not download is not fatal: the album still opens, on
-            // placeholders. It is tried again on the next launch.
-            SystemFileSystem.delete(partial, mustExist = false)
-            System.err.println("pack ${album.name}: $failure")
-        } finally {
-            _outstanding.update { (it - 1).coerceAtLeast(0) }
-        }
-    }
-
-    private fun pathFor(thumbs: ObjectId) = Path(directory, "$thumbs.db")
+    /**
+     * A pack's size is not stored anywhere — it is a blob, not a LISTed shard — so it is
+     * estimated from the album's photo count at §5's measured 14.0 KiB per thumbnail. Validated
+     * against ten real packs: 9.7–16.6 KiB each, median 14.0.
+     */
+    private fun Album.packRef(): BlobRef? =
+        thumbsId?.let { BlobRef(it, CacheQueue.packBytes(photoCount), id, BlobKind.Pack) }
 }
