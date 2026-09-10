@@ -1,6 +1,7 @@
 package net.stho.photos.desktop
 
 import kotlin.uuid.Uuid
+import net.stho.photos.catalog.ObjectId
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
@@ -129,5 +130,5 @@ public class PackFetcher(
         }
     }
 
-    private fun pathFor(thumbs: Uuid) = Path(directory, "$thumbs.db")
+    private fun pathFor(thumbs: ObjectId) = Path(directory, "$thumbs.db")
 }

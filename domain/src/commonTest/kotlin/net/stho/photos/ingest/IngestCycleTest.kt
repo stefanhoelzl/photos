@@ -103,7 +103,7 @@ class IngestCycleTest {
         fun writeShard(shard: Shard) {
             val scratch = temporaryDirectory("ingest-write")
             val file = Path(scratch, "write.db")
-            shard.writeTo(file)
+            shard.writeTo(file, testDrivers)
             zone.put(shard.info.id.shardKey, file.readBytes(), "etag-${'$'}{Uuid.random()}")
         }
 

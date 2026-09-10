@@ -71,7 +71,7 @@ public class BlobPreviews(
 
     override suspend fun load(photo: PhotoRow): Preview? {
         decoded[photo.id]?.let { return it }
-        if (photo.previewId == null) return null
+        if (photo.imageId == null) return null
         val shared = guard.withLock {
             inFlight.getOrPut(photo.id) { scope.async { fetchAndDecode(photo) } }
         }
@@ -83,7 +83,7 @@ public class BlobPreviews(
     }
 
     private suspend fun fetchAndDecode(photo: PhotoRow): Preview? {
-        val blob = photo.previewId ?: return null
+        val blob = photo.imageId ?: return null
         val file = Path(directory, blob.toString())
         if (!SystemFileSystem.exists(file)) {
             // A scratch name of its own per attempt, so two downloads of the same blob can

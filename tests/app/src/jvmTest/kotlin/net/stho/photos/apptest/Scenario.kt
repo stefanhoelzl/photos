@@ -4,6 +4,7 @@ import java.nio.file.Files
 import kotlin.io.path.absolutePathString
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
+import net.stho.photos.catalog.ObjectId
 import kotlinx.coroutines.runBlocking
 import kotlinx.io.files.Path
 import net.stho.photos.adapter.linux.JdbcSqlDrivers
@@ -141,10 +142,13 @@ internal class Zone(private val s3: S3Client, private val staging: Path) {
                 mediaType = MediaType.PHOTO,
             )
         }
-        val thumbsId = Uuid.random().takeIf { thumbnails }
-        if (thumbsId != null) {
-            val pack = Path(staging, "$thumbsId.db")
+        // Packed first, then named after what it holds — since §2 a blob's key *is* its
+        // content, so the id cannot be minted before the bytes exist.
+        var thumbsId: ObjectId? = null
+        if (thumbnails) {
+            val pack = Path(staging, "$albumId-thumbs.db")
             rows.associate { it.id to jpeg() }.packThumbnails(pack, drivers)
+            thumbsId = ObjectId.ofContent(pack)
             s3.put(thumbsId.blobKey, Body.File(pack))
         }
         val shardFile = Path(staging, "$albumId.db")
