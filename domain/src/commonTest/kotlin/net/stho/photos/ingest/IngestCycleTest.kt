@@ -344,6 +344,79 @@ class IngestCycleTest {
         assertEquals(before, cycle.zone.keys)
     }
 
+    // ------------------------------------------------------------------- content addressing
+
+    /**
+     * The correctness cost of content addressing, and the test that says it was paid.
+     *
+     * Two albums holding the same photograph reference one blob. Deleting one of them used to
+     * be "delete the objects this shard lists", which under §2's keys was safe because every
+     * blob had exactly one referent. It is not safe any more, and the failure would be silent:
+     * the surviving album keeps a row pointing at bytes that are gone.
+     */
+    @Test
+    fun deletingAnAlbumSparesBlobsAnotherAlbumStillReferences() = runTest {
+        val cycle = Cycle("shared")
+        // Same name, so the fake pipeline derives the same bytes and therefore the same key.
+        cycle.library.file("Rauhöd/same.jpg")
+        cycle.library.file("Neuseeland/same.jpg")
+        cycle.run()
+
+        val shared = assertNotNull(cycle.shard("Rauhöd").photos.single().imageId)
+        assertEquals(
+            shared,
+            cycle.shard("Neuseeland").photos.single().imageId,
+            "identical content must land on one key, or this test proves nothing",
+        )
+
+        cycle.library.remove("Rauhöd")
+        val report = cycle.run()
+
+        assertEquals(1, report.deletedAlbums.size)
+        assertTrue(
+            cycle.zone.contains(shared.blobKey),
+            "the surviving album still points at it",
+        )
+        assertEquals(shared, cycle.shard("Neuseeland").photos.single().imageId)
+    }
+
+    /**
+     * §2's idempotence, which is what makes a crashed import resumable: the run re-derives
+     * everything and re-uploads only what the zone does not already hold. Forged by deleting a
+     * shard, which is what a crash between uploading an album's blobs and writing its shard
+     * leaves behind.
+     *
+     * **The thumbnail pack is the exception, and the reason is worth knowing.** A pack keys its
+     * rows by `photo.id`, so its bytes depend on row identity and not only on the thumbnails
+     * inside it. An album whose shard is gone is a *new* album — new album id, new row ids — so
+     * its pack legitimately differs. That is not a hole in decision 17's promise that a profile
+     * bump sends no packs: a re-encode keeps the album and carries every `photo.id` across, so
+     * there the pack really is byte-identical.
+     */
+    @Test
+    fun aRerunReUploadsOnlyWhatIdentityForcedItTo() = runTest {
+        val cycle = cycle("resume")
+        cycle.run()
+        val imagesAfterFirst = cycle.shard("Rauhöd").photos.mapNotNull { it.imageId }.toSet() +
+            cycle.shard("Neuseeland").photos.mapNotNull { it.imageId }
+        val blobsAfterFirst = cycle.blobKeys().toSet()
+
+        val orphanedAlbum = cycle.shard("Rauhöd")
+        cycle.zone.remove(orphanedAlbum.info.id.shardKey)
+
+        val report = cycle.run()
+
+        assertTrue(report.skippedUploads > 0, "the images were all already up there")
+        // Every image blob survives untouched: identical content, identical key, no PUT.
+        for (id in imagesAfterFirst) {
+            assertTrue(cycle.zone.contains(id.blobKey), "$id should have been reused")
+        }
+        // Exactly one key changed hands — the repacked thumbnails — and the old pack is gone.
+        val now = cycle.blobKeys().toSet()
+        assertEquals(1, (now - blobsAfterFirst).size, "only the pack should be new")
+        assertEquals(1, (blobsAfterFirst - now).size, "and the old pack should be swept")
+    }
+
     // -------------------------------------------------------------------------------- the sweep
 
     /**
@@ -371,7 +444,11 @@ class IngestCycleTest {
 
         val report = cycle.run()
 
-        assertEquals(2, report.sweptBlobs)
+        // Three, not two: the album's superseded thumbnail pack is collected here as well.
+        // Nothing deletes blobs eagerly any more — asking "does another album still want this?"
+        // per album would mean re-reading every shard per album, and the sweep answers it once
+        // for the whole zone (§2).
+        assertEquals(3, report.sweptBlobs)
         assertFalse(cycle.zone.contains(old))
         assertFalse(cycle.zone.contains(young), "a young orphan is still an orphan")
     }

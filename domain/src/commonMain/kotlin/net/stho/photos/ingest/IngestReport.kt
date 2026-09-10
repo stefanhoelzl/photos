@@ -52,8 +52,6 @@ public data class IngestReport(
      * sweep's floor, so the presigned PUTs they were using have expired (§8).
      */
     public val abandonedUploads: Int = 0,
-    /** Unreferenced but younger than the sweep's age floor, so possibly still uploading. */
-    public val youngUnreferencedBlobs: Int = 0,
     public val sweepSkipped: String? = null,
     /**
      * `.photosignore` rules that excluded nothing — a typo and a rule not yet needed look

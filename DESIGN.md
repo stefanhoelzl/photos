@@ -209,34 +209,58 @@ Consequence: no edge caching, so on-device caching matters.
 
 ### Keys
 
-The zone holds exactly two prefixes. Every key is a UUID.
+The zone holds exactly two prefixes.
 
 ```
 meta/<album-uuid>.db         per-album catalog shard
-blob/<object-uuid>           every original, derivative and thumbnail pack
+blob/<sha256>                every derivative and thumbnail pack
+blob/<uuid>                  transient: an upload the phone cannot hash yet
 ```
 
 There is no path in any key, no extension on any blob, and nothing in the zone names a photo,
 an album or a folder. A shard says what its objects are; the objects say nothing about
 themselves.
 
-**Why UUIDs and not paths.** Keys mirroring the library reads well and makes ingest obviously
+**Why not paths.** Keys mirroring the library reads well and makes ingest obviously
 idempotent, but it welds three unrelated things together: where a file sits on disk, what
 identifies it forever, and what has to be copied when either changes. Renaming an album then
 means copying every object under it — 1,755 photos for `Neuseeland` — and album names have to
-stay globally unique because they *are* the namespace. With UUID keys, a rename or a re-parent
-is a metadata write; nothing moves.
+stay globally unique because they *are* the namespace. With opaque keys, a rename or a
+re-parent is a metadata write; nothing moves.
 
-**Why not content-addressed.** Hashing the content would give the same stability plus dedup,
-and it was rejected on one concrete ground: **on iOS a hash forces reading the whole asset
-before the first byte can be uploaded**, which is exactly what §8's background upload exists to
-avoid. It is the same reasoning that made `UNSIGNED-PAYLOAD` the default in §10 — the platform
-punishes an extra full pass over every file. Skipping dedup also removes the cost that comes
-with it: with one referent per blob, **deleting an album is deleting the objects its shard
-lists** — bounded, no reference counting, no garbage collector in the normal path.
+**Why blobs are content-addressed, and why that was once impossible.** An earlier draft
+rejected hashing on one concrete ground: **on iOS a hash forces reading the whole asset before
+the first byte can be uploaded**, which is exactly what §8's background upload exists to avoid.
+That ground is gone. Since §5 stopped keeping originals, every blob that survives is written by
+the *laptop* — the phone's uploads are pulled down, re-derived and replaced (§7) — and the
+laptop has the bytes in hand. **The phone never hashes anything.** It names its transient
+uploads with a UUID, and which shape a key has says who wrote it: a hash is content, a UUID is
+a placeholder awaiting its re-upload. An `encoded` album references hash keys exclusively.
 
-**Blobs are immutable.** A blob's content never changes once written. Re-encoding a derivative
-mints a *new* UUID, points the shard at it, and deletes the old object. This is what makes
+> **Dedup is not the reason, and the measurement says so.** Across all 34,434 library files:
+> 48 distinct contents have more than one copy, worth ~2.5% of the zone — which §9's $1/month
+> minimum absorbs whole. The reasons are that a blob's name now *proves* its content, and that
+> writes became idempotent.
+
+**What idempotence buys.** A retried upload derives the same bytes, computes the same key, and
+skips — instead of minting a fresh UUID and leaving the loser as debris. One `blob/` listing at
+the start of a run answers "does the zone already hold this?" for every object, so **a crashed
+import resumes** rather than re-uploading what it finished, and **a profile bump sends no
+thumbnail packs at all**: thumbnails do not change when the image profile does, both encoders
+are byte-deterministic (measured), and identical bytes hash identically. That listing is taken
+after the early return described in §7, so a run that changes nothing still costs one request.
+
+**The cost, paid explicitly: a blob can have more than one referent.** "This album stopped
+pointing at it" is no longer "nobody wants it", so **nothing deletes blobs eagerly any more**.
+Answering that question per album would mean re-reading every shard per album — 292 albums
+squared, on a profile bump. §7's sweep answers it once for the whole zone at the end of the
+run, and since it no longer waits on an age floor it collects the same objects in the same run.
+There is no reference counting: the catalog is small enough to ask directly, once.
+
+**Blobs are immutable, and the key now enforces it rather than promising it.** A blob's content
+never changes once written, because a change in content is a change of key. Re-encoding a
+derivative mints a *new* id, points the shard at it, and the old object is collected. This is
+what makes
 §6's cache correct for free: the cache keeps browsed content indefinitely and evicts nothing,
 so a key whose content could change would need revalidating on every hit. Instead, a changed
 `image_id` in the shard *is* the invalidation signal.
@@ -244,6 +268,10 @@ so a key whose content could change would need revalidating on every hit. Instea
 **What UUID keys buy beyond renames.** Every key becomes flat ASCII, which removes three
 hazards at once:
 
+- **Blob writes became conflict-free by construction.** §2's write guard is `If-Match` on
+  shards; blobs never needed one because each had a single writer. Two devices deriving the
+  same photograph now write *identical bytes to the same key*, so the property survives for a
+  better reason than it held before.
 - bunny.net's implicit **directory markers** can no longer nest. Writing `meta/<uuid>.db`
   still produces the single zero-byte key `meta/`, which a prefix LIST returns with `Size 0`
   and no ETag, so **the diff still skips keys ending in `/`** — but there is exactly one such
@@ -337,7 +365,7 @@ CREATE TABLE photo (
   height        INTEGER,
   bytes         INTEGER,           -- the size of the blob a tap fetches, not the file's
   source_bytes  INTEGER,             -- the size of the file on disk; what §7 checks
-  content_hash  TEXT,                -- forensic only; never verified on a schedule (§7)
+  original_hash TEXT,                -- SHA-256 of the file on disk; forensic only (§7)
   media_type    INTEGER NOT NULL,    -- 0 photo · 1 video · 2 live photo
   image_id      TEXT,                -- blob: 3200px HEIC, the one image you view
   live_still_id TEXT,                -- blob: untouched source still, Live Photos only (§5)
@@ -352,6 +380,12 @@ blob a tap actually fetches, and `filename` carries the extension its bytes real
 video that means the transcode, for every still the 3200px HEIC, and `source_filename` keeps
 the camera's own name so ingest can still find the file on disk: `IMG_1234.CR2` beside
 `filename = IMG_1234.heic`, `VID_0001.MOV` beside `VID_0001.mp4`.
+
+**`original_hash` is named for which content it means.** Since §2 the blob key is *itself* a
+content hash, so an unqualified `content_hash` would say nothing about which content. The two
+answer different questions and neither substitutes for the other: the key is the integrity of a
+*derivative*, which the laptop can always rebuild from the library; `original_hash` is the
+integrity of the *original*, which is the one copy nothing can reconstruct.
 
 **`source_bytes` is what §7's change assertion compares against the directory entry**, and it
 is free for the same reason its predecessor was: the scan reads the entry anyway. The
@@ -450,7 +484,7 @@ CREATE INDEX ix_album_folded ON album(name_folded);
 CREATE TABLE photo (
   id, album_id TEXT NOT NULL REFERENCES album(album_id),
   filename, source_filename, taken_at, lat, lon, width, height, bytes,
-  source_bytes, content_hash, media_type, image_id, live_still_id, live_video_id, video_id,
+  source_bytes, original_hash, media_type, image_id, live_still_id, live_video_id, video_id,
   PRIMARY KEY (album_id, id)
 );
 CREATE INDEX ix_photo_album ON photo(album_id, taken_at IS NULL, taken_at, filename);
@@ -1010,7 +1044,7 @@ What delivers the requirement instead is the **glibc floor**. Kotlin/Native link
 against its own bundled crosstool-NG toolchain — gcc 8.3.0, glibc 2.19 — so the imaging stack
 is built with *that same toolchain* rather than the host's, and the result names no symbol
 newer than **GLIBC_2.17**. That is CentOS 7 vintage: older than any desktop distribution still
-in use. **26.6 MiB stripped** — against 80.4 MiB for the statically linked predecessor, which
+in use. **26.7 MiB stripped** — against 80.4 MiB for the statically linked predecessor, which
 is what dynamic libc and a smaller runtime buy. x86-64 only: `linuxX64` is the one native
 target declared, so no ARM64 binary has been produced and none is claimed.
 
@@ -1122,10 +1156,11 @@ what the zone contains; the other two decide nothing at all.
   the *file* rather than the upload, the check now covers every row, including the video and
   carved-RAW rows its predecessor had to exempt.
 
-  `content_hash` is recorded beside it, at ingest, where the file is already being read to
-  derive from — and is **never verified on a schedule**. A full pass is ~100 GiB of reads
-  against a timer that fires hourly. It is a forensic record for investigating a file already
-  suspected of having changed, not a monitor.
+  `original_hash` is recorded beside it, at ingest — the file is read once more to digest it,
+  which is a real cost on first import and buys the one integrity record nothing else can
+  reconstruct. It is **never verified on a schedule**: a full pass is ~100 GiB of reads against
+  a timer that fires hourly. A forensic record for a file already suspected of having changed,
+  not a monitor.
 - **Parallelism:** one worker per core for encoding. Measured during milestone C on real
   18 MP photos, when the tier was 2048px: **2.7 s/photo serial**, **0.43 s/photo** wall with
   16 workers — so roughly **4 h for ~34k photos**, plus video. The HEIC encode was ~1.5 s of
@@ -1144,8 +1179,10 @@ what the zone contains; the other two decide nothing at all.
   > yet. It changes no decision in this design — the import is a one-off, and §9's cost
   > argument never rested on it — but it does mean the "encoding is nowhere near the
   > bottleneck" claim this note used to make is no longer true.
-- **Deletion is what the library says it is.** A row whose file is gone is dropped, its blobs
-  deleted and the album's thumbnail pack repacked, in the same run. A **directory that is gone**
+- **Deletion is what the library says it is.** A row whose file is gone is dropped and the
+  album's thumbnail pack repacked, in the same run; the blobs it owned are collected by the
+  sweep at the end of that same run, because §2 no longer lets an album delete a blob on its
+  own authority. A **directory that is gone**
   deletes the album — shard first, so the album stops existing before its objects do and the
   catalog never names a blob that is not there. A directory that still exists but has lost every
   file is not a special case at all: every row drops and the album survives with **zero photos**,
@@ -1156,18 +1193,20 @@ what the zone contains; the other two decide nothing at all.
   mount point with no marker, a mistyped root (`~/Pictures` for `~/Pictures/Albums`) has no
   marker, and a missing root has none either. One rule covers all three, with no notion of "too
   many deletions" to tune.
-- **The orphan sweep runs inside `sync`**, on the same pass. Unreferenced blobs — objects whose
-  shard write never landed, e.g. a crash mid-upload — are deleted once they are **older than
-  seven days**. That floor is anchored rather than guessed: presigned URLs live at most 7 days
-  (§1) and §8's background uploads run against them, so an older blob cannot belong to an upload
-  that can still complete. The sweep stands down entirely if any shard is too new to read, since
-  the referenced set would then be missing whatever that album owns.
+- **The orphan sweep runs inside `sync`**, on the same pass, and **there is no age floor on
+  garbage.** §8 names every blob an upload will write *before* it writes any of them, so an
+  unreferenced blob cannot belong to something in flight — it is garbage the moment it is
+  unreferenced, however new. The sweep stands down entirely if any shard is too new to read,
+  since the referenced set would then be missing whatever that album owns.
 
-  A phone upload in progress no longer relies on that floor at all. §8 writes its shard first,
-  at `uploading`, so the blobs it has written *are* referenced and are skipped on evidence
-  rather than on age. What the floor now catches is the abandoned case: an album still
-  `uploading` past seven days cannot finish, so the sweep deletes it shard-first and collects
-  its blobs in the same pass.
+  It reuses the `blob/` listing §2 takes at the start of the run rather than taking a second
+  one. That is not only thrift: a fresh listing could lag behind a shard this very run
+  committed and read its blobs as unreferenced, where the in-memory set cannot.
+
+  **The seven-day floor survives for one job**: deciding when an album still `uploading` has
+  been abandoned. Presigned URLs live at most 7 days (§1) and §8's background uploads run
+  against them, so past the floor the upload provably cannot finish, and the album is deleted
+  shard-first like any other. Garbage and liveness stop sharing a knob.
 - **The app never deletes.** `delete` exists on the shared S3 client because the CLI needs it,
   but no iOS code path calls it — a convention, not a compiler-enforced boundary. With no
   versioning underneath, deletion is the single irreversible operation in the system.
@@ -1314,21 +1353,27 @@ version can never mean two different things.
 > image. Until that happens the phone's upload is the only copy, which is why nothing deletes it
 > before the library copy is on disk.
 
-**Upload order — the shard FIRST, at state `uploading`; then every object; then the shard again
-at `uploaded`.** This is the opposite of what a catalog usually wants: the zone briefly holds a
-shard pointing at objects that do not exist yet. It is deliberate.
+**Upload order — the shard FIRST, at state `uploading`, naming every object the upload will
+write; then the objects; then the shard again at `uploaded`.** This is the opposite of what a
+catalog usually wants: the zone briefly holds a shard pointing at objects that do not exist yet.
+It is deliberate, and naming the *whole* set upfront rather than growing it is what makes it
+worth doing.
 
 The alternative — shard last — leaves blobs that no catalog references, indistinguishable from
-debris, and that indistinguishability is the entire reason the sweep needs a seven-day age
-floor. A shard at `uploading` *names* the blobs its upload has written so far, so the sweep skips
-them on evidence rather than on age, however long the upload takes. Cost: the album does not
-appear complete on other devices until the second write, and a `uploading` shard is skipped by
-every reader.
+debris, and that indistinguishability is the entire reason a sweep would need an age floor. A
+shard at `uploading` names its blobs before any of them exist, so the referenced set is
+authoritative at every instant: mid-upload, and while the laptop syncs concurrently. §7's sweep
+therefore skips them on evidence rather than on age, and collects everything else at once.
 
-> The seven-day floor still exists, and now applies to the one case that needs it: an album left
-> at `uploading` past the floor is an upload that was abandoned. The presigned PUTs it was
-> uploading through have expired by then, so it provably cannot still finish, and §7 deletes it
-> shard-first like any other album.
+Cost: the album does not appear complete on other devices until the second write, and an
+`uploading` shard is skipped by every reader. The phone must also know its manifest before it
+starts — which it does, because it derives the thumbnails first and names each upload with a
+UUID rather than a hash (§2). **The phone never hashes anything**; that is precisely what makes
+content addressing possible here at all.
+
+> An album left at `uploading` past §7's seven-day floor is an upload that was abandoned. The
+> presigned PUTs it was uploading through have expired by then, so it provably cannot still
+> finish, and §7 deletes it shard-first like any other album.
 
 **Transfer** uses a background `URLSession` with `allowsCellularAccess = true`, so it survives
 the app being backgrounded, the phone locked, and app crashes. Progress is shown live in the
@@ -1469,7 +1514,13 @@ confirmed, which de-risks milestone A considerably:
 | **`If-Match` on PUT** | **HONOURED — 412 on stale ETag** |
 | NFC key with umlauts, PUT/GET/LIST | **round-trips correctly** |
 | Directory markers in LIST | **present, must be filtered** |
-| Header-auth PUT with `UNSIGNED-PAYLOAD` | **accepted** — so file uploads skip the hashing pass |
+| Header-auth PUT with `UNSIGNED-PAYLOAD` | **accepted** — so file uploads skip the signer's hashing pass |
+
+> That last row is worth revisiting since §2. `UNSIGNED-PAYLOAD` exists to avoid hashing a file
+> just to sign the request — but ingest now hashes every object anyway, to name it. For a simple
+> PUT the signer's `x-amz-content-sha256` *is* the object's SHA-256, so the value is already in
+> hand and the two passes could become one signed one. Not done: it trades a verified-working
+> path for a saving that is already paid.
 
 Verified on Linux, building the shipped configuration:
 
@@ -1480,7 +1531,7 @@ Verified on Linux, building the shipped configuration:
 | libheif, x265, libde265, ffmpeg built against the gcc 8.3 / glibc 2.19 toolchain | **all build**, C++ included |
 | Ktor over statically linked libcurl + OpenSSL | **real HTTPS request, 200 with body** — DNS and TLS both work |
 | SQLDelight over the platform SQLite | **binds cleanly**, no duplicate symbols |
-| shipped `photos-cli` | **26.6 MiB stripped, floor GLIBC_2.17**, base-system libraries only |
+| shipped `photos-cli` | **26.7 MiB stripped, floor GLIBC_2.17**, base-system libraries only |
 
 > **A hazard worth keeping in mind.** An XML parser that accepts a *truncated* document is a
 > catalog-destroying bug here, not a cosmetic one: LIST is the whole sync mechanism, and a

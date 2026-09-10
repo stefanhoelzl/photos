@@ -120,12 +120,6 @@ internal class ConsoleReporter(private val console: Console) {
                     formatBytes(report.sweptBytes),
             )
         }
-        if (report.youngUnreferencedBlobs > 0) {
-            console.line(
-                "${report.youngUnreferencedBlobs} unreferenced blob(s) left alone — younger " +
-                    "than the sweep's age floor, so possibly still uploading",
-            )
-        }
 
         console.line("── " + summary(report).joinToString(", "))
     }

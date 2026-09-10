@@ -244,21 +244,6 @@ class CatalogSyncTest {
         assertEquals(3, report.albums)
     }
 
-    @Test
-    fun referencedObjectIdsNamesEveryBlobTheCatalogPointsAt() = runTest {
-        val fixture = fixture("referenced")
-        val shard = album(
-            "Sommer",
-            photos = listOf(photo("a.jpg"), photo("b.HEIC", mediaType = MediaType.LIVE_PHOTO)),
-        )
-        fixture.upload(shard, "s1")
-
-        fixture.sync.sync()
-
-        // 2 viewing images + 1 live still + 1 live MOV + 1 thumbnail pack
-        assertEquals(5, fixture.sync.referencedObjectIds().size)
-        assertEquals(shard.objectIds.toSet(), fixture.sync.referencedObjectIds())
-    }
 
     // ------------------------------------------------------------------------------ writing back
 

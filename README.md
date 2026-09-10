@@ -89,7 +89,7 @@ an estimate.
 
 ```sh
 Scripts/build-native.sh          # once: imaging stack, sqlite, openssl, curl, dbus
-./gradlew build                  # 309 tests
+./gradlew build                  # 312 tests
 ./gradlew :app:cli:linkReleaseExecutableLinuxX64
 ./gradlew :tests:cli:e2e         # 14 scenarios against the shipped binary — opt-in
 ```
@@ -116,7 +116,7 @@ without ever touching your actual credentials.
 
 ## The shipped binary
 
-**26.6 MiB stripped, glibc floor `GLIBC_2.17`** — older than any desktop distribution still in
+**26.7 MiB stripped, glibc floor `GLIBC_2.17`** — older than any desktop distribution still in
 use. libheif, x265, ffmpeg, libcurl, OpenSSL, SQLite and libstdc++ are all linked in; what
 remains dynamic is base-system only:
 

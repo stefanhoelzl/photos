@@ -3,6 +3,8 @@ package net.stho.photos.catalog
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -189,6 +191,44 @@ class StorageKeyTest {
         val id = blobId("a photograph")
         assertEquals("blob/$id", id.blobKey)
         assertEquals(id, id.blobKey.asBlobObjectId())
+    }
+
+    /**
+     * §2's key rule, and the reason it is strict: the sweep deletes every blob no shard
+     * references, and skips keys it cannot read. A parser that accepted more than it should
+     * would hand the sweep keys it has no business acting on.
+     */
+    @Test
+    fun onlyAHashOrAUuidIsAnObjectId() {
+        val hash = "3a91f0e2b4c6d8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7081"
+        assertEquals(hash, assertNotNull(ObjectId.parse(hash)).toString())
+        assertTrue(assertNotNull(ObjectId.parse(hash)).isContentAddressed)
+
+        val uuid = "9f2c1ab7-3e44-4c2a-9d81-77b0e5c1af02"
+        assertEquals(uuid, assertNotNull(ObjectId.parse(uuid)).toString())
+        assertFalse(
+            assertNotNull(ObjectId.parse(uuid)).isContentAddressed,
+            "a uuid names a phone upload awaiting its re-upload, not content",
+        )
+
+        for (refused in listOf(
+            "",
+            hash.dropLast(1), // 63 hex
+            hash + "a", // 65 hex
+            hash.uppercase(), // lowercase only, so one content maps to one key
+            hash.dropLast(1) + "g", // not hex
+            "../../etc/passwd",
+            "9f2c1ab7-3e44-4c2a-9d81-77b0e5c1af02.db",
+        )) {
+            assertNull(ObjectId.parse(refused), "should not parse: '$refused'")
+        }
+    }
+
+    @Test
+    fun identicalBytesGetIdenticalIds() {
+        val bytes = "a photograph".encodeToByteArray()
+        assertEquals(ObjectId.ofContent(bytes), ObjectId.ofContent(bytes.copyOf()))
+        assertNotEquals(ObjectId.ofContent(bytes), ObjectId.ofContent("another".encodeToByteArray()))
     }
 
     @Test
