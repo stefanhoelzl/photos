@@ -5,6 +5,12 @@ name: ci
 
 on:
   pull_request:
+  # Also on main, and only for the cache. `gradle/actions/setup-gradle` writes its Gradle
+  # home cache from the default branch alone and reads it everywhere else -- so with a
+  # pull_request-only trigger nothing ever wrote it, and every PR re-downloaded the
+  # distribution and re-resolved every dependency. This run is what fills it.
+  push:
+    branches: [main]
 
 permissions:
   contents: read
