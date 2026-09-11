@@ -1215,8 +1215,20 @@ of *libsecret*, not of libdbus, which has no glib dependency at all. The client 
 > and the `sem_*` family live in libpthread rather than libc, so a `.pc` file that omits
 > `-lpthread` fails at link time rather than at configure time.
 
-> **x265 is GPLv2.** A statically linked binary inherits GPL terms *if distributed*.
-> Irrelevant for personal use; relevant the day it goes on GitHub with release artifacts.
+**Every green CI run publishes the binary.** `./gradlew :app:cli:dist` strips the release
+executable with konan's own `strip` — the toolchain that linked it, so a checkout that can
+build at all can package — into `app/cli/build/dist/photos-cli`, and the workflow uploads that
+as `photos-cli-linux-x64`, kept 7 days. The strip is what makes the artifact the 26.7 MiB above
+rather than the linker's much larger output; the cost is that a crash in a downloaded binary
+prints addresses instead of Kotlin frames, which is the right trade for a build fetched to try
+by hand. It strips to a *copy*: the `.kexe` is left alone, so `:tests:cli` still forks an
+unstripped binary and a failing scenario still reads. Only a run that passed `build` and the
+end-to-end scenarios uploads anything, and the zip drops the exec bit — `chmod +x` after
+unzipping.
+
+> **x265 is GPLv2.** A statically linked binary inherits GPL terms *if distributed*. CI
+> artifacts on a public repository are fetchable by any logged-in GitHub user, so that day has
+> arrived: the repo carries no LICENSE and no third-party NOTICE, and it owes both.
 
 macOS builds need no external tools at all — they reuse the iOS `ImageBackend`.
 Windows is unblocked but untargeted.
