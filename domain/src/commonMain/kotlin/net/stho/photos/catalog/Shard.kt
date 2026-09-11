@@ -97,6 +97,7 @@ public fun Shard.writeTo(path: Path, drivers: SqlDrivers) {
                 live_still_id = photo.liveStillId,
                 live_video_id = photo.liveVideoId,
                 video_id = photo.videoId,
+                live_video_filename = photo.liveVideoFilename,
             )
         }
     } finally {
@@ -112,7 +113,17 @@ public fun Path.readShard(drivers: SqlDrivers): Shard = withShard(drivers) { que
     }
     val info = queries.selectAlbumInfo(::AlbumInfo).executeAsOneOrNull()
         ?: throw ShardFailure.MissingAlbumInfo()
-    Shard(info, queries.selectPhotos(::PhotoRow).executeAsList())
+    // Reading an older shard is reading a file with fewer columns, and SQLite answers a
+    // statement naming one it does not have with an error rather than a null. So the version
+    // picks the statement — the cost of §3's promise to read anything at or below this build,
+    // paid once per column that is ever added. `liveVideoFilename` is null for the older shape,
+    // which is exactly what "this shard never recorded it" means.
+    val photos = if (version >= SCHEMA_LIVE_VIDEO_FILENAME) {
+        queries.selectPhotos(::PhotoRow).executeAsList()
+    } else {
+        queries.selectPhotosBeforeSchema4(::PhotoRow).executeAsList()
+    }
+    Shard(info, photos)
 }
 
 /**

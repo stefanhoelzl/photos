@@ -107,12 +107,35 @@ public data class PhotoRow(
     public val liveVideoId: ObjectId? = null,
     /** 1080p HEVC transcode, for video. */
     public val videoId: ObjectId? = null,
+    /**
+     * The paired MOV's name on disk, when [mediaType] is [MediaType.LIVE_PHOTO].
+     *
+     * A Live Photo is two files and one row, so the MOV is the one file in the library that no
+     * row is named after. Recording its name is what lets reconciliation tell "already
+     * ingested" from "new", exactly as [sourceFilename] does for a carved CR2 — and like that
+     * one it is a hint, never an identity (§7).
+     *
+     * Null on every row written before schema 4, which is why [claimedFilenames] answers the
+     * question rather than callers reading this directly.
+     */
+    public val liveVideoFilename: String? = null,
 ) {
     /**
      * The name this row's file has on disk: its source name when the blob is a derivative,
      * otherwise the zone name. What reconciliation stats for (§7).
      */
     public val diskFilename: String get() = sourceFilename ?: filename
+
+    /**
+     * Every file in the album this row accounts for.
+     *
+     * Usually one. A Live Photo is the exception: two files, one row (§3), so a reconciler that
+     * asked only for [diskFilename] would decide the MOV had never been ingested and plan it as
+     * an upload — every run, for ever, since deriving the pair again produces no new row to fix
+     * the answer with.
+     */
+    public val claimedFilenames: Set<String>
+        get() = setOfNotNull(filename, sourceFilename, liveVideoFilename)
 
     /**
      * Whether this row records a source size to check the directory entry against.

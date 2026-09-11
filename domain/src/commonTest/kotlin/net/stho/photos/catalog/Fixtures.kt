@@ -22,6 +22,8 @@ import net.stho.photos.ports.Journal
 import net.stho.photos.scratchRoot
 import kotlinx.io.readByteArray
 import net.stho.photos.catalog.merged.MergedDatabase
+import net.stho.photos.catalog.shard.ShardDatabase
+import net.stho.photos.derivative.DerivativeSpec
 import net.stho.photos.model.MediaType
 import net.stho.photos.model.PhotoRow
 import net.stho.photos.storage.S3Client
@@ -60,6 +62,11 @@ internal fun photo(
     imageId = blobId(),
     liveStillId = if (mediaType == MediaType.LIVE_PHOTO) blobId() else null,
     liveVideoId = if (mediaType == MediaType.LIVE_PHOTO) blobId() else null,
+    liveVideoFilename = if (mediaType == MediaType.LIVE_PHOTO) {
+        name.substringBeforeLast('.') + ".mov"
+    } else {
+        null
+    },
     videoId = if (mediaType == MediaType.VIDEO) blobId() else null,
 )
 
@@ -128,6 +135,73 @@ internal fun futureShard(
         schemaVersion = version,
     ),
 ).also { it.writeTo(Path(directory, "${it.info.id}.db"), testDrivers) }
+
+/**
+ * A shard file with the `photo` table as it stood before schema 4: no `live_video_filename`.
+ *
+ * Hand-built with SQL, and it has to be. Every other fixture here is a value the writer turns
+ * into a file, and the writer only knows the current shape — so the one thing that cannot be
+ * expressed as a value is the very thing the read path has to cope with, since SQLite answers a
+ * `SELECT` naming an absent column with an error rather than a null. The columns below are
+ * schema 3's, verbatim.
+ */
+internal fun shardFromBeforeSchema4(
+    directory: Path,
+    name: String,
+    photoName: String,
+    id: Uuid = Uuid.random(),
+    photoId: Uuid = Uuid.random(),
+): Path {
+    val path = Path(directory, "$id.db")
+    val driver = path.openDriver(testDrivers, ShardDatabase.Schema, creating = true)
+    try {
+        driver.execute(null, "DROP TABLE photo", 0)
+        driver.execute(
+            null,
+            """
+            CREATE TABLE photo (
+              id TEXT PRIMARY KEY, filename TEXT NOT NULL, source_filename TEXT,
+              taken_at INTEGER, lat REAL, lon REAL, width INTEGER, height INTEGER,
+              bytes INTEGER, source_bytes INTEGER, original_hash TEXT,
+              media_type INTEGER NOT NULL, image_id TEXT, live_still_id TEXT,
+              live_video_id TEXT, video_id TEXT
+            )
+            """.trimIndent(),
+            0,
+        )
+        driver.execute(
+            null,
+            """
+            INSERT INTO album_info (
+              id, album_id, name, parent, source_path, cover_photo_id, thumbs_id,
+              state, encoding_version, added_at, schema_version
+            ) VALUES (
+              1, '$id', '$name', NULL, '$name', NULL, '${blobId()}',
+              'encoded', ${DerivativeSpec.ENCODING_VERSION}, ${fixtureEpoch.epochSeconds}, 3
+            )
+            """.trimIndent(),
+            0,
+        )
+        driver.execute(
+            null,
+            """
+            INSERT INTO photo (
+              id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
+              source_bytes, original_hash, media_type, image_id, live_still_id,
+              live_video_id, video_id
+            ) VALUES (
+              '$photoId', '$photoName', NULL, ${fixtureEpoch.epochSeconds}, NULL, NULL,
+              4000, 3000, 3145728, 64, NULL, ${MediaType.LIVE_PHOTO.code}, '${blobId()}',
+              '${blobId()}', '${blobId()}', NULL
+            )
+            """.trimIndent(),
+            0,
+        )
+    } finally {
+        driver.close()
+    }
+    return path
+}
 
 private val temporaryDirectories = mutableListOf<Path>()
 

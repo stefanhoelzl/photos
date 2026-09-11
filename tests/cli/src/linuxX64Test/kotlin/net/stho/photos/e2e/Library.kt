@@ -66,4 +66,22 @@ internal class AlbumBuilder(private val directory: Path) {
     fun video(name: String, width: Int = 64, height: Int = 48, frames: Int = 10) {
         writeSyntheticVideo(Path(directory, name), width, height, frames)
     }
+
+    /**
+     * A Live Photo: a HEIC and the MOV that pairs with it, both carrying the same Apple
+     * `content.identifier`.
+     *
+     * Two files, and §3 turns them into one row — which is what makes this the only shape in the
+     * library where a file on disk is not named by any row. [stem] gets `.HEIC` and `.mov`, the
+     * spelling every pair in the real library uses.
+     */
+    fun livePhoto(
+        stem: String,
+        identifier: String,
+        width: Int = 320,
+        height: Int = 240,
+    ) {
+        writeSyntheticHeic(Path(directory, "$stem.HEIC"), width, height, contentIdentifier = identifier)
+        writeSyntheticVideo(Path(directory, "$stem.mov"), contentIdentifier = identifier)
+    }
 }

@@ -18,6 +18,7 @@ import net.stho.photos.catalog.SHARD_SCHEMA_VERSION
 import net.stho.photos.catalog.Shard
 import net.stho.photos.catalog.ShardProbe
 import net.stho.photos.catalog.deleteTemporaryDirectories
+import net.stho.photos.model.MediaType
 import net.stho.photos.model.PhotoRow
 
 /**
@@ -273,6 +274,49 @@ class ReconcilerTest {
         val album = assertNotNull(plan.albums.firstOrNull())
         assertTrue(album.drop.isEmpty())
         assertTrue(album.uploads.isEmpty())
+    }
+
+    /**
+     * A Live Photo's MOV is the one file in the library no row is named after — §3 keeps the pair
+     * as one row with two blobs — so the row has to claim both files or the reconciler reads the
+     * MOV as never ingested. It cannot be fixed downstream: deriving the pair again produces the
+     * same single row, so the album would report itself changed on every run for ever.
+     */
+    @Test
+    fun aLivePhotosMovIsClaimedByTheRowThatOwnsIt() {
+        val library = LibraryFixture()
+        library.file("Wochenende/IMG_0679.HEIC", bytes = 3_000)
+        library.file("Wochenende/IMG_0679.mov", bytes = 2_000)
+        val row = library.row("IMG_0679.HEIC", sourceBytes = 3_000)
+            .copy(mediaType = MediaType.LIVE_PHOTO, liveVideoFilename = "IMG_0679.mov")
+        val shard = library.shard("Wochenende", photos = emptyList()).copy(photos = listOf(row))
+
+        val album = assertNotNull(library.plan(shards = listOf(shard)).albums.firstOrNull())
+
+        assertTrue(album.uploads.isEmpty())
+        assertTrue(album.drop.isEmpty())
+        assertFalse(album.needsWrite)
+    }
+
+    /**
+     * The same album as a shard written before schema 4 has it. The run is not a no-op — it must
+     * still reach `commit`, which is what fills the name in — so what is asserted here is only
+     * that the reconciler notices, not that it has the answer.
+     */
+    @Test
+    fun aLivePhotoShardFromBeforeSchema4StillPlansAWrite() {
+        val library = LibraryFixture()
+        library.file("Wochenende/IMG_0679.HEIC", bytes = 3_000)
+        library.file("Wochenende/IMG_0679.mov", bytes = 2_000)
+        val row = library.row("IMG_0679.HEIC", sourceBytes = 3_000)
+            .copy(mediaType = MediaType.LIVE_PHOTO)
+        val shard = library.shard("Wochenende", photos = emptyList()).copy(photos = listOf(row))
+
+        val album = assertNotNull(library.plan(shards = listOf(shard)).albums.firstOrNull())
+
+        assertEquals(listOf("IMG_0679.mov"), album.uploads.map { it.name })
+        assertTrue(album.drop.isEmpty())
+        assertTrue(album.needsWrite)
     }
 
     // --------------------------------------------------------------- shards this build cannot read

@@ -20,8 +20,24 @@ import net.stho.photos.model.PhotoRow
  * single `image_id`, since the zone no longer holds originals at all; `photo.source_bytes` and
  * `photo.content_hash` replace the byte check that used to ride on `bytes`; and `album_info`
  * gains `state` and `encoding_version`. A version-2 reader would find no image to display.
+ *
+ * **4** — `photo.live_video_filename` added, so a Live Photo's MOV is a file the catalog can
+ * name. It is the same kind of column as `source_filename` and it fixes the same kind of bug:
+ * without it reconciliation cannot tell the one file in the library that no row is named after
+ * from a file that was never ingested, so it planned every pair as an upload on every run (§7).
+ * A version-3 reader would read such a shard correctly but write it back without the column,
+ * which is why this is a bump and not a silent addition — being skipped and reported is
+ * recoverable, and being quietly un-fixed once per run is not.
  */
-public const val SHARD_SCHEMA_VERSION: Int = 3
+public const val SHARD_SCHEMA_VERSION: Int = 4
+
+/**
+ * The first version whose `photo` table has `live_video_filename`.
+ *
+ * Named rather than spelled `4` at the one place that reads it, because what the reader is
+ * asking is "does this file have the column", not "is this shard modern".
+ */
+internal const val SCHEMA_LIVE_VIDEO_FILENAME: Int = 4
 
 /**
  * An album's own record — the single row of a shard's `album_info` table.
