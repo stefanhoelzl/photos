@@ -76,3 +76,21 @@ jobs:
       # Excluded from `build` on purpose, so it is asked for by name.
       - name: End-to-end scenarios
         run: ./gradlew :tests:cli:e2e
+
+      # What ships. `dist` strips the release binary the two steps above already linked and
+      # tested, and drops Kotlin/Native's `.kexe` suffix.
+      - name: Package the binary
+        run: ./gradlew :app:cli:dist
+
+      # Last, and deliberately without `if: always()`: an artifact means the binary passed
+      # everything, so a red run leaves none behind. The zip loses the exec bit -- `chmod +x`
+      # after unzipping.
+      - name: Upload photos-cli
+        uses: actions/upload-artifact@v7
+        with:
+          name: photos-cli-linux-x64
+          path: app/cli/build/dist/photos-cli
+          retention-days: 7
+          # By here the run is green, so the binary provably exists. No file means the path is
+          # wrong, and that should be loud rather than a warning nobody reads.
+          if-no-files-found: error
