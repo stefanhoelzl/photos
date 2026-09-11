@@ -370,6 +370,7 @@ CREATE TABLE photo (
   image_id      TEXT,                -- blob: 3200px HEIC, the one image you view
   live_still_id TEXT,                -- blob: untouched source still, Live Photos only (§5)
   live_video_id TEXT,                -- blob: paired MOV, when media_type = 2
+  live_video_filename TEXT,          -- that MOV's name on disk; the file no row is named for
   video_id      TEXT                 -- blob: 1080p-ceiling HEVC transcode
 );
 CREATE INDEX ix_photo_taken ON photo(taken_at);
@@ -380,6 +381,15 @@ blob a tap actually fetches, and `filename` carries the extension its bytes real
 video that means the transcode, for every still the 3200px HEIC, and `source_filename` keeps
 the camera's own name so ingest can still find the file on disk: `IMG_1234.CR2` beside
 `filename = IMG_1234.heic`, `VID_0001.MOV` beside `VID_0001.mp4`.
+
+**A Live Photo is two files and one row, so one of those files is named nowhere else.**
+`live_video_filename` is that name. It is the same kind of hint as `source_filename` and it
+exists for the same reason — §7 answers "has this file been ingested?" by name — but the case
+is worse than a rename, because no amount of re-deriving produces a row for the MOV. Without
+the column an album holding a Live Photo reports itself changed on every run for ever: the MOV
+is planned as an upload, the pair turns out to be claimed already, nothing is produced, and the
+shard is rewritten identically. Three albums, 187 photographs and 376 MB of "to read" that
+never was, hourly, until schema 4.
 
 **`original_hash` is named for which content it means.** Since §2 the blob key is *itself* a
 content hash, so an unqualified `content_hash` would say nothing about which content. The two
@@ -605,8 +615,18 @@ self-correcting once that device updates.
 > directory entirely alone — not uploaded, not deleted, not re-minted. A shard whose probe also
 > fails is the one genuinely unidentifiable case, and it aborts the run.
 
-Version **2** is current: it added `source_filename` and redefined `bytes` as the size of the
-blob rather than of the file on disk.
+Version **4** is current. **2** added `source_filename` and redefined `bytes` as the size of
+the blob rather than of the file on disk; **3** was the two-tier rewrite, collapsing the
+original and preview ids into one `image_id` and giving `album_info` its `state` and
+`encoding_version`; **4** added `live_video_filename`.
+
+A column that is merely *added* still costs a bump, and the reason is the reader below rather
+than the one above: a shard has no column it was not written with, and SQLite answers a
+`SELECT` naming an absent one with an error rather than a null. So a reader keeps a statement
+per era and picks by `schema_version` — which is also why the bump is not optional for a purely
+additive column. An older writer would read a newer shard correctly and then write it back
+without the column, quietly undoing the repair once per run; being skipped and reported is
+recoverable, and that is not.
 
 ---
 
@@ -1272,7 +1292,8 @@ what the zone contains; the other two decide nothing at all.
   state. Under UUID keys the comparison runs through the shards: `source_path` reconnects a
   local directory to its album, and filenames within it are matched against `photo` rows —
   against `source_filename` too, so an album still reconciles after a pull has replaced a CR2
-  with its carved JPEG.
+  with its carved JPEG, and against `live_video_filename`, which is the only way the MOV half
+  of a Live Photo is accounted for at all.
 - **Existence is a `stat`, never the walk.** Whether a row still has a file is answered by
   stat-ing `source_path/filename` directly. `.photosignore` decides what may be *uploaded* and
   nothing else, so broadening a rule can only ever stop an upload — it can never make a
@@ -1355,9 +1376,9 @@ what the zone contains; the other two decide nothing at all.
   An album at `uploading` is skipped entirely: it is still in flight, and its shard is what
   keeps its blobs safe from the sweep.
 
-  A pulled Live Photo's MOV has no name of its own in the catalog and is written as
-  `<still-stem>.MOV`, the convention all 187 pairs already follow; pairing is by content
-  identifier, so the walker re-pairs it either way. Pulls write unconditionally — the ignore
+  A pulled Live Photo's MOV is written under `live_video_filename`, falling back to
+  `<still-stem>.MOV` for a row from before schema 4 — the convention all 187 pairs already
+  follow; pairing is by content identifier, so the walker re-pairs it either way. Pulls write unconditionally — the ignore
   rules govern what goes up.
 - **A laptop-owned album is never restored.** `sync` reads the library and writes the zone; it
   does not put files back. Deleting a folder is a deletion, not a divergence to repair — and

@@ -38,8 +38,9 @@ public fun writeSyntheticHeic(
     height: Int,
     orientation: Int? = null,
     model: String? = null,
+    contentIdentifier: String? = null,
 ) {
-    val app1 = exifApp1(orientation, model)
+    val app1 = exifApp1(orientation, model, contentIdentifier)
     imagingCall { err ->
         app1.usePinned { pinned ->
             pi_fixture_write_heic_with_exif(

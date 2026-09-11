@@ -20,6 +20,7 @@ import net.stho.photos.catalog.AlbumState
 import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.catalog.FakeZone
 import net.stho.photos.catalog.META_PREFIX
+import net.stho.photos.catalog.SHARD_SCHEMA_VERSION
 import net.stho.photos.catalog.Shard
 import net.stho.photos.catalog.blobId
 import net.stho.photos.catalog.blobKey
@@ -531,5 +532,91 @@ class IngestCycleTest {
         assertEquals(MediaType.LIVE_PHOTO, shard.photos[0].mediaType)
         assertNotNull(shard.photos[0].liveVideoId)
         assertNull(shard.photos[0].videoId) // never became a video of its own
+        assertEquals("IMG_0679.mov", shard.photos[0].liveVideoFilename)
+    }
+
+    /**
+     * The bug this column exists for, stated as the run a person actually sees.
+     *
+     * A Live Photo is two files and one row (§3), so before schema 4 the MOV was a file no row
+     * was named after — and nothing about deriving the album again could fix that, because the
+     * pair produces one row and the row names the still. So the reconciler planned the MOV as an
+     * upload, `commit` found the pair already claimed and produced nothing, and the shard was
+     * rewritten identically. Every run. For ever, on every album with a Live Photo in it — which
+     * on this library is three albums, 187 photographs and 376 MB of "to read" that never was.
+     */
+    @Test
+    fun anAlbumOfLivePhotosIsQuietOnTheSecondRun() = runTest {
+        val cycle = Cycle("live-quiet")
+        val identifier = "B34B6B99-C28F-4E16-A788-79AA0E30BB18"
+        cycle.library.file("Wochenende/IMG_0679.HEIC")
+        cycle.library.file("Wochenende/IMG_0679.mov")
+        cycle.identifiers = mapOf(
+            "IMG_0679.HEIC" to identifier,
+            "IMG_0679.mov" to identifier,
+        )
+        cycle.run()
+        val putsAfterFirst = cycle.zone.putCount
+        val keysAfterFirst = cycle.zone.keys
+
+        val second = cycle.run()
+
+        assertTrue(second.albums.isEmpty()) // not "~ Wochenende" with nothing to show for it
+        assertEquals(putsAfterFirst, cycle.zone.putCount)
+        assertEquals(keysAfterFirst, cycle.zone.keys)
+        assertEquals("IMG_0679.mov", cycle.shard("Wochenende").photos.single().liveVideoFilename)
+    }
+
+    /**
+     * The upgrade, which is the whole reason the fix is not merely a new column: every shard in
+     * the zone predates it, and a row already ingested is never derived again — so nothing would
+     * ever fill the name in unless this run does.
+     *
+     * It is a metadata repair and has to stay one: the pairing comes from the classifier, which
+     * has just read the headers anyway, so no blob moves, nothing is re-encoded, and `photo.id`
+     * — which `cover_photo_id` points at and the thumbnail pack keys by — does not change.
+     */
+    @Test
+    fun aShardFromBeforeSchema4LearnsItsMovsNameAndThenGoesQuiet() = runTest {
+        val cycle = Cycle("live-heal")
+        val identifier = "9C7E3A1F-0B44-4D22-9E61-7F2A55C10D3E"
+        cycle.library.file("Wochenende/IMG_0679.HEIC")
+        cycle.library.file("Wochenende/IMG_0679.mov")
+        cycle.identifiers = mapOf(
+            "IMG_0679.HEIC" to identifier,
+            "IMG_0679.mov" to identifier,
+        )
+        cycle.run()
+
+        // Roll the zone back to what a schema-3 writer left behind: the pair correctly ingested,
+        // and no record of which file the MOV was.
+        val before = cycle.shard("Wochenende")
+        cycle.writeShard(
+            before.copy(
+                info = before.info.copy(schemaVersion = 3),
+                photos = before.photos.map { it.copy(liveVideoFilename = null) },
+            ),
+        )
+        val putsBeforeHeal = cycle.zone.putCount
+        val blobsBeforeHeal = cycle.blobKeys().toSet()
+
+        val healing = cycle.run()
+
+        assertEquals(0, healing.uploadedFiles)
+        assertEquals(0, healing.droppedRows)
+        assertTrue(healing.failures.isEmpty())
+        assertEquals(blobsBeforeHeal, cycle.blobKeys().toSet()) // nothing re-derived
+        assertEquals(putsBeforeHeal + 1, cycle.zone.putCount) // the shard, and only the shard
+
+        val healed = cycle.shard("Wochenende")
+        assertEquals("IMG_0679.mov", healed.photos.single().liveVideoFilename)
+        assertEquals(SHARD_SCHEMA_VERSION, healed.info.schemaVersion)
+        assertEquals(before.photos.single().id, healed.photos.single().id)
+        assertEquals(before.info.thumbsId, healed.info.thumbsId)
+
+        val putsAfterHeal = cycle.zone.putCount
+        cycle.run()
+
+        assertEquals(putsAfterHeal, cycle.zone.putCount)
     }
 }

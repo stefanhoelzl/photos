@@ -292,9 +292,16 @@ public class Ingest(
             report.strays += IngestReport.Failure(relative(skipped.path), "unrecognised format")
         }
 
+        // Rows from before schema 4 name their still and not the MOV beside it, so every run
+        // planned that MOV as an upload and got here to find the pair already claimed — a
+        // rewrite that changed nothing, for ever. The classifier has just paired them on
+        // `content.identifier`, which is the same answer deriving the album again would give at
+        // 187 photographs' worth of CPU, so the name is simply filled in on the rows being kept.
+        val kept = album.keep.healLiveVideoNames(classified.items)
+
         // §3: two rows in one album may not claim the same name. It can only happen when a
         // derivative renames its source onto a sibling — an `a.CR2` beside an `a.jpg`.
-        val planned = album.keep.mapTo(mutableSetOf(), PhotoRow::filename)
+        val planned = kept.mapTo(mutableSetOf(), PhotoRow::filename)
         val items = mutableListOf<MediaItem>()
         for (item in classified.items) {
             if (item.filename in claimed) continue
@@ -332,7 +339,7 @@ public class Ingest(
         }
 
         try {
-            val rows = album.keep + carried.map(Produced::row)
+            val rows = kept + carried.map(Produced::row)
             val thumbsId = packThumbnails(album, carried, rows, report)
             val shard = Shard(albumInfo(album, thumbsId, rows), rows)
 
@@ -463,7 +470,10 @@ public class Ingest(
             val path = Path(liveVideo)
             val id = ObjectId.ofContent(path)
             bytes += upload(id, Body.File(path), report)
-            row = row.copy(liveVideoId = id)
+            // The name as well as the blob: this MOV is the one file in the album that no row is
+            // named after, so unless the row says so reconciliation has no way to tell it has
+            // been ingested at all (§7).
+            row = row.copy(liveVideoId = id, liveVideoFilename = path.name)
         }
         // The one untouched original left in the zone: a Live Photo's still, whose
         // `content.identifier` has to survive to pair with the MOV above (§5).
@@ -704,11 +714,14 @@ public class Ingest(
                 if (!SystemFileSystem.exists(destination)) s3.download(primary.blobKey, destination)
                 downloaded += destination
                 bytes += row.bytes ?: 0
-                // The paired MOV has no name of its own in the catalog. `<stem>.MOV` is the
-                // convention every pair in this library follows, and pairing is by content
-                // identifier rather than by name, so the walker re-pairs it either way.
+                // Since schema 4 the catalog names the paired MOV, so a pull restores the name
+                // the file actually had. `<stem>.MOV` remains the fallback for a row written
+                // before that column existed — the convention every pair in this library
+                // follows — and pairing is by content identifier rather than by name, so the
+                // walker re-pairs it either way.
                 row.liveVideoId?.let { liveVideoId ->
-                    val path = Path(directory, row.filename.withExtension("MOV"))
+                    val name = row.liveVideoFilename ?: row.filename.withExtension("MOV")
+                    val path = Path(directory, name)
                     if (!SystemFileSystem.exists(path)) s3.download(liveVideoId.blobKey, path)
                     downloaded += path
                 }
@@ -908,6 +921,32 @@ private class ReportBuilder {
         fetchedShards = fetchedShards,
         dryRun = dryRun,
     )
+}
+
+/**
+ * Fills in `liveVideoFilename` on rows that predate schema 4, from the pairing [items] already
+ * carries.
+ *
+ * A metadata repair and nothing more: no blob is fetched, nothing is re-derived, and no row
+ * identity moves — the pair was ingested correctly, the catalog simply had nowhere to write down
+ * which MOV it was. Pairing comes from the classifier, so it is decision 14's `content.identifier`
+ * rather than a filename match, and a row that already names its MOV is left exactly as it is.
+ *
+ * Rows are matched by [PhotoRow.filename] because a Live Photo's still is uploaded under the name
+ * it has on disk — there is no rename to see through, unlike a carved CR2.
+ */
+private fun List<PhotoRow>.healLiveVideoNames(items: List<MediaItem>): List<PhotoRow> {
+    val videos = buildMap {
+        for (item in items) {
+            val kind = item.kind
+            if (kind is MediaItem.Kind.LivePhoto) put(item.filename, Path(kind.video).name)
+        }
+    }
+    if (videos.isEmpty()) return this
+    return map { row ->
+        val video = videos[row.filename]
+        if (video == null || row.liveVideoFilename == video) row else row.copy(liveVideoFilename = video)
+    }
 }
 
 /**

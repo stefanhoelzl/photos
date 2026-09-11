@@ -70,7 +70,12 @@ CREATE TABLE IF NOT EXISTS photo (
   -- the one case that needs an untouched original still gets one. 187 pairs library-wide (§5).
   live_still_id   TEXT AS ObjectId,
   live_video_id   TEXT AS ObjectId,
-  video_id        TEXT AS ObjectId
+  video_id        TEXT AS ObjectId,
+  -- The paired MOV's name on disk, for a Live Photo. The MOV is a file with no row of its own
+  -- -- §3 keeps the pair as one row with two blobs -- so this is the only place the catalog
+  -- can say that the file is already accounted for. Without it reconciliation sees an
+  -- unclaimed file and plans all 187 of them as uploads on every run (§7). Schema 4.
+  live_video_filename TEXT
 );
 
 CREATE INDEX IF NOT EXISTS ix_photo_taken ON photo(taken_at);
@@ -100,10 +105,21 @@ SELECT schema_version FROM album_info WHERE id = 1;
 insertPhoto:
 INSERT INTO photo (
   id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
-  source_bytes, original_hash, media_type, image_id, live_still_id, live_video_id, video_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  source_bytes, original_hash, media_type, image_id, live_still_id, live_video_id, video_id,
+  live_video_filename
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
+-- Two selects, one per era, because §3's promise that a reader reads any shard at or below its
+-- own version has a price here: a shard written before schema 4 has no `live_video_filename`
+-- column at all, and SQLite fails the whole statement rather than returning nulls for it. The
+-- reader picks by `schema_version`, which it has already read.
 selectPhotos:
+SELECT id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
+       source_bytes, original_hash, media_type, image_id, live_still_id, live_video_id, video_id,
+       live_video_filename
+FROM photo;
+
+selectPhotosBeforeSchema4:
 SELECT id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
        source_bytes, original_hash, media_type, image_id, live_still_id, live_video_id, video_id
 FROM photo;

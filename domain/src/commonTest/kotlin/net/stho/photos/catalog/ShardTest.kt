@@ -158,6 +158,44 @@ class ShardTest {
         assertFailsWith<ShardFailure.MissingAlbumInfo> { path.readShard(testDrivers) }
     }
 
+    /**
+     * §3 promises a reader reads any shard at or below its own version, and a column added in
+     * schema 4 is where that promise costs something: the file simply does not have it, and
+     * SQLite fails the whole statement rather than returning a null for it. Everything else in
+     * the row has to survive, or an upgrade would read the library as empty.
+     */
+    @Test
+    fun aShardFromBeforeSchema4StillReads() {
+        val directory = temporaryDirectory("legacy")
+        val path = shardFromBeforeSchema4(directory, name = "Wochenende", photoName = "IMG_0679.HEIC")
+
+        val shard = path.readShard(testDrivers)
+
+        assertEquals(3, shard.info.schemaVersion)
+        assertEquals("Wochenende", shard.info.name)
+        val photo = assertNotNull(shard.photos.singleOrNull())
+        assertEquals("IMG_0679.HEIC", photo.filename)
+        assertEquals(MediaType.LIVE_PHOTO, photo.mediaType)
+        assertNotNull(photo.liveVideoId)
+        // The whole point of the column: this shard never recorded which MOV that was.
+        assertNull(photo.liveVideoFilename)
+    }
+
+    /**
+     * A Live Photo is two files and one row, so the MOV is the one file in an album that no row
+     * is named after. [PhotoRow.claimedFilenames] is what reconciliation asks instead of
+     * [PhotoRow.diskFilename], and getting it wrong is not visible as a wrong photo — it is
+     * visible as an album that reports itself changed on every run, for ever.
+     */
+    @Test
+    fun aLivePhotoRowClaimsItsMovAsWellAsItsStill() {
+        val live = photo("IMG_0679.HEIC", mediaType = MediaType.LIVE_PHOTO)
+            .copy(liveVideoFilename = "IMG_0679.mov")
+
+        assertEquals(setOf("IMG_0679.HEIC", "IMG_0679.mov"), live.claimedFilenames)
+        assertEquals(setOf("IMG_0001.jpg"), photo("IMG_0001.jpg").claimedFilenames)
+    }
+
     @Test
     fun objectIdsNamesEveryBlobTheAlbumOwns() {
         val live = photo("IMG_0099.HEIC", mediaType = MediaType.LIVE_PHOTO)

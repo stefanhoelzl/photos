@@ -11,31 +11,70 @@ package net.stho.photos.fixtures
  * An EXIF APP1 payload — `"Exif\0\0"` followed by a little-endian TIFF carrying the tags given.
  * Shared by the oriented-JPEG and EXIF-bearing-HEIC fixtures.
  *
- * Only the shapes the pipeline actually reads: SHORT for orientation, ASCII for strings.
+ * Only the shapes the pipeline actually reads: SHORT for orientation, ASCII for strings, and
+ * [appleContentIdentifier] for the one tag that lives behind a maker note.
  */
-public fun exifApp1(orientation: Int? = null, model: String? = null): ByteArray {
-    val entries = mutableListOf<TiffEntry>()
-    var heap = ByteArray(0)
-    if (orientation != null) {
-        entries += TiffEntry(0x0112, type = 3, count = 1, inline = le16(orientation) + byteArrayOf(0, 0))
-    }
-    if (model != null) {
-        heap = model.encodeToByteArray() + byteArrayOf(0)
-        entries += TiffEntry(0x0110, type = 2, count = heap.size)
-    }
-    entries.sortBy(TiffEntry::tag)
+public fun exifApp1(
+    orientation: Int? = null,
+    model: String? = null,
+    appleContentIdentifier: String? = null,
+): ByteArray {
+    val modelBytes = model?.let { it.encodeToByteArray() + byteArrayOf(0) } ?: ByteArray(0)
+    val makerNote = appleContentIdentifier?.let(::appleMakerNote) ?: ByteArray(0)
 
-    // Offsets are from the TIFF header, which sits at the start of the payload.
-    val heapOffset = 8 + 2 + entries.size * 12 + 4
+    // IFD0 first, then the Exif sub-IFD the maker note hangs off, then the values too big to sit
+    // inside an entry. Every offset below is from the start of the TIFF header, which is where
+    // the payload begins.
+    val ifd0Count = listOfNotNull(orientation, model, appleContentIdentifier).size
+    val ifd0End = 8 + 2 + ifd0Count * 12 + 4
+    val exifIfdOffset = ifd0End
+    val heapOffset = if (makerNote.isEmpty()) ifd0End else exifIfdOffset + 2 + 12 + 4
+    val modelOffset = heapOffset
+    val makerNoteOffset = modelOffset + modelBytes.size
+
+    val entries = buildList {
+        if (model != null) add(TiffEntry(0x0110, type = 2, count = modelBytes.size, at = modelOffset))
+        if (orientation != null) {
+            add(TiffEntry(0x0112, type = 3, count = 1, inline = le16(orientation) + byteArrayOf(0, 0)))
+        }
+        // The Exif IFD exists here only to carry the maker note; nothing else needs it.
+        if (makerNote.isNotEmpty()) {
+            add(TiffEntry(0x8769, type = 4, count = 1, inline = le32(exifIfdOffset)))
+        }
+    }.sortedBy(TiffEntry::tag) // TIFF requires ascending tag order
 
     var tiff = byteArrayOf(0x49, 0x49, 0x2A, 0x00) + le32(8) + le16(entries.size)
-    for (entry in entries) {
-        tiff += le16(entry.tag) + le16(entry.type) + le32(entry.count) +
-            (entry.inline ?: le32(heapOffset))
+    for (entry in entries) tiff += entry.bytes()
+    tiff += le32(0)
+
+    if (makerNote.isNotEmpty()) {
+        tiff += le16(1) +
+            TiffEntry(0x927C, type = 7, count = makerNote.size, at = makerNoteOffset).bytes() +
+            le32(0)
     }
-    tiff += le32(0) + heap
+    tiff += modelBytes + makerNote
 
     return "Exif".encodeToByteArray() + byteArrayOf(0, 0) + tiff
+}
+
+/**
+ * Apple's maker note, as far as `pi_emit_apple_content_id` reads one: a 14-byte header —
+ * `"Apple iOS\0"`, version, byte-order mark — and then an ordinary TIFF IFD whose offsets are
+ * relative to the maker note's own start rather than to the TIFF header.
+ *
+ * Hand-built because this is the only way the Live Photo pairing signal can be produced at all:
+ * libexif has no Apple maker note support, so the fixture has to write the same bytes an iPhone
+ * does or the C that reads them is never exercised (decision 14).
+ */
+private fun appleMakerNote(contentIdentifier: String): ByteArray {
+    val value = contentIdentifier.encodeToByteArray() + byteArrayOf(0)
+    val header = "Apple iOS".encodeToByteArray() + byteArrayOf(0) + le16(1) + "II".encodeToByteArray()
+    val valueOffset = header.size + 2 + 12 + 4
+    return header +
+        le16(1) +
+        TiffEntry(0x0011, type = 2, count = value.size, at = valueOffset).bytes() +
+        le32(0) +
+        value
 }
 
 /** One IFD entry, as far as the fixtures need to write one. */
@@ -45,7 +84,11 @@ private data class TiffEntry(
     val count: Int,
     /** The four bytes that live in the entry itself, or null when the value lives at an offset. */
     val inline: ByteArray? = null,
-)
+    /** Where the value lives, when it is too big to be inline. */
+    val at: Int = 0,
+) {
+    fun bytes(): ByteArray = le16(tag) + le16(type) + le32(count) + (inline ?: le32(at))
+}
 
 /** Splices an APP1 segment in immediately after this JPEG's SOI. */
 public fun ByteArray.withApp1(app1: ByteArray): ByteArray {

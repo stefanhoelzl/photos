@@ -213,11 +213,11 @@ public class Reconciler(
             // nothing counts as already claimed and every file is an upload.
             val reencoding = existing?.needsReencode == true
             val rows = existing?.photos.orEmpty()
+            // Every file the existing rows account for — which is more than one file per row: a
+            // Live Photo is a HEIC and a MOV and a single row, so the MOV is named by
+            // `liveVideoFilename` or by nothing at all (§3).
             val claimedNames = if (reencoding) emptySet() else buildSet {
-                for (row in rows) {
-                    add(row.filename)
-                    add(row.diskFilename)
-                }
+                for (row in rows) addAll(row.claimedFilenames)
             }
             val uploads = files.filterNot { it.name in claimedNames }
 
