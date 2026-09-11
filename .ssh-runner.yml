@@ -1,0 +1,43 @@
+# ssh-runner: a warm macOS box to build and test on, since DESIGN §"Remaining unknowns"
+# names two things that need Apple hardware (the Compose grid at scroll speed, and the
+# platform SQLite iOS ships). Generated workflows live in .github/workflows/ssh-runner-*.yml
+# and are owned by the skill -- edit this file and re-run `init`, never those.
+name: macos
+runs-on: macos-26            # arm64, Xcode preinstalled. On a PRIVATE repo macOS bills at 10x.
+checkout: true
+stop-after: 90
+idle-timeout: 20
+
+steps:
+  # 25 to match gradle/libs.versions.toml, so foojay has nothing to provision per session.
+  - uses: actions/setup-java@v6
+    with:
+      distribution: temurin
+      java-version: "25"
+
+  # Gradle user home (dependency cache + wrapper dist). Its post-step saves at job end.
+  - uses: gradle/actions/setup-gradle@v4
+
+  # The Kotlin/Native distribution and its dependencies -- ~2 GB fetched on a cold box, which
+  # is the single longest thing between `start` and a first compile.
+  - uses: actions/cache@v4
+    with:
+      path: ~/.konan
+      key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+      restore-keys: konan-${{ runner.os }}-
+
+sync:
+  delete: true
+  # Everything here is either the runner's own output or Linux-only build state. `.tools` is
+  # the libjpeg/libheif prefix build-native.sh produces for linuxX64 -- gigabytes that mean
+  # nothing on macOS. The build dirs are excluded so that `--delete` does not wipe the
+  # runner's incremental state on every push (see SKILL.md "Traps worth knowing").
+  exclude:
+    - .git
+    - build
+    - .gradle
+    - .kotlin
+    - .tools
+    - .cache
+    - .build
+    - local.properties
