@@ -1,0 +1,72 @@
+# What gates a merge. Deliberately NOT `bash .ship/gates.sh`: the local gate and this file
+# check the same things today, but they answer to different pressures -- the gate to how fast
+# an inner loop can stay, this to what a cold runner can prove -- so they are free to diverge.
+name: ci
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # 25 to match gradle/libs.versions.toml, so foojay has nothing to provision.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # The Kotlin/Native distribution and its bundled gcc 8.3.0 / glibc 2.19 toolchain --
+      # ~2 GB on a cold runner, and the single longest thing before a first compile.
+      - name: Cache the Kotlin/Native distribution
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: konan-${{ runner.os }}-
+
+      # The imaging prefix and the host tools that build it. Not all of `.tools`: the
+      # intermediate build trees and the fetched tarballs are 730 MB that a warm run never
+      # reads, because `$PREFIX/.stamp` is what makes each stage skip. cmake and nasm are
+      # guarded by `[ ! -x .tools/bin/<tool> ]` and nasm is compiled, so both are carried.
+      #
+      # No `restore-keys`, deliberately. Every pinned version lives in build-native.sh, so a
+      # near-miss key would restore stamps claiming a stage is built at a version the script
+      # no longer asks for -- and the stage would skip instead of rebuilding. Exact match or
+      # build it cold.
+      - name: Cache the native imaging prefix
+        uses: actions/cache@v4
+        with:
+          path: |
+            .tools/bin
+            .tools/cmake
+            .tools/nasm
+            .tools/native/konan
+            .tools/s3mock-*-exec.jar
+          key: native-${{ runner.os }}-${{ hashFiles('Scripts/build-native.sh') }}
+
+      # build-native.sh needs konan's gcc toolchain to already be on disk and exits 1 if it
+      # is not. COMPILING a linuxX64 target is what fetches it -- the compiler's own one-time
+      # "Downloading native dependencies (LLVM, sysroot etc)" pulls the gcc/glibc-2.19
+      # crosstool down before it compiles anything. Deliberately not a link: every linuxX64
+      # binary here, `:domain`'s own test binary included, links SQLDelight's native driver
+      # against the -lsqlite3 that lives in the prefix the NEXT step builds.
+      - name: Fetch konan's gcc toolchain
+        run: ./gradlew :domain:compileKotlinLinuxX64
+
+      - name: Build the native imaging prefix
+        run: Scripts/build-native.sh
+
+      - name: Build and test
+        run: ./gradlew build
+
+      # Excluded from `build` on purpose, so it is asked for by name.
+      - name: End-to-end scenarios
+        run: ./gradlew :tests:cli:e2e
