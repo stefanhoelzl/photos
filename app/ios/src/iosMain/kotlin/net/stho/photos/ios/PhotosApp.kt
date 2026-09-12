@@ -21,7 +21,7 @@ import net.stho.photos.app.MergedCatalogSource
 import net.stho.photos.app.PackFetcher
 import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.storage.S3Client
-import net.stho.photos.storage.asStorageUrl
+import net.stho.photos.storage.StorageUrl
 import net.stho.photos.storage.retryStorageFailures
 import net.stho.photos.ui.screens.App
 import net.stho.photos.ui.screens.PhotosTheme
@@ -38,14 +38,14 @@ import net.stho.photos.ui.screens.PhotosTheme
  * `:app:domain` was extracted to make true.
  */
 public class PhotosApp(
-    endpoint: String,
+    storage: StorageUrl,
     password: String,
     cacheRoot: Path,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val drivers = NativeSqlDrivers()
     private val http = HttpClient(Darwin) { retryStorageFailures() }
-    private val s3 = S3Client(storage = endpoint.asStorageUrl(), secretAccessKey = password, http = http)
+    private val s3 = S3Client(storage = storage, secretAccessKey = password, http = http)
     private val sync = CatalogSync(s3, cacheRoot, drivers)
     private val catalog = MergedCatalogSource(sync, drivers)
 

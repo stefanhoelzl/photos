@@ -2,6 +2,8 @@
 
 package net.stho.photos.adapter.linux
 
+import net.stho.photos.ingest.Credentials
+import net.stho.photos.ports.Keyring
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.CPointerVar
@@ -67,18 +69,6 @@ import photosdbus.dbus_message_unref
 
 // ---------------------------------------------------------------- names
 
-internal const val SECRETS_DESTINATION: String = "org.freedesktop.secrets"
-internal const val SECRETS_PATH: String = "/org/freedesktop/secrets"
-internal const val SERVICE_INTERFACE: String = "org.freedesktop.Secret.Service"
-internal const val COLLECTION_INTERFACE: String = "org.freedesktop.Secret.Collection"
-internal const val ITEM_INTERFACE: String = "org.freedesktop.Secret.Item"
-internal const val DEFAULT_COLLECTION: String = "/org/freedesktop/secrets/aliases/default"
-
-/**
- * No reply within this and the run defers rather than hanging. An hourly unit that blocks
- * forever on a wedged keyring holds the run lock and stops every later firing too, which is a
- * worse failure than not syncing this hour.
- */
 internal const val CALL_TIMEOUT_MILLIS: Int = 10_000
 
 // ---------------------------------------------------------------- type codes
@@ -97,31 +87,6 @@ internal val TYPE_STRUCT: Int = 'r'.code
 internal val TYPE_DICT_ENTRY: Int = 'e'.code
 
 // ---------------------------------------------------------------- failures
-
-/**
- * Why a call did not produce what was asked for.
- *
- * The split is the whole point of speaking the protocol rather than shelling out: [Unavailable]
- * and [Locked] are deferrals (exit 75) and a search that matches nothing is a real error
- * (exit 3), whereas `secret-tool` only ever told us whether it had written to stderr.
- * [Malformed] is a third thing again — waiting an hour will not make a reply legal — so it
- * aborts like any other condition that stops a run before it writes.
- *
- * "No such item" is deliberately absent: a search that matches nothing is a value the caller
- * returns ([net.stho.photos.ports.KeyringRead.Absent]), not something to throw.
- */
-internal sealed class SecretServiceFailure(override val message: String) : Exception(message) {
-
-    /** No bus address, no connection, no such service, or no reply in time. */
-    internal class Unavailable(val detail: String) : SecretServiceFailure(detail)
-
-    /** The keyring answered and the item exists, but the collection is locked. */
-    internal class Locked : SecretServiceFailure("the keyring is locked")
-
-    /** The keyring answered with something the spec does not allow. */
-    internal class Malformed(val detail: String) :
-        SecretServiceFailure("unexpected reply from the keyring: $detail")
-}
 
 // ---------------------------------------------------------------- connection
 
@@ -217,9 +182,6 @@ internal fun CPointer<DBusError>.detail(fallback: String): String {
 }
 
 // ---------------------------------------------------------------- the five calls
-
-/** What a `SearchItems` matched, split the way §1's exit codes need it. */
-internal data class FoundItems(val unlocked: List<String>, val locked: List<String>)
 
 /** `OpenSession("plain", "")` — the session every secret is read and written through. */
 internal fun Bus.openSession(): String = call(
@@ -476,3 +438,44 @@ internal fun CPointer<DBusMessageIter>.readBytes(): ByteArray {
         if (start == null || count.value <= 0) ByteArray(0) else start.readBytes(count.value)
     }
 }
+
+// ---------------------------------------------------------------- the port
+
+/**
+ * [SecretsBus] over libdbus, for the shipped CLI.
+ *
+ * A wrapper rather than a reshaping: everything above is unchanged, because it is the code that
+ * was verified against a real `dbus-daemon` and there is nothing to gain from moving it. What
+ * this adds is the boundary — the five operations, named the way the JVM transport names them,
+ * so `DbusKeyring` cannot tell which one it holds.
+ */
+internal class NativeSecretsBus(private val bus: Bus) : SecretsBus {
+    override fun openSession(): String = bus.openSession()
+
+    override fun searchItems(attributes: Map<String, String>): FoundItems =
+        bus.searchItems(attributes)
+
+    override fun itemSecret(item: String, session: String): ByteArray = bus.itemSecret(item, session)
+
+    override fun createItem(
+        label: String,
+        attributes: Map<String, String>,
+        value: ByteArray,
+        session: String,
+    ): Unit = bus.createItem(label, attributes, value, session)
+
+    override fun deleteItem(item: String): Unit = bus.deleteItem(item)
+
+    override fun close(): Unit = bus.close()
+}
+
+/**
+ * The keyring the shipped CLI uses: this process's environment, libdbus underneath.
+ *
+ * `:app:cli` is the composition root and this is what it names — one call rather than three
+ * arguments, because which transport a Kotlin/Native binary reaches for was never a choice.
+ */
+public fun nativeKeyring(
+    service: String = Credentials.SERVICE,
+    environment: (String) -> String? = ::systemEnvironment,
+): Keyring = DbusKeyring(service, environment) { address -> NativeSecretsBus(Bus.open(address)) }

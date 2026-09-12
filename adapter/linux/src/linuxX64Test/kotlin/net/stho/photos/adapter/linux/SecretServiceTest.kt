@@ -25,7 +25,7 @@ class SecretServiceTest {
         stub.store(field = PASSWORD, secret = "hunter2")
         assertEquals(
             KeyringRead.Found("hunter2"),
-            DbusKeyring(environment = environment).read(PASSWORD),
+            nativeKeyring(environment = environment).read(PASSWORD),
         )
     }
 
@@ -34,7 +34,7 @@ class SecretServiceTest {
     fun fieldsAreToldApart() = withStub { stub, environment ->
         stub.store(field = PASSWORD, secret = "the-password")
         stub.store(field = ENDPOINT, secret = ZONE)
-        val keyring = DbusKeyring(environment = environment)
+        val keyring = nativeKeyring(environment = environment)
         assertEquals(KeyringRead.Found("the-password"), keyring.read(PASSWORD))
         assertEquals(KeyringRead.Found(ZONE), keyring.read(ENDPOINT))
     }
@@ -46,13 +46,13 @@ class SecretServiceTest {
      */
     @Test
     fun missingItemIsARealError() = withStub { _, environment ->
-        assertEquals(KeyringRead.Absent, DbusKeyring(environment = environment).read(PASSWORD))
+        assertEquals(KeyringRead.Absent, nativeKeyring(environment = environment).read(PASSWORD))
     }
 
     @Test
     fun lockedItemDefers() = withStub { stub, environment ->
         stub.store(field = PASSWORD, secret = "hunter2", locked = true)
-        val read = DbusKeyring(environment = environment).read(PASSWORD)
+        val read = nativeKeyring(environment = environment).read(PASSWORD)
         assertIs<KeyringRead.Unavailable>(read, "a locked keyring must not return a secret")
         assertContains(read.reason, "locked")
     }
@@ -60,7 +60,7 @@ class SecretServiceTest {
     /** No bus at all is the state of a machine that has booted but nobody has logged into. */
     @Test
     fun noSessionBusDefers() {
-        val keyring = DbusKeyring(environment = { name ->
+        val keyring = nativeKeyring(environment = { name ->
             if (name == "XDG_RUNTIME_DIR") "/nonexistent" else null
         })
         assertIs<KeyringRead.Unavailable>(
@@ -71,7 +71,7 @@ class SecretServiceTest {
 
     @Test
     fun storeAndRemoveRoundTrip() = withStub { stub, environment ->
-        val keyring = DbusKeyring(environment = environment)
+        val keyring = nativeKeyring(environment = environment)
         keyring.write(PASSWORD, "hunter2")
         keyring.write(ENDPOINT, ZONE)
 
@@ -89,7 +89,7 @@ class SecretServiceTest {
      */
     @Test
     fun storingTwiceReplaces() = withStub { stub, environment ->
-        val keyring = DbusKeyring(environment = environment)
+        val keyring = nativeKeyring(environment = environment)
         keyring.write(PASSWORD, "first")
         keyring.write(ENDPOINT, ZONE)
         keyring.write(PASSWORD, "second")
@@ -105,7 +105,7 @@ class SecretServiceTest {
      */
     @Test
     fun removeOnEmptyKeyringSucceeds() = withStub { stub, environment ->
-        DbusKeyring(environment = environment).remove(PASSWORD)
+        nativeKeyring(environment = environment).remove(PASSWORD)
         assertTrue(stub.storedPaths.isEmpty())
     }
 
@@ -118,7 +118,7 @@ class SecretServiceTest {
         stub.store(field = PASSWORD, secret = "hunter2")
         stub.breakEverything()
         assertFailsWith<CredentialFailure.KeyringProtocol> {
-            DbusKeyring(environment = environment).read(PASSWORD)
+            nativeKeyring(environment = environment).read(PASSWORD)
         }
     }
 }

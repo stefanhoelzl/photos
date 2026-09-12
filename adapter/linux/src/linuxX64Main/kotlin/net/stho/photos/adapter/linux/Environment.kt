@@ -15,6 +15,3 @@ import platform.posix.getenv
  * process it runs in — which is what lets `DbusKeyring` be pointed at a private bus.
  */
 internal fun systemEnvironment(name: String): String? = getenv(name)?.toKString()
-
-/** Empty is unset (§1): `secrets-env` leaves an unresolved entry defined and blank. */
-internal fun String?.orNullIfBlank(): String? = this?.takeIf { it.isNotBlank() }
