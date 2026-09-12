@@ -124,8 +124,7 @@ photos-cli login     # prompts for the endpoint and the password, stores both
 photos-cli logout    # removes both
 ```
 
-The keyring is read and written **in-process, over D-Bus** — the `Keyring` port's Linux adapter,
-over cinterop'd libdbus-1 — not by exec'ing `secret-tool`. That is what makes the shipped binary literally self-sufficient
+The keyring is read and written **in-process, over D-Bus**, not by exec'ing `secret-tool`. That is what makes the shipped binary literally self-sufficient
 (§7), and it is why `login` exists at all: reading in-process while setup still needed
 libsecret's tools on `PATH` would have moved the dependency rather than removed it. The items
 carry the attributes `secret-tool` wrote, so anything stored before the client existed is
@@ -190,6 +189,22 @@ negotiating the encrypted algorithm would put a DH exchange and an AES-CBC decry
 credential path, where a wrong decrypt surfaces as precisely the opaque 403 this section
 forbids. The threat `plain` does not stop — a process already running as this uid — can simply
 ask the keyring itself.
+
+**Two transports, one protocol.** The shipped CLI reaches the bus through cinterop'd libdbus-1;
+the desktop app is a JVM and cannot reach a cinterop binding at all, so it reaches the same bus
+through dbus-java. What sits *above* them is one piece of code, because the part that can be
+wrong is not the marshalling — it is deciding which reply means a value, which means *absent*,
+and which means *not now*, and those are what §7's exit codes turn on. So the transport is a
+five-method port (`OpenSession`, `SearchItems`, `GetSecret`, `CreateItem`, `Delete`) and the
+judgement lives once above it.
+
+> Drawing the seam at the five operations rather than at "send a method call" is what keeps
+> D-Bus's type system — variants, dict entries, object paths, the `(oayays)` secret struct — out
+> of the boundary. Each transport marshals however its own library prefers, and neither gets an
+> opinion about locked collections.
+
+Both talk to the same items under `service photos-cli`, so a laptop where `photos-cli login` has
+been run is a laptop where the desktop app already works.
 
 > **One key here too.** An earlier draft gave the CLI a read-only/read-write split, on the
 > grounds that the hourly systemd unit should not hold a key that can delete the library. It
@@ -1214,7 +1229,7 @@ exit codes.
 | port | why | Linux adapter |
 |---|---|---|
 | `ImageBackend` | (1) (2) | the C shim over libjpeg-turbo/libheif/x265/ffmpeg |
-| `Keyring` | (1) (2) | libdbus-1, in-process (§1) |
+| `Keyring` | (1) (2) | the Secret Service, in-process (§1): libdbus-1 on the CLI, dbus-java in the app |
 | `Clock` | (1) (3) | system clock |
 | `Ids` | (1) (3) | random UUIDs |
 | `Paths` | (1) (2) | XDG cache/config directories |

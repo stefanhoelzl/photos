@@ -19,7 +19,7 @@ download queue and no screen to keep in order.
 | `:domain` | app ∩ CLI: EXIF interpretation, the S3 client and signer, the catalog and its sync loop, the library walk, the ingest rules |
 | `:app:domain` | Linux app ∩ iOS app: the app's ports, its model, §6's download scheduler, and §4's on-device cache |
 | `:ui` | one Compose UI, compiled for the desktop and the phone. Composables and nothing else |
-| `:adapter:linux` | the imaging backend over `native/CImaging`, the Secret Service client over libdbus, the flock run lock, XDG paths |
+| `:adapter:linux` | the imaging backend over `native/CImaging`, the Secret Service — one protocol over two transports, libdbus for the CLI and dbus-java for the app — the flock run lock, XDG paths |
 | `:adapter:ios` | the phone's half of the same ports: the SQL driver over the platform SQLite, and the app container's directories |
 | `:app:cli` | the shipped `photos-cli`: argument parsing, a composition root, exit codes |
 | `:app:desktop` | the app's Linux root: JDBC, OkHttp, libvlc, the FFM decode shim, and the control server `:tests:app` drives |
@@ -67,7 +67,8 @@ photos-cli logout    # removes both
 ```
 
 The keyring is read and written in-process over D-Bus, so nothing is shelled out to and
-nothing needs to be on `PATH`. Items stored earlier with `secret-tool` are found unchanged.
+nothing needs to be on `PATH`. Items stored earlier with `secret-tool` are found unchanged, and
+so is a `login` done for the CLI: the desktop app reads the same items over dbus-java.
 
 **Development** overrides them from Proton Pass — `.secrets.yaml` maps them, `secrets-env`
 injects them:
@@ -145,7 +146,9 @@ The round-trip tests need `java`: the build fetches adobe/S3Mock into the gitign
 starts it on a free port with the bucket already declared, and stops it afterwards. Without java
 they skip and everything else still runs. The keyring tests do the same with `dbus-daemon`, each
 getting a private bus with a stub Secret Service on it — so the real wire protocol is exercised
-without ever touching your actual credentials.
+without ever touching your actual credentials. There are two such suites, one per transport,
+and they drive the same `DbusKeyring`: that is what checks the two agree about which reply is a
+value, which is *absent* and which is *not now*.
 
 ## The shipped binary
 

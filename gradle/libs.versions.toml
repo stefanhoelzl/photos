@@ -11,6 +11,9 @@ kotlincrypto = "0.8.0"
 foojay = "1.0.0"
 compose = "1.12.0"
 vlcj = "4.12.1"
+# The Secret Service from the JVM. The shipped CLI reaches libdbus through cinterop; the
+# desktop app cannot, so the same protocol runs over this instead (DESIGN §1).
+dbus-java = "5.1.0"
 # 25, not 21: `java.lang.foreign` is stable from 22, and the FFM binding to the decode shim
 # needs it at compile *and* run time. Kotlin 2.4 targets 25, so the whole project moves rather
 # than one module emitting bytecode the rest cannot load.
@@ -27,6 +30,8 @@ ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "kto
 ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
 vlcj = { module = "uk.co.caprica:vlcj", version.ref = "vlcj" }
 slf4j-nop = { module = "org.slf4j:slf4j-nop", version = "2.0.16" }
+dbus-java-core = { module = "com.github.hypfvieh:dbus-java-core", version.ref = "dbus-java" }
+dbus-java-transport-unixsocket = { module = "com.github.hypfvieh:dbus-java-transport-native-unixsocket", version.ref = "dbus-java" }
 ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
 sqldelight-runtime = { module = "app.cash.sqldelight:runtime", version.ref = "sqldelight" }
 sqldelight-dialect-sqlite324 = { module = "app.cash.sqldelight:sqlite-3-24-dialect", version.ref = "sqldelight" }

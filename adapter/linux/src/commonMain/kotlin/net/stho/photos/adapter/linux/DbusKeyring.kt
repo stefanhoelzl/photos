@@ -1,7 +1,5 @@
 package net.stho.photos.adapter.linux
 
-import kotlinx.io.files.Path
-import kotlinx.io.files.SystemFileSystem
 import net.stho.photos.CredentialFailure
 import net.stho.photos.ingest.Credentials
 import net.stho.photos.ports.Keyring
@@ -9,6 +7,13 @@ import net.stho.photos.ports.KeyringRead
 
 /**
  * §7's `Keyring`, over the desktop Secret Service (§1).
+ *
+ * **The protocol, and not the transport.** Everything below is the judgement §1's exit codes
+ * turn on -- which reply is a value, which is *absent*, which is *not now* -- and it is written
+ * once, above a [SecretsBus] the composition root supplies. The shipped CLI supplies libdbus
+ * through cinterop; the desktop app, which is a JVM and cannot reach a cinterop binding at all,
+ * supplies dbus-java. Neither can hold an opinion about what a locked collection means, because
+ * neither is asked.
  *
  * Two items live under one service, told apart by a `field` attribute, and the attributes are
  * the ones `secret-tool store service photos-cli field password` wrote — so anything stored
@@ -27,11 +32,17 @@ import net.stho.photos.ports.KeyringRead
  * that could not be reached is a [CredentialFailure.KeyringUnavailable], a reply the spec does
  * not allow is a [CredentialFailure.KeyringProtocol].
  */
-public class DbusKeyring(
+public class DbusKeyring internal constructor(
     /** The service attribute both items carry; also what `secret-tool` was given. */
-    private val service: String = Credentials.SERVICE,
-    /** Injected so a test can be pointed at a private bus rather than the developer's own. */
-    private val environment: (String) -> String? = ::systemEnvironment,
+    private val service: String,
+    /**
+     * Injected so a test can be pointed at a private bus rather than the developer's own, and
+     * because reading a variable has no common spelling: `getenv` on Kotlin/Native, `System`
+     * on the JVM.
+     */
+    private val environment: (String) -> String?,
+    /** How this platform reaches the bus. */
+    private val openBus: (String) -> SecretsBus,
 ) : Keyring {
 
     override fun read(field: String): KeyringRead =
@@ -92,7 +103,7 @@ public class DbusKeyring(
         }
     }
 
-    private fun connect(): Bus = Bus.open(
+    private fun connect(): SecretsBus = openBus(
         sessionBusAddress(environment) ?: throw SecretServiceFailure.Unavailable(
             "no session bus: DBUS_SESSION_BUS_ADDRESS is unset and " +
                 "\$XDG_RUNTIME_DIR/bus does not exist",
@@ -110,7 +121,7 @@ public class DbusKeyring(
      * credentials, and `Credentials` in the domain already owns it. An adapter that decided the
      * same thing again is how the two answers drift apart.
      */
-    private fun Bus.secretOf(item: String): String =
+    private fun SecretsBus.secretOf(item: String): String =
         itemSecret(item, openSession()).decodeToString()
 
     /** The one place the protocol's outcomes become §7's exit codes, for the write path. */
@@ -130,19 +141,4 @@ public class DbusKeyring(
             }
         }
     }
-}
-
-/**
- * `$DBUS_SESSION_BUS_ADDRESS`, else the well-known socket, else nothing.
- *
- * Both are checked because a systemd user unit inherits the variable while a plain login shell
- * may not, and `$XDG_RUNTIME_DIR/bus` is where every current session puts it. Nothing here
- * falls back to `dbus_bus_get`: libdbus would autolaunch `dbus-launch` off `PATH`, which is the
- * dependency this adapter exists to remove.
- */
-internal fun sessionBusAddress(environment: (String) -> String?): String? {
-    environment("DBUS_SESSION_BUS_ADDRESS").orNullIfBlank()?.let { return it }
-    val runtime = environment("XDG_RUNTIME_DIR").orNullIfBlank() ?: return null
-    val socket = "$runtime/bus"
-    return if (SystemFileSystem.exists(Path(socket))) "unix:path=$socket" else null
 }

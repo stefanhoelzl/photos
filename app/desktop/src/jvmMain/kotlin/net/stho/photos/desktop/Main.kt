@@ -11,11 +11,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.io.files.Path
+import net.stho.photos.CredentialFailure
 import net.stho.photos.adapter.linux.FfmImaging
 import net.stho.photos.adapter.linux.JdbcSqlDrivers
+import net.stho.photos.adapter.linux.desktopKeyring
+import net.stho.photos.ingest.Credentials
 import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.storage.S3Client
-import net.stho.photos.storage.asStorageUrl
 import net.stho.photos.storage.retryStorageFailures
 import net.stho.photos.ui.screens.App
 import androidx.compose.runtime.CompositionLocalProvider
@@ -30,27 +32,34 @@ import net.stho.photos.app.AppModel
  * constructs anything: `:ui` never learns that the SQL driver is JDBC, that the HTTP engine is
  * OkHttp, or that a control server exists at all.
  *
- * Credentials come from the environment for now — the same `PHOTOS_ENDPOINT` /
- * `PHOTOS_PASSWORD` override the CLI already honours, so `secrets-env` runs this unchanged.
- * The setup screen writing them to the keyring is phase 5.
+ * Credentials resolve exactly as the CLI's do — environment, then keyring — because
+ * `Credentials` is the domain's and both roots hand it the same two things. So
+ * `secrets-env ./gradlew :app:desktop:run` works as it always did, and so now does a plain run
+ * on a machine where `photos-cli login` has been done: same items, same `service photos-cli`
+ * attributes, reached over dbus-java here and over libdbus there.
+ *
+ * The setup screen that *writes* them is the next piece of work; until it exists a machine with
+ * neither answer is told what to do rather than shown an empty library.
  */
 public fun main(args: Array<String>) {
     val options = Options.parse(args)
-    val environment = System.getenv()
-    val endpoint = environment["PHOTOS_ENDPOINT"]
-    val password = environment["PHOTOS_PASSWORD"]
-    if (endpoint.isNullOrBlank() || password.isNullOrBlank()) {
+    val credentials = Credentials(System.getenv(), desktopKeyring())
+    val (storage, password) = try {
+        credentials.storage().value to credentials.password().value
+    } catch (failure: CredentialFailure) {
         // §1 forbids opaque failures, and a missing credential before the setup screen exists
         // is a startup problem rather than something the UI can say anything useful about.
+        // The message is the domain's, which is what keeps it identical to the CLI's.
         System.err.println(
-            "PHOTOS_ENDPOINT and PHOTOS_PASSWORD must be set until the setup screen lands.\n" +
-                "  secrets-env ./gradlew :app:desktop:run",
+            "${failure.message}\n" +
+                "  photos-cli login                        — store them in the keyring, or\n" +
+                "  secrets-env ./gradlew :app:desktop:run  — take them from Proton Pass",
         )
         kotlin.system.exitProcess(3)
     }
 
     val app = PhotosApp(
-        endpoint = endpoint,
+        storage = storage,
         password = password,
         cacheRoot = options.cacheRoot,
         decodeLibrary = options.decodeLibrary,

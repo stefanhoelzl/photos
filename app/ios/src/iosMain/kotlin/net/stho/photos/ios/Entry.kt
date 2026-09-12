@@ -1,6 +1,7 @@
 package net.stho.photos.ios
 
 import androidx.compose.ui.window.ComposeUIViewController
+import net.stho.photos.storage.asStorageUrl
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
 import platform.UIKit.UIViewController
@@ -29,7 +30,7 @@ public object PhotosEntry {
             ?: return ComposeUIViewController { Unconfigured() }
 
         val app = PhotosApp(
-            endpoint = credentials.endpoint,
+            storage = credentials.endpoint.asStorageUrl(),
             password = credentials.password,
             cacheRoot = PhotosApp.defaultCacheRoot(),
         )

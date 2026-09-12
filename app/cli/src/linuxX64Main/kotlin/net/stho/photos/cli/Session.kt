@@ -4,7 +4,7 @@ import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.CoreCliktCommand
 import com.github.ajalt.clikt.core.ProgramResult
 import com.github.ajalt.clikt.parameters.options.option
-import net.stho.photos.adapter.linux.DbusKeyring
+import net.stho.photos.adapter.linux.nativeKeyring
 import net.stho.photos.ingest.Credentials
 import net.stho.photos.ingest.ExitCode
 import net.stho.photos.ports.Keyring
@@ -24,7 +24,7 @@ import net.stho.photos.storage.asStorageUrl
  * contract.
  */
 internal class LoginCommand(
-    private val keyring: Keyring = DbusKeyring(),
+    private val keyring: Keyring = nativeKeyring(),
     private val console: Console = Console(),
 ) : CoreCliktCommand("login") {
 
@@ -67,7 +67,7 @@ internal class LoginCommand(
 
 /** Takes both credentials back out again. */
 internal class LogoutCommand(
-    private val keyring: Keyring = DbusKeyring(),
+    private val keyring: Keyring = nativeKeyring(),
     private val console: Console = Console(),
 ) : CoreCliktCommand("logout") {
 

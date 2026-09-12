@@ -74,7 +74,7 @@ internal class Scenario(
     /** Starts the app, exactly as `main` would minus the window, and lets the first sync run. */
     suspend fun launch(): AppUi {
         val started = PhotosApp(
-            endpoint = endpoint,
+            storage = endpoint.asStorageUrl(),
             password = PASSWORD,
             cacheRoot = cacheRoot,
             // No shim: nothing here opens a HEIC preview, and a suite should not need a

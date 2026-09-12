@@ -24,7 +24,7 @@ import kotlinx.io.files.Path
 import net.stho.photos.adapter.linux.CImagingBackend
 import net.stho.photos.adapter.linux.CImagingPipeline
 import net.stho.photos.adapter.linux.CImagingProbe
-import net.stho.photos.adapter.linux.DbusKeyring
+import net.stho.photos.adapter.linux.nativeKeyring
 import net.stho.photos.adapter.linux.FlockRunLock
 import net.stho.photos.adapter.linux.NativeSqlDrivers
 import net.stho.photos.adapter.linux.PosixInterrupts
@@ -98,7 +98,7 @@ internal class SyncCommand(private val console: Console = Console()) : CoreClikt
     private suspend fun sync(): Int {
         val environment = processEnvironment()
         val paths = XdgPaths()
-        val credentials = Credentials(environment, DbusKeyring())
+        val credentials = Credentials(environment, nativeKeyring())
 
         val libraryRoot = credentials.libraryRoot(workingDirectory(), libraryPath)
         val storage = credentials.storage(endpoint)

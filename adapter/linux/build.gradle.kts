@@ -276,6 +276,12 @@ kotlin {
         }
     }
     sourceSets {
+        // The Secret Service protocol and the ports it sits on, compiled for both: §1's three
+        // outcomes are what the CLI's exit codes turn on, so they are written once.
+        commonMain.dependencies {
+            implementation(project(":domain"))
+            implementation(libs.kotlinx.io.core)
+        }
         linuxX64Main.dependencies {
             implementation(project(":domain"))
             // Files, not bytes: the carver reads a whole CR2 and the transcode is handed back
@@ -289,6 +295,11 @@ kotlin {
         jvmMain.dependencies {
             implementation(project(":domain"))
             implementation(libs.sqldelight.driver.jdbc)
+            // The Secret Service, for the desktop app. A host dependency in the sense §7's
+            // self-sufficiency rule cares about -- but that rule binds the shipped CLI, which
+            // reaches the same bus through cinterop and links none of this.
+            implementation(libs.dbus.java.core)
+            implementation(libs.dbus.java.transport.unixsocket)
         }
         linuxX64Test.dependencies {
             implementation(kotlin("test"))
