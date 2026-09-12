@@ -133,3 +133,17 @@ jobs:
           :app:domain:iosSimulatorArm64Test
           :adapter:ios:iosSimulatorArm64Test
           :ui:compileKotlinIosSimulatorArm64
+
+      # What the Gradle build cannot see. The framework compiling proves the Kotlin; it says
+      # nothing about the Info.plist, the Run Script phase, the asset catalog or the Swift entry
+      # point -- and those fail at archive time, on main, where the upload gates. Building for a
+      # simulator destination exercises all four and needs no certificate, which is what makes
+      # it safe to run on a pull request from a fork at all.
+      - name: Build the app for a simulator
+        run: >-
+          xcodebuild build
+          -project app/ios/Photos.xcodeproj
+          -scheme Photos
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath build/DerivedData
+          CODE_SIGNING_ALLOWED=NO

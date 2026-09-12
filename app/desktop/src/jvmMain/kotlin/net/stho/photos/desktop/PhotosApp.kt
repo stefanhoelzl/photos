@@ -23,6 +23,7 @@ import net.stho.photos.ui.screens.VideoSurface
 import net.stho.photos.app.AppModel
 import net.stho.photos.app.BlobPreviews
 import net.stho.photos.app.CacheQueue
+import net.stho.photos.app.CatalogSyncer
 import net.stho.photos.app.FileBlobStore
 import net.stho.photos.app.MergedCatalogSource
 import net.stho.photos.app.PackFetcher

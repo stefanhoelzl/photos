@@ -971,6 +971,36 @@ tinted, tint says nothing, and the colours below have to keep meaning something.
 > progress fill — so gold and blue would have been two colours for one meaning, which is exactly
 > the decoration this rule forbids. Blue took the job and the star turned blue with it.
 
+### Building it for the phone
+
+`:app:ios` is the composition root and `app/ios/Photos.xcodeproj` is a shell around it: one
+Swift file presenting a `UIViewControllerRepresentable`, an `Info.plist`, an asset catalog, and
+a Run Script phase that calls `embedAndSignAppleFrameworkForXcode`. Everything a person sees is
+Kotlin, compiled from `:ui` and identical to what the Linux harness renders — so the project
+file is not where the application lives and changes roughly never, which is why it is checked
+in rather than generated.
+
+The Kotlin framework exports **one object with one function**, `PhotosEntry.viewController()`.
+Swift never learns that there is a model, a queue or a catalog.
+
+Three facts about the build are decisions rather than defaults:
+
+- **The framework is static**, so the `.app` embeds no dynamic framework and re-signs nothing.
+  The consequence is that the final link is Xcode's rather than Kotlin's, which is why the app
+  target — not the Gradle build — carries `-lsqlite3`. §3 says iOS uses the platform's SQLite;
+  this is where the app says it, since SQLiter deliberately names no library of its own.
+- **Only arm64 simulators are built.** `:app:ios` declares `iosArm64` and `iosSimulatorArm64`
+  and no `iosX64`, so the Xcode project pins `ARCHS[sdk=iphonesimulator*]` to match. Otherwise
+  a `generic/platform=iOS Simulator` destination asks for a slice that does not exist.
+- **`CADisableMinimumFrameDurationOnPhone` is set.** Without it iOS caps the app at 60 fps and
+  Compose refuses to start rather than allow that quietly — which matters here more than in most
+  apps, because §10's remaining unknown is a question about frame rate.
+
+`Scripts/ios-sim.sh` is the loop: build, boot a simulator, install, launch, screenshot. It is a
+script rather than a paragraph because the incantation spans four tools, one of which has a rule
+worth knowing — `simctl` forwards an environment variable only when it is named `SIMCTL_CHILD_*`
+— and because the app's console is where an uncaught Kotlin exception ends up.
+
 ### Fullscreen viewer
 
 One screen, two states. Chrome is identical in both — back, then gear/share/set-cover, a
