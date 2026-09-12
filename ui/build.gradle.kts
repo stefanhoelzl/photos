@@ -5,8 +5,8 @@ plugins {
 }
 
 // DESIGN §6: one UI in `commonMain`, rendering identically on the phone and on the desktop.
-// Only `jvm` exists today (E.1); E.3 adds the iOS targets to this same module, which is the
-// whole reason it is a module at all rather than living inside `:app:desktop`.
+// Both now exist, which is the whole reason this is a module at all rather than living inside
+// `:app:desktop`: every screen below is compiled twice and drawn by the same Skia.
 //
 // Two package trees, one module, per the repo's rule that internal boundaries are package
 // conventions and not module edges:
@@ -17,6 +17,8 @@ kotlin {
     jvmToolchain(libs.versions.jdk.get().toInt())
     compilerOptions { optIn.add("kotlin.uuid.ExperimentalUuidApi") }
     jvm()
+    iosArm64()
+    iosSimulatorArm64()
 
     sourceSets {
         commonMain.dependencies {
