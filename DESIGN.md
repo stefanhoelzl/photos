@@ -541,6 +541,12 @@ nowhere.
 > The two builds can differ freely, because the floor above says they cannot disagree about
 > anything this project asks of them.
 
+**That they do not disagree is now run rather than argued.** §3's catalog suites — the shard
+writer and reader, the thumbnail pack, the merged rebuild, the sync loop — compile for
+`iosSimulatorArm64` and execute against **iOS's own libsqlite3** on every CI run, beside the
+same suites running on Linux against the pinned one. 250 of them, and the platform SQLite
+answers each the same way.
+
 **That floor is enforced, not merely asserted.** The query layer's SQL dialect is pinned to
 SQLite 3.24, so SQL that needs anything newer fails the build rather than failing on a device
 that turns out to have an older SQLite than the one it was written against. The claim in the
@@ -1724,6 +1730,18 @@ confirmed, which de-risks milestone A considerably:
 > hand and the two passes could become one signed one. Not done: it trades a verified-working
 > path for a saving that is already paid.
 
+Verified on macOS, building the shared tier for the phone:
+
+| check | result |
+|---|---|
+| §3's catalog suites on `iosSimulatorArm64`, against the **platform SQLite** | **250 tests, all green** — §10's open question, answered |
+| `:ui`'s state tier on the same target | **41 tests, all green** |
+| the SigV4 vectors under the simulator | **green**, once the fixture path is forwarded as `SIMCTL_CHILD_*` |
+
+> `simctl spawn` passes on only the variables named `SIMCTL_CHILD_*`, stripping the prefix as it
+> does, so a Gradle `environment()` reaches the client and not the test. Measured, as six vector
+> failures on an otherwise green run.
+
 Verified on Linux, building the shipped configuration:
 
 | check | result |
@@ -1754,7 +1772,7 @@ often as wanted at no bandwidth cost.
 ### Remaining unknowns
 
 Every storage-layer assumption above is verified against a live zone, and the CLI's whole
-dependency stack is verified on Linux. Two things need Apple hardware:
+dependency stack is verified on Linux. One thing still needs Apple hardware:
 
 - **whether a Compose lazy grid sustains §6's prefetch at scale on a device.** The tile is a
   13 KB thumbnail from the packed blob, which is the cheap case; what the harness cannot answer
@@ -1763,8 +1781,10 @@ dependency stack is verified on Linux. Two things need Apple hardware:
   used — but the decode is real work, which is why the tile is decoded *to tile size* rather
   than to 3200px: a full decode is ~30 MB of pixels, and a shallow cache of those would be
   hundreds of megabytes for pixels no tile displays.
-- **whether the platform SQLite on iOS behaves as §3 assumes.** The SQL floor is 2018, so this
-  is expected rather than doubted, but it is untested.
+  > It cannot be answered yet for a second reason: **pinch-to-density is not built.** §6 says
+  > that interactive layout transition has to be written by hand, and the app ships one fixed
+  > density until it is. So this stays open for as long as the thing it asks about does not
+  > exist, rather than waiting on a device.
 
 And two that do not, both left by §5's redesign:
 

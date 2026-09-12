@@ -22,10 +22,16 @@ include(":adapter:linux")
 include(":app:cli")
 
 // The app (DESIGN §6). `:ui` is one Compose UI plus the non-Compose state tier it renders --
-// sibling packages in one module, the same rule `:domain` follows. `:app:desktop` is its
-// composition root, and the only place that knows which adapter satisfies which port.
+// sibling packages in one module, the same rule `:domain` follows. `:app:desktop` and
+// `:app:ios` are its two composition roots, and the only places that know which adapter
+// satisfies which port.
+//
+// `:adapter:ios` is `:adapter:linux`'s counterpart and follows the same rule: value adapters
+// only, and no Compose import anywhere. What the phone needs that a value cannot express --
+// a video surface, a decoded image -- lives in `:app:ios`, which is already a UI module.
 include(":ui")
 include(":app:desktop")
+include(":adapter:ios")
 
 // Test-only modules. `:tests:fixtures` generates the synthetic media both the adapter's own
 // tests and the end-to-end suite work from; `:tests:cli` drives the shipped binary.

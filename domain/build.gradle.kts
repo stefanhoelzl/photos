@@ -30,6 +30,12 @@ kotlin {
             linkerOpts("-L${nativePrefix.resolve("lib")}", "-lsqlite3")
         }
     }
+    // The phone (§6). Device and Apple-silicon simulator, and no `iosX64`: the build runner and
+    // every iPhone this targets are arm64, so an Intel simulator slice would be a link nothing
+    // here can run. Note the absence of any `linkerOpts` -- unlike linuxX64 above, iOS takes the
+    // platform's own SQLite (§3), so there is nothing to point a linker at.
+    iosArm64()
+    iosSimulatorArm64()
 
     sourceSets {
         commonMain.dependencies {
@@ -59,9 +65,17 @@ kotlin {
             // adds a name, not a dependency.
             implementation(libs.kotlinx.io.core)
         }
+        // NSURLSession, which is what an HTTP client on Apple platforms is -- and the only
+        // engine that a background `URLSession` (§6's tier 5, still unbuilt) could ever extend.
+        iosMain.dependencies {
+            implementation(libs.ktor.client.darwin)
+        }
         // Each target's own driver, behind the port, lives with that target's adapter --
         // except in tests, which construct one directly.
         linuxX64Test.dependencies {
+            implementation(libs.sqldelight.driver.native)
+        }
+        iosTest.dependencies {
             implementation(libs.sqldelight.driver.native)
         }
         jvmTest.dependencies {
@@ -85,6 +99,12 @@ kotlin {
 val sigv4Fixtures: String = rootDir.resolve("testdata/sigv4").absolutePath
 tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest>().configureEach {
     environment("PHOTOS_SIGV4_FIXTURES", sigv4Fixtures)
+    // A simulator test is not a child process of Gradle: the binary is handed to `simctl
+    // spawn`, which passes on only the variables named `SIMCTL_CHILD_*` and strips the prefix
+    // as it does. So the line above reaches the *client* and the test sees nothing -- measured,
+    // as six SigV4 vector failures on an otherwise green iosSimulatorArm64 run. Setting both
+    // keeps one statement true of every native target rather than branching on the task type.
+    environment("SIMCTL_CHILD_PHOTOS_SIGV4_FIXTURES", sigv4Fixtures)
 }
 tasks.withType<Test>().configureEach {
     environment("PHOTOS_SIGV4_FIXTURES", sigv4Fixtures)

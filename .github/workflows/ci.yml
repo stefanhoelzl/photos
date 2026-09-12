@@ -94,3 +94,36 @@ jobs:
           # By here the run is green, so the binary provably exists. No file means the path is
           # wrong, and that should be loud rather than a warning nobody reads.
           if-no-files-found: error
+
+  # The phone (DESIGN §6). A second job rather than more steps on the first: nothing here needs
+  # the imaging prefix or the Linux toolchain, and the two run at once instead of in sequence.
+  #
+  # This repo is PUBLIC, so macOS minutes are free -- and, more to the point, a pull request
+  # from a fork can reach this job. It therefore holds no certificate and signs nothing: the
+  # archive and the TestFlight upload are a separate workflow that runs only on `main`.
+  ios:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Kotlin/Native again, and a different distribution from the Linux job's: `runner.os` is
+      # in the key, so the two caches never collide.
+      - name: Cache the Kotlin/Native distribution
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: konan-${{ runner.os }}-
+
+      # §3's open question, answered every run: the catalog rules execute against **iOS's own
+      # SQLite** rather than the pinned one the CLI links. `:ui` brings the state tier's suites
+      # with it, compiled for the same target.
+      - name: Catalog and state suites on the simulator
+        run: ./gradlew :domain:iosSimulatorArm64Test :ui:iosSimulatorArm64Test :adapter:ios:iosSimulatorArm64Test

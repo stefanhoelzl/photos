@@ -14,6 +14,7 @@ is the only place that knows which adapter satisfies which port.
 | `:domain` | the shared tier: EXIF interpretation, the S3 client and signer, the catalog and its sync loop, the library walk, the ingest rules |
 | `:adapter:linux` | the imaging backend over `native/CImaging`, the Secret Service client over libdbus, the flock run lock, XDG paths |
 | `:app:cli` | the shipped `photos-cli`: argument parsing, the composition root, exit codes |
+| `:adapter:ios` | the phone's half of the same ports: the SQL driver over the platform SQLite, and the app container's directories |
 | `:tests:fixtures` | synthetic media — JPEG, HEIC, video, CR2, PNG, EXIF — generated, never committed |
 | `:tests:cli` | the end-to-end suite: declares a library and a zone, runs the *shipped* binary, asserts both |
 
@@ -187,4 +188,6 @@ these are the short forms.
   corpus goes stale in a way generated inputs cannot.
 - **The SQL floor is enforced, not asserted.** The query dialect is pinned to SQLite 3.24 — the
   oldest release with `ON CONFLICT … DO UPDATE`, the newest syntax anything here uses — so SQL
-  that would fail on an older device's library fails the build instead.
+  that would fail on an older device's library fails the build instead. And the two libraries
+  that floor spans are both run: the catalog suites execute against the pinned SQLite on Linux
+  and against **iOS's own** on a simulator, every CI run.
