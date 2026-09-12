@@ -17,7 +17,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import net.stho.photos.ui.state.Notice
+import net.stho.photos.app.Notice
 
 /**
  * §1's "never an opaque error", as a toast rather than a banner.

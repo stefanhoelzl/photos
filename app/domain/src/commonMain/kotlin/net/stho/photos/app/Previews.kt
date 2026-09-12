@@ -1,4 +1,4 @@
-package net.stho.photos.ui.state
+package net.stho.photos.app
 
 import androidx.compose.ui.graphics.ImageBitmap
 import kotlin.uuid.Uuid

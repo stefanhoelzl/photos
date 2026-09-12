@@ -21,7 +21,7 @@ import net.stho.photos.ui.screens.App
 import androidx.compose.runtime.CompositionLocalProvider
 import net.stho.photos.ui.screens.LocalVideoSurface
 import net.stho.photos.ui.screens.PhotosTheme
-import net.stho.photos.ui.state.AppModel
+import net.stho.photos.app.AppModel
 
 /**
  * The composition root (§7's rule, applied to the app).

@@ -12,10 +12,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.sp
-import net.stho.photos.ui.state.AppModel
-import net.stho.photos.ui.state.Screen
-import net.stho.photos.ui.state.SyncStatus
-import net.stho.photos.ui.state.Thumbnails
+import net.stho.photos.app.AppModel
+import net.stho.photos.app.Screen
+import net.stho.photos.app.SyncStatus
+import net.stho.photos.app.Thumbnails
 
 /**
  * The whole app: one back stack, one model, no tab bar (§6).

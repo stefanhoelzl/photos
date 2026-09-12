@@ -29,7 +29,7 @@ import androidx.compose.ui.unit.sp
 import kotlin.uuid.Uuid
 import net.stho.photos.model.MediaType
 import net.stho.photos.model.PhotoRow
-import net.stho.photos.ui.state.Preview
+import net.stho.photos.app.Preview
 
 /**
  * §6's fullscreen viewer: one screen, and in E.1 one state.

@@ -8,11 +8,10 @@ plugins {
 // Both now exist, which is the whole reason this is a module at all rather than living inside
 // `:app:desktop`: every screen below is compiled twice and drawn by the same Skia.
 //
-// Two package trees, one module, per the repo's rule that internal boundaries are package
-// conventions and not module edges:
-//   screens/  the Compose UI
-//   state/    what it renders -- plain classes over StateFlow, no Compose import anywhere
-//   ports/    what the app needs from a platform; the composition root supplies them
+// **Screens, and nothing else.** What they render -- the model, the ports, the scheduler, the
+// on-device cache -- is `:app:domain`, because none of it draws anything and both apps need
+// all of it. That split is what makes this module's contents easy to state: if it is not a
+// composable, it does not belong here.
 kotlin {
     jvmToolchain(libs.versions.jdk.get().toInt())
     compilerOptions { optIn.add("kotlin.uuid.ExperimentalUuidApi") }
@@ -22,7 +21,7 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
-            api(project(":domain"))
+            api(project(":app:domain"))
             implementation(compose.runtime)
             implementation(compose.foundation)
             implementation(compose.material3)

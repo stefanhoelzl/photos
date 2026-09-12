@@ -1,4 +1,4 @@
-package net.stho.photos.desktop
+package net.stho.photos.app
 
 import kotlin.uuid.Uuid
 import kotlinx.io.files.Path
@@ -6,7 +6,7 @@ import kotlinx.io.files.SystemFileSystem
 import net.stho.photos.catalog.ObjectId
 import net.stho.photos.catalog.blobKey
 import net.stho.photos.storage.S3Client
-import net.stho.photos.ui.state.BlobStore
+import net.stho.photos.app.BlobStore
 
 /**
  * The queue's platform half: bytes to disk, and what is already there.

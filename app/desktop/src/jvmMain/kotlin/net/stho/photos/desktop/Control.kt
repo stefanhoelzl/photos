@@ -8,8 +8,8 @@ import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import kotlin.uuid.Uuid
-import net.stho.photos.ui.state.AppModel
-import net.stho.photos.ui.state.Screen
+import net.stho.photos.app.AppModel
+import net.stho.photos.app.Screen
 
 /**
  * How the app is driven and reviewed without a person at the keyboard (§6).
@@ -76,9 +76,9 @@ public class ControlServer(
             val album = model.state.value.albums.firstOrNull { it.id == id }
                 ?: return@createContext exchange.reply(404, "no such album")
             val action = when (exchange.query("action")) {
-                "download" -> net.stho.photos.ui.state.CacheAction.Download
-                "pause" -> net.stho.photos.ui.state.CacheAction.Pause
-                "clear" -> net.stho.photos.ui.state.CacheAction.Clear
+                "download" -> net.stho.photos.app.CacheAction.Download
+                "pause" -> net.stho.photos.app.CacheAction.Pause
+                "clear" -> net.stho.photos.app.CacheAction.Clear
                 else -> return@createContext exchange.reply(400, "unknown action")
             }
             model.act(album, action)

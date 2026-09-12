@@ -1,7 +1,10 @@
-@file:OptIn(ExperimentalForeignApi::class)
+// Reading an `NSError` back out of an `ObjCObjectVar` is still gated behind BetaInteropApi.
+// The out-parameter is how Foundation reports failure, so there is no other spelling.
+@file:OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
 
 package net.stho.photos.adapter.ios
 
+import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCObjectVar
 import kotlinx.cinterop.alloc

@@ -1071,9 +1071,22 @@ of the session, retried on the next launch. A queue that retries for ever cannot
 row showing an error is more use than a strip frozen at 97%.
 
 **The scheduler lives in the shared tier, not in an adapter.** The ladder, the roles and the
-retry policy are the part that can be wrong, so they sit in `:ui/state` where a test with no
+retry policy are the part that can be wrong, so they sit in `:app:domain` where a test with no
 zone and no filesystem can hold every fetch open and assert on which ones started. The platform
 port is four methods: `has`, `fetch`, `delete`, `present`.
+
+> **Which shared tier, and why there are two.** `:domain` is what the app shares with the
+> **CLI**: the catalog, the shard schema, the S3 client, the ingest rules — everything a
+> laptop/phone disagreement would corrupt. `:app:domain` is what the two *apps* share with each
+> other, and the CLI has no use for any of it: it writes thumbnail packs rather than collecting
+> them, and it has no `blobs/` directory, no queue and no screen to keep in order. So the
+> scheduler, the model, the ports and §4's on-device cache live there, and `:ui` is composables
+> and nothing else.
+>
+> The line between them is not taste. `:app:cli` links `:domain` into a 26.7 MiB binary with a
+> glibc 2.19 floor (§7), so `:domain` carries no Compose — while `:app:domain` carries exactly
+> one Compose type, `ImageBitmap`, because a decoded preview is what the viewer draws and
+> converting it twice would be worse.
 
 **On iOS, tiers 0–4 run in-process and tier 5 runs on a background `URLSession`.** Tiers 0–4
 exist to serve what is on screen and are pointless when the app is not; tier 5 is already last
@@ -1735,7 +1748,7 @@ Verified on macOS, building the shared tier for the phone:
 | check | result |
 |---|---|
 | §3's catalog suites on `iosSimulatorArm64`, against the **platform SQLite** | **250 tests, all green** — §10's open question, answered |
-| `:ui`'s state tier on the same target | **41 tests, all green** |
+| `:app:domain`'s model, scheduler and cache on the same target | **41 tests, all green** |
 | the SigV4 vectors under the simulator | **green**, once the fixture path is forwarded as `SIMCTL_CHILD_*` |
 
 > `simctl spawn` passes on only the variables named `SIMCTL_CHILD_*`, stripping the prefix as it

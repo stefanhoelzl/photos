@@ -4,8 +4,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
-import net.stho.photos.ui.state.Screen
-import net.stho.photos.ui.state.SyncStatus
+import net.stho.photos.app.Screen
+import net.stho.photos.app.SyncStatus
 
 /**
  * The app, against a zone, doing what a person does with it.

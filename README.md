@@ -5,18 +5,27 @@ The design lives in [`DESIGN.md`](DESIGN.md); this file covers building it.
 
 ## Layout
 
-Ports and adapters (DESIGN §7). The domain holds every rule that decides what the zone should
-contain; an adapter is the only place that knows how a platform does something; and `:app:cli`
-is the only place that knows which adapter satisfies which port.
+Ports and adapters (DESIGN §7). A domain holds every rule that decides what should be true; an
+adapter is the only place that knows how a platform does something; and a composition root —
+there are three — is the only place that knows which adapter satisfies which port.
+
+Two domains, because there are two different overlaps. `:domain` is what the app shares with
+the CLI. `:app:domain` is what the two apps share with each other, and the CLI wants none of
+it: it writes thumbnail packs rather than collecting them, and it has no `blobs/` directory, no
+download queue and no screen to keep in order.
 
 | module | what |
 |---|---|
-| `:domain` | the shared tier: EXIF interpretation, the S3 client and signer, the catalog and its sync loop, the library walk, the ingest rules |
+| `:domain` | app ∩ CLI: EXIF interpretation, the S3 client and signer, the catalog and its sync loop, the library walk, the ingest rules |
+| `:app:domain` | Linux app ∩ iOS app: the app's ports, its model, §6's download scheduler, and §4's on-device cache |
+| `:ui` | one Compose UI, compiled for the desktop and the phone. Composables and nothing else |
 | `:adapter:linux` | the imaging backend over `native/CImaging`, the Secret Service client over libdbus, the flock run lock, XDG paths |
-| `:app:cli` | the shipped `photos-cli`: argument parsing, the composition root, exit codes |
 | `:adapter:ios` | the phone's half of the same ports: the SQL driver over the platform SQLite, and the app container's directories |
+| `:app:cli` | the shipped `photos-cli`: argument parsing, a composition root, exit codes |
+| `:app:desktop` | the app's Linux root: JDBC, OkHttp, libvlc, the FFM decode shim, and the control server `:tests:app` drives |
 | `:tests:fixtures` | synthetic media — JPEG, HEIC, video, CR2, PNG, EXIF — generated, never committed |
 | `:tests:cli` | the end-to-end suite: declares a library and a zone, runs the *shipped* binary, asserts both |
+| `:tests:app` | its counterpart for the app: declares a zone, starts the real composition root, drives it through the control API |
 
 Not modules, and not Kotlin:
 
