@@ -29,6 +29,10 @@ include(":app:cli")
 // `:adapter:ios` is `:adapter:linux`'s counterpart and follows the same rule: value adapters
 // only, and no Compose import anywhere. What the phone needs that a value cannot express --
 // a video surface, a decoded image -- lives in `:app:ios`, which is already a UI module.
+//
+// `:app:domain` is the app's own shared tier, and the counterpart to `:domain`: that one is
+// what the app shares with the CLI, this one is what the two apps share with each other.
+include(":app:domain")
 include(":ui")
 include(":app:desktop")
 include(":adapter:ios")

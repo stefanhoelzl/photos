@@ -21,6 +21,7 @@ kotlin {
             implementation(kotlin("test"))
             implementation(project(":domain"))
             implementation(project(":ui"))
+            implementation(project(":app:domain"))
             implementation(project(":adapter:linux"))
             implementation(project(":app:desktop"))
             implementation(compose.desktop.currentOs)

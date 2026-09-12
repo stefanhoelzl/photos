@@ -21,16 +21,16 @@ import org.jetbrains.skia.EncodedImageFormat
 import org.jetbrains.skia.Surface
 import net.stho.photos.ui.screens.App
 import net.stho.photos.ui.screens.PhotosTheme
-import net.stho.photos.ui.state.AppModel
-import net.stho.photos.ui.state.Catalog
-import net.stho.photos.ui.state.Notice
-import net.stho.photos.ui.state.SyncOutcome
-import net.stho.photos.ui.state.Preview
-import net.stho.photos.ui.state.Previews
-import net.stho.photos.ui.state.Syncer
-import net.stho.photos.ui.state.Totals
-import net.stho.photos.ui.state.Videos
-import net.stho.photos.ui.state.Thumbnails
+import net.stho.photos.app.AppModel
+import net.stho.photos.app.Catalog
+import net.stho.photos.app.Notice
+import net.stho.photos.app.SyncOutcome
+import net.stho.photos.app.Preview
+import net.stho.photos.app.Previews
+import net.stho.photos.app.Syncer
+import net.stho.photos.app.Totals
+import net.stho.photos.app.Videos
+import net.stho.photos.app.Thumbnails
 
 /**
  * Proof that the app actually draws, with no zone, no credentials and no display.
@@ -98,8 +98,8 @@ class RenderTest {
      * A queue over a store with nothing in it: these tests render screens, and the ladder has
      * its own suite. Every album therefore draws as holding nothing, which is a real state.
      */
-    private fun idleQueue(scope: CoroutineScope) = net.stho.photos.ui.state.CacheQueue(
-        store = object : net.stho.photos.ui.state.BlobStore {
+    private fun idleQueue(scope: CoroutineScope) = net.stho.photos.app.CacheQueue(
+        store = object : net.stho.photos.app.BlobStore {
             override fun has(id: net.stho.photos.catalog.ObjectId) = false
             override suspend fun fetch(id: net.stho.photos.catalog.ObjectId) = Unit
             override fun delete(id: net.stho.photos.catalog.ObjectId) = Unit
@@ -174,7 +174,7 @@ class RenderTest {
         override fun photos(inAlbum: Uuid): List<PhotoRow> = photos
         override fun album(id: Uuid): Album? = album
         override fun totals() = Totals(1, photos.size)
-        override fun blobs(): Map<Uuid, List<net.stho.photos.ui.state.BlobRef>> = emptyMap()
+        override fun blobs(): Map<Uuid, List<net.stho.photos.app.BlobRef>> = emptyMap()
     }
 
     private val sampleAlbums = listOf(
@@ -208,7 +208,7 @@ class RenderTest {
         override fun photos(inAlbum: Uuid): List<PhotoRow> = emptyList()
         override fun album(id: Uuid): Album? = albums.firstOrNull { it.id == id }
         override fun totals() = Totals(albums.size, albums.sumOf { it.photoCount })
-        override fun blobs(): Map<Uuid, List<net.stho.photos.ui.state.BlobRef>> = emptyMap()
+        override fun blobs(): Map<Uuid, List<net.stho.photos.app.BlobRef>> = emptyMap()
     }
 
     /**

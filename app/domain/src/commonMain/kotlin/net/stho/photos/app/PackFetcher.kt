@@ -1,4 +1,4 @@
-package net.stho.photos.desktop
+package net.stho.photos.app
 
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,10 +10,10 @@ import net.stho.photos.catalog.Album
 import net.stho.photos.catalog.CatalogReader
 import net.stho.photos.catalog.ThumbPack
 import net.stho.photos.ports.SqlDrivers
-import net.stho.photos.ui.state.BlobKind
-import net.stho.photos.ui.state.BlobRef
-import net.stho.photos.ui.state.CacheQueue
-import net.stho.photos.ui.state.Thumbnails
+import net.stho.photos.app.BlobKind
+import net.stho.photos.app.BlobRef
+import net.stho.photos.app.CacheQueue
+import net.stho.photos.app.Thumbnails
 
 /**
  * Every album's thumbnail pack: how one is *read*, and how the sweep asks for the rest.

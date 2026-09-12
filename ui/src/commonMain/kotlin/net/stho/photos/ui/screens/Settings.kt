@@ -14,9 +14,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import net.stho.photos.ui.state.StorageTotals
-import net.stho.photos.ui.state.SyncStatus
-import net.stho.photos.ui.state.Totals
+import net.stho.photos.app.StorageTotals
+import net.stho.photos.app.SyncStatus
+import net.stho.photos.app.Totals
 
 /**
  * Settings: account, storage totals, sync, log out — and **no album list**.

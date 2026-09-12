@@ -19,6 +19,7 @@ kotlin {
         }
         jvmMain.dependencies {
             implementation(project(":ui"))
+            implementation(project(":app:domain"))
             implementation(project(":domain"))
             implementation(project(":adapter:linux"))
             implementation(compose.desktop.currentOs)

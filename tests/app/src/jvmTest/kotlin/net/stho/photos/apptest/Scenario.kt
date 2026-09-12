@@ -22,7 +22,7 @@ import net.stho.photos.storage.S3Client
 import net.stho.photos.storage.asStorageUrl
 import net.stho.photos.storage.list
 import net.stho.photos.ui.screens.VideoSurface
-import net.stho.photos.ui.state.AppUi
+import net.stho.photos.app.AppUi
 
 /**
  * One end-to-end scenario: declare a zone, start the app against it, assert what the app says.
@@ -96,8 +96,8 @@ internal class Scenario(
         val deadline = System.currentTimeMillis() + 20_000
         while (System.currentTimeMillis() < deadline) {
             val ui = model.state.value
-            if (ui.sync !is net.stho.photos.ui.state.SyncStatus.Running &&
-                ui.sync !is net.stho.photos.ui.state.SyncStatus.Never
+            if (ui.sync !is net.stho.photos.app.SyncStatus.Running &&
+                ui.sync !is net.stho.photos.app.SyncStatus.Never
             ) {
                 return ui
             }

@@ -20,14 +20,22 @@ import net.stho.photos.ui.screens.App
 import net.stho.photos.ui.screens.LocalVideoSurface
 import net.stho.photos.ui.screens.PhotosTheme
 import net.stho.photos.ui.screens.VideoSurface
-import net.stho.photos.ui.state.AppModel
-import net.stho.photos.ui.state.CacheQueue
+import net.stho.photos.app.AppModel
+import net.stho.photos.app.BlobPreviews
+import net.stho.photos.app.CacheQueue
+import net.stho.photos.app.FileBlobStore
+import net.stho.photos.app.MergedCatalogSource
+import net.stho.photos.app.PackFetcher
+import net.stho.photos.app.PreviewDecoder
 
 /**
  * The composition root, as a value.
  *
  * §7's rule applied to the app: the only place that knows which adapter satisfies which port,
- * and the only place that constructs anything. It is a class rather than a block inside `main`
+ * and the only place that constructs anything. What it constructs is mostly `:app:domain`'s --
+ * the cache, the queue, the catalog source -- and what makes this root the *Linux* one is the
+ * four lines that are not: a JDBC driver, OkHttp, libvlc, and the FFM decode shim.
+ * It is a class rather than a block inside `main`
  * so that `:tests:app` starts *this* — the same adapters, the same wiring — and only skips the
  * window, which is the one part needing a display.
  */
@@ -54,7 +62,7 @@ public class PhotosApp(
      */
     private val store = FileBlobStore(s3, cacheRoot)
 
-    /** The scheduler itself lives in `:ui/state`; this is only the wiring. */
+    /** The scheduler itself lives in `:app:domain`; this is only the wiring. */
     public val queue: CacheQueue = CacheQueue(store = store, scope = scope)
 
     public val packs: PackFetcher = PackFetcher(cacheRoot, drivers, sync.mergedPath, queue, store)

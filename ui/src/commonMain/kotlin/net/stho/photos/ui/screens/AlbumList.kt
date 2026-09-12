@@ -46,9 +46,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import net.stho.photos.catalog.Album
-import net.stho.photos.ui.state.AlbumCache
-import net.stho.photos.ui.state.CacheAction
-import net.stho.photos.ui.state.Thumbnails
+import net.stho.photos.app.AlbumCache
+import net.stho.photos.app.CacheAction
+import net.stho.photos.app.Thumbnails
 
 /**
  * The album list, and the container one level down — the same list either way.

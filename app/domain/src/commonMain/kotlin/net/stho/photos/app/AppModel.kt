@@ -1,4 +1,4 @@
-package net.stho.photos.ui.state
+package net.stho.photos.app
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay

@@ -123,7 +123,13 @@ jobs:
           restore-keys: konan-${{ runner.os }}-
 
       # §3's open question, answered every run: the catalog rules execute against **iOS's own
-      # SQLite** rather than the pinned one the CLI links. `:ui` brings the state tier's suites
-      # with it, compiled for the same target.
-      - name: Catalog and state suites on the simulator
-        run: ./gradlew :domain:iosSimulatorArm64Test :ui:iosSimulatorArm64Test :adapter:ios:iosSimulatorArm64Test
+      # SQLite** rather than the pinned one the CLI links. `:app:domain` brings the model, the
+      # scheduler and the cache, compiled for the same target; `:ui` holds only composables and
+      # so has nothing to run, but it still has to compile.
+      - name: Catalog and app-domain suites on the simulator
+        run: >-
+          ./gradlew
+          :domain:iosSimulatorArm64Test
+          :app:domain:iosSimulatorArm64Test
+          :adapter:ios:iosSimulatorArm64Test
+          :ui:compileKotlinIosSimulatorArm64
