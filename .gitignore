@@ -11,6 +11,13 @@ build/
 .kotlin/
 local.properties
 
+# Xcode. `build/` above already covers DerivedData and the framework Gradle stages for it,
+# since Scripts/ios-sim.sh keeps both there. What is left is per-user state Xcode writes
+# *inside* the project bundle -- the shared scheme beside it is committed and is what
+# `xcodebuild -scheme Photos` resolves.
+app/ios/Photos.xcodeproj/xcuserdata/
+app/ios/Photos.xcodeproj/project.xcworkspace/xcuserdata/
+
 # Test scratch that escaped into the tree once (see TestScratch.kt)
 photos-roundtrip-*
 photos-tests-*

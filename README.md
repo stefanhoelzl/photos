@@ -23,6 +23,7 @@ download queue and no screen to keep in order.
 | `:adapter:ios` | the phone's half of the same ports: the SQL driver over the platform SQLite, and the app container's directories |
 | `:app:cli` | the shipped `photos-cli`: argument parsing, a composition root, exit codes |
 | `:app:desktop` | the app's Linux root: JDBC, OkHttp, libvlc, the FFM decode shim, and the control server `:tests:app` drives |
+| `:app:ios` | the app's iOS root: SQLiter, NSURLSession, the ImageIO decoder, and the framework `app/ios/Photos.xcodeproj` wraps |
 | `:tests:fixtures` | synthetic media — JPEG, HEIC, video, CR2, PNG, EXIF — generated, never committed |
 | `:tests:cli` | the end-to-end suite: declares a library and a zone, runs the *shipped* binary, asserts both |
 | `:tests:app` | its counterpart for the app: declares a zone, starts the real composition root, drives it through the control API |
@@ -105,6 +106,26 @@ Scripts/build-native.sh          # once: imaging stack, sqlite, openssl, curl, d
 ./gradlew :app:cli:linkReleaseExecutableLinuxX64
 ./gradlew :tests:cli:e2e         # 14 scenarios against the shipped binary — opt-in
 ```
+
+### The phone
+
+Needs macOS. `Scripts/ios-sim.sh` builds the app, boots a simulator, installs, launches and
+takes a screenshot; the app's console lands in `build/ios-sim.log`, which is where an uncaught
+Kotlin exception goes.
+
+```sh
+secrets-env Scripts/ios-sim.sh          # build, run, screenshot
+Scripts/ios-sim.sh build                # build only
+```
+
+Credentials come from `PHOTOS_ENDPOINT` / `PHOTOS_PASSWORD` exactly as the CLI takes them.
+Without them the app says it is not set up rather than showing an empty library — an
+arrangement that lasts only until §1's setup screen, since a TestFlight build has no
+environment to read.
+
+`./gradlew :app:domain:iosSimulatorArm64Test` runs the app tier's suites against iOS's own
+SQLite; `:domain`'s run there too, which is what answers §3's question about the platform
+library.
 
 `:tests:cli` is **not** part of `build`, which compiles its scenarios but does not run them —
 so a rename in `:domain` still breaks the build immediately, while the inner loop stays fast.

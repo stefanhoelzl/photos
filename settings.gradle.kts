@@ -21,21 +21,24 @@ include(":domain")
 include(":adapter:linux")
 include(":app:cli")
 
-// The app (DESIGN §6). `:ui` is one Compose UI plus the non-Compose state tier it renders --
-// sibling packages in one module, the same rule `:domain` follows. `:app:desktop` and
-// `:app:ios` are its two composition roots, and the only places that know which adapter
-// satisfies which port.
-//
-// `:adapter:ios` is `:adapter:linux`'s counterpart and follows the same rule: value adapters
-// only, and no Compose import anywhere. What the phone needs that a value cannot express --
-// a video surface, a decoded image -- lives in `:app:ios`, which is already a UI module.
+// The app (DESIGN §6). Four modules and two overlaps.
 //
 // `:app:domain` is the app's own shared tier, and the counterpart to `:domain`: that one is
-// what the app shares with the CLI, this one is what the two apps share with each other.
+// what the app shares with the CLI, this one is what the two apps share with each other --
+// the ports, the model, §6's download scheduler and §4's on-device cache.
+//
+// `:ui` is one Compose UI, compiled for both. Composables and nothing else.
+//
+// `:app:desktop` and `:app:ios` are the two composition roots, and the only places that know
+// which adapter satisfies which port. `:adapter:ios` is `:adapter:linux`'s counterpart and
+// follows the same rule: value adapters only, and no Compose import anywhere. What the phone
+// needs that a value cannot express -- a video surface, a decoded image -- lives in `:app:ios`,
+// which is already a UI module.
 include(":app:domain")
 include(":ui")
 include(":app:desktop")
 include(":adapter:ios")
+include(":app:ios")
 
 // Test-only modules. `:tests:fixtures` generates the synthetic media both the adapter's own
 // tests and the end-to-end suite work from; `:tests:cli` drives the shipped binary.
