@@ -1,7 +1,5 @@
 package net.stho.photos.desktop
 
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import kotlinx.coroutines.CoroutineScope
@@ -16,9 +14,6 @@ import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.storage.S3Client
 import net.stho.photos.storage.StorageUrl
 import net.stho.photos.storage.retryStorageFailures
-import net.stho.photos.ui.screens.App
-import net.stho.photos.ui.screens.LocalVideoSurface
-import net.stho.photos.ui.screens.PhotosTheme
 import net.stho.photos.ui.screens.VideoSurface
 import net.stho.photos.app.AppModel
 import net.stho.photos.app.BlobPreviews
@@ -27,6 +22,7 @@ import net.stho.photos.app.CatalogSyncer
 import net.stho.photos.app.FileBlobStore
 import net.stho.photos.app.MergedCatalogSource
 import net.stho.photos.app.PackFetcher
+import net.stho.photos.app.Session
 import net.stho.photos.app.PreviewDecoder
 
 /**
@@ -47,7 +43,7 @@ public class PhotosApp(
     decodeLibrary: String?,
     /** Overridden by the suite, which substitutes a surface that opens no player. */
     private val videoSurface: VideoSurface = VlcVideoSurface(),
-) : AutoCloseable {
+) : Session {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val drivers = JdbcSqlDrivers()
@@ -66,7 +62,7 @@ public class PhotosApp(
     /** The scheduler itself lives in `:app:domain`; this is only the wiring. */
     public val queue: CacheQueue = CacheQueue(store = store, scope = scope)
 
-    public val packs: PackFetcher = PackFetcher(cacheRoot, drivers, sync.mergedPath, queue, store)
+    override val thumbnails: PackFetcher = PackFetcher(cacheRoot, drivers, sync.mergedPath, queue, store)
 
     private val blobs = BlobPreviews(
         cacheRoot = cacheRoot,
@@ -77,10 +73,10 @@ public class PhotosApp(
         scope = scope,
     )
 
-    public val model: AppModel = AppModel(
+    override val model: AppModel = AppModel(
         catalog = catalog,
-        syncer = CatalogSyncer(sync) { packs.sweep(catalog.everyAlbum()) },
-        thumbnails = packs,
+        syncer = CatalogSyncer(sync) { thumbnails.sweep(catalog.everyAlbum()) },
+        thumbnails = thumbnails,
         previews = blobs,
         videos = blobs,
         queue = queue,
@@ -99,20 +95,14 @@ public class PhotosApp(
             // emissions arriving while the collector is suspended replace one another.
             queue.held.collect { held ->
                 if (albums.isEmpty()) albums = catalog.everyAlbum()
-                packs.noteArrivals(held, albums)
+                thumbnails.noteArrivals(held, albums)
                 kotlinx.coroutines.delay(150)
             }
         }
     }
 
-    /** What the window shows, and what `GET /screenshot` renders. */
-    @Composable
-    public fun Content() {
-        PhotosTheme {
-            CompositionLocalProvider(LocalVideoSurface provides videoSurface) {
-                App(model, packs)
-            }
-        }
+    override fun start() {
+        model.start()
     }
 
     override fun close() {

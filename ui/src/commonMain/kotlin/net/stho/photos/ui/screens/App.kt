@@ -16,6 +16,7 @@ import net.stho.photos.app.AppModel
 import net.stho.photos.app.Screen
 import net.stho.photos.app.SyncStatus
 import net.stho.photos.app.Thumbnails
+import net.stho.photos.storage.StorageUrl
 
 /**
  * The whole app: one back stack, one model, no tab bar (§6).
@@ -28,7 +29,13 @@ import net.stho.photos.app.Thumbnails
  * makes rather than one buried where nothing can override it.
  */
 @Composable
-public fun App(model: AppModel, thumbnails: Thumbnails) {
+public fun App(
+    model: AppModel,
+    thumbnails: Thumbnails,
+    /** Shown, masked, on Settings › Account — §1 says that screen is read-only. */
+    storageUrl: StorageUrl,
+    onLogOut: () -> Unit,
+) {
     val ui by model.state.collectAsState()
     val arrivals by thumbnails.arrivals.collectAsState()
     run {
@@ -96,7 +103,7 @@ public fun App(model: AppModel, thumbnails: Thumbnails) {
 
                     is Screen.Settings -> {
                         NavBar("Settings", null, onBack = model::back) {}
-                        SettingsScreen(ui.sync, ui.totals, ui.storage)
+                        SettingsScreen(ui.sync, ui.totals, ui.storage, storageUrl, onLogOut)
                     }
                 }
             }

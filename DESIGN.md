@@ -78,7 +78,9 @@ Verified live: the zone name works as both the path segment and the `Credential=
 > determines it and a separate field returns.
 
 **Key handling.** The password lives in the Keychain under **biometric access control**
-(`kSecAccessControlBiometryCurrentSet`). It is unlocked with Face ID **once per app launch**,
+(`kSecAccessControlBiometryCurrentSet`); the storage URL lives beside it with no such gate,
+because §1 is explicit that it is not a secret and two prompts to answer one question buys
+nothing. It is unlocked with Face ID **once per app launch**,
 held in memory for that session, and wiped on termination. Background uploads are unaffected:
 they run against **pre-signed URLs** (bunny.net presigned URLs are valid 1 s–7 days) generated
 at upload time, so a force-quit and relaunch resumes without needing the key again.
@@ -92,8 +94,26 @@ at upload time, so a force-quit and relaunch resumes without needing the key aga
 > issues a DELETE** (§7), that trade was judged worthwhile — and it removes a concept,
 > a Settings row and a password-manager entry.
 
+> **The gate is a device claim.** A simulator stores and reads both items exactly as a phone
+> does, biometric access control included — but with no passcode and no enrolled face there is
+> nothing to prompt for, so the read succeeds silently. The storage round-trip is therefore
+> checked in the harness loop and the *protection* is not.
+>
+> Every Keychain call also needs the app to carry an `application-identifier`, which it gets
+> from being signed with an entitlements file. Unsigned, all of them fail with -34018 while the
+> rest of the app runs perfectly, which is a failure worth recognising by name.
+
 **Settings › Account is read-only.** It shows the storage URL and a masked password, and offers
 **Log out**. Nothing there is editable and nothing carries a disclosure arrow.
+
+**Three ways in, and they agree.** The phone has one: the setup screen, or what it wrote to the
+Keychain last time. The desktop harness has three, resolved in the CLI's order — the
+environment (`secrets-env`), then the keyring, then the screen — so a laptop that has run
+`photos-cli login` is already set up and a laptop that has not is asked once. The decision lives
+in `Launcher`, above the model, because none of the app can be built until there is a zone to
+talk to: the S3 client, the sync loop and the queue all take the credential at construction.
+That is also what makes logging out simple — the session is discarded whole rather than asked
+to forget things one at a time.
 
 **Credentials are entered exactly once, at setup.** Changing either the URL or the password
 means logging out and setting up again. There is therefore no edit sheet, no in-place

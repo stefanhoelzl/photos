@@ -1,11 +1,12 @@
 package net.stho.photos.ios
 
 import androidx.compose.ui.window.ComposeUIViewController
-import net.stho.photos.storage.asStorageUrl
-import kotlinx.cinterop.ExperimentalForeignApi
-import kotlinx.cinterop.toKString
+import net.stho.photos.adapter.ios.KeychainKeyring
+import net.stho.photos.app.Account
+import net.stho.photos.app.Launcher
+import net.stho.photos.ui.screens.Photos
+import net.stho.photos.ui.screens.PhotosTheme
 import platform.UIKit.UIViewController
-import platform.posix.getenv
 
 /**
  * The whole of this framework's Swift-facing surface: one object, one function.
@@ -21,42 +22,22 @@ import platform.posix.getenv
  */
 public object PhotosEntry {
 
+    /**
+     * §1's flow, and the phone has only one way in: the setup screen, or the Keychain.
+     *
+     * No environment is consulted, unlike the desktop root — a TestFlight build has none to
+     * read, so offering the override would be a branch that exists only to be dead.
+     */
     public fun viewController(): UIViewController {
-        val credentials = Credentials.fromEnvironment()
-            // §1 forbids opaque failures. Until the setup screen lands there is no way for a
-            // person to supply these on a device, so this says what is missing rather than
-            // showing an empty album list — which would look like a working app whose library
-            // happens to hold no photographs.
-            ?: return ComposeUIViewController { Unconfigured() }
-
-        val app = PhotosApp(
-            storage = credentials.endpoint.asStorageUrl(),
-            password = credentials.password,
-            cacheRoot = PhotosApp.defaultCacheRoot(),
-        )
-        app.model.start()
-        return ComposeUIViewController { app.Content() }
-    }
-}
-
-/**
- * The same `PHOTOS_ENDPOINT` / `PHOTOS_PASSWORD` the CLI and the desktop app honour.
- *
- * **A simulator-only arrangement, and it does not survive the setup screen.** A TestFlight
- * build has no environment to read, which is exactly why §1's setup screen is the next piece of
- * work; this exists so bring-up can be driven from `Scripts/ios-sim.sh` without a credential
- * store and without a screen that does not exist yet. `simctl` passes a variable on only when
- * it is named `SIMCTL_CHILD_*`, which the script does.
- */
-private class Credentials(val endpoint: String, val password: String) {
-    companion object {
-        @OptIn(ExperimentalForeignApi::class)
-        fun fromEnvironment(): Credentials? {
-            fun variable(name: String): String? =
-                getenv(name)?.toKString()?.takeIf { it.isNotBlank() }
-            val endpoint = variable("PHOTOS_ENDPOINT") ?: return null
-            val password = variable("PHOTOS_PASSWORD") ?: return null
-            return Credentials(endpoint, password)
+        val cacheRoot = PhotosApp.defaultCacheRoot()
+        val launcher = Launcher(Account(KeychainKeyring())) { storage, password ->
+            PhotosApp(storage = storage, password = password, cacheRoot = cacheRoot)
+        }
+        launcher.start()
+        return ComposeUIViewController {
+            PhotosTheme {
+                Photos(launcher)
+            }
         }
     }
 }

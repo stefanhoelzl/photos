@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -15,6 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import net.stho.photos.app.StorageTotals
+import net.stho.photos.storage.StorageUrl
 import net.stho.photos.app.SyncStatus
 import net.stho.photos.app.Totals
 
@@ -30,8 +32,21 @@ import net.stho.photos.app.Totals
  * durable record of a failure, and it is what makes a missed toast harmless.
  */
 @Composable
-public fun SettingsScreen(sync: SyncStatus, totals: Totals, storage: StorageTotals) {
+public fun SettingsScreen(
+    sync: SyncStatus,
+    totals: Totals,
+    storage: StorageTotals,
+    storageUrl: StorageUrl,
+    onLogOut: () -> Unit,
+) {
     Column(Modifier.fillMaxSize()) {
+        // §1: read-only, and nothing carries a disclosure arrow. Changing either value means
+        // logging out and setting up again, so an edit affordance here would be a second path
+        // to a configured state -- which is the thing §1 refuses to have.
+        SectionHeader("Account")
+        Cell("Storage URL", "${'$'}{storageUrl.endpoint}/${'$'}{storageUrl.zone}")
+        // A masked value and its protection, never where it is stored (§1).
+        Cell("Password", "••••••••")
         SectionHeader("Library")
         Cell("Albums", "${totals.albums} · ${totals.photos} photos")
         SectionHeader("Storage")
@@ -49,6 +64,18 @@ public fun SettingsScreen(sync: SyncStatus, totals: Totals, storage: StorageTota
                 Cell("Last sync", sync.notice.title, error = true)
                 Cell("", sync.notice.detail)
             }
+        }
+        // Destructive, so it takes the error colour §6's table assigns (it is the only
+        // destructive action on this screen). No confirmation: nothing in the zone is touched
+        // and nothing cached is deleted -- it is reversible by setting up again.
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        TextButton(onClick = onLogOut, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                "Log out",
+                color = MaterialTheme.colorScheme.error,
+                fontSize = 16.sp,
+                modifier = Modifier.padding(vertical = 8.dp),
+            )
         }
     }
 }

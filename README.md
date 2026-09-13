@@ -119,10 +119,12 @@ secrets-env Scripts/ios-sim.sh          # build, run, screenshot
 Scripts/ios-sim.sh build                # build only
 ```
 
-Credentials come from `PHOTOS_ENDPOINT` / `PHOTOS_PASSWORD` exactly as the CLI takes them.
-Without them the app says it is not set up rather than showing an empty library — an
-arrangement that lasts only until §1's setup screen, since a TestFlight build has no
-environment to read.
+The script signs ad-hoc. That is not a formality: unsigned, the app carries no entitlements and
+every Keychain call fails with -34018 while the rest of it runs perfectly.
+
+On the phone the app asks for the storage URL and password once, on first launch, and keeps them
+in the Keychain — the password behind Face ID. On the desktop the same screen appears only when
+neither `PHOTOS_ENDPOINT`/`PHOTOS_PASSWORD` nor a `photos-cli login` has answered first.
 
 `./gradlew :app:domain:iosSimulatorArm64Test` runs the app tier's suites against iOS's own
 SQLite; `:domain`'s run there too, which is what answers §3's question about the platform

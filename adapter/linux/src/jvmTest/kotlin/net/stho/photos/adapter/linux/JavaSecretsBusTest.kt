@@ -17,7 +17,7 @@ import net.stho.photos.ports.KeyringRead
 class JavaSecretsBusTest {
 
     @Test
-    fun `reads a stored secret`() = withStub { stub, environment ->
+    fun readsAStoredSecret() = withStub { stub, environment ->
         stub.store(field = PASSWORD, secret = "hunter2")
         assertEquals(
             KeyringRead.Found("hunter2"),
@@ -26,7 +26,7 @@ class JavaSecretsBusTest {
     }
 
     @Test
-    fun `a keyring that holds nothing is absent, not unavailable`() = withStub { _, environment ->
+    fun aKeyringThatHoldsNothingIsAbsentNotUnavailable() = withStub { _, environment ->
         // The distinction §1 spends an exit code on: *absent* is a real error (3) and
         // *unavailable* is a deferral (75), and conflating them turns "you have not logged in
         // yet" into an hourly page.
@@ -34,21 +34,21 @@ class JavaSecretsBusTest {
     }
 
     @Test
-    fun `no session bus is unavailable`() {
+    fun noSessionBusIsUnavailable() {
         val read = desktopKeyring(environment = { null }).read(PASSWORD)
         val unavailable = assertIs<KeyringRead.Unavailable>(read)
         assertTrue("no session bus" in unavailable.reason, unavailable.reason)
     }
 
     @Test
-    fun `a locked collection is unavailable rather than absent`() = withStub { stub, environment ->
+    fun aLockedCollectionIsUnavailableRatherThanAbsent() = withStub { stub, environment ->
         stub.store(field = PASSWORD, secret = "hunter2")
         stub.lock()
         assertIs<KeyringRead.Unavailable>(desktopKeyring(environment = environment).read(PASSWORD))
     }
 
     @Test
-    fun `writes round-trip through the wire, bytes intact`() = withStub { stub, environment ->
+    fun writesRoundTripThroughTheWireBytesIntact() = withStub { stub, environment ->
         // A non-ASCII secret, because the value crosses as `ay` and a client that treated it as
         // a string would corrupt it somewhere this test can see.
         val secret = "hünter2-ßæ"
@@ -58,7 +58,7 @@ class JavaSecretsBusTest {
     }
 
     @Test
-    fun `writing twice replaces rather than adding`() = withStub { stub, environment ->
+    fun writingTwiceReplacesRatherThanAdding() = withStub { stub, environment ->
         val keyring = desktopKeyring(environment = environment)
         keyring.write(PASSWORD, "first")
         keyring.write(PASSWORD, "second")
@@ -67,7 +67,7 @@ class JavaSecretsBusTest {
     }
 
     @Test
-    fun `remove takes the item away, and removing nothing is not an error`() =
+    fun removeTakesTheItemAwayAndRemovingNothingIsNotAnError() =
         withStub { stub, environment ->
             val keyring = desktopKeyring(environment = environment)
             keyring.write(PASSWORD, "hunter2")

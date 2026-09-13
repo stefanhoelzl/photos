@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The app's own group, and only its own. Without an entitlements file at all the app has
+	     no application-identifier, and every Keychain call fails with -34018
+	     (errSecMissingEntitlement) -- which is how §1's credential store came to be unreachable
+	     on a simulator while the app was otherwise running perfectly. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)$(CFBundleIdentifier)</string>
+	</array>
+</dict>
+</plist>
