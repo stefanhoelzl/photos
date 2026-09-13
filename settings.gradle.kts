@@ -54,3 +54,5 @@ include(":tests:fixtures")
 include(":tests:cli")
 // The app's end-to-end suite, `:tests:cli`'s counterpart (decision 22).
 include(":tests:app")
+// The zone builder `:tests:app` and the iOS suite share, kept free of anything Linux-only.
+include(":tests:zone")
