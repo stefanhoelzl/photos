@@ -29,6 +29,7 @@ download queue and no screen to keep in order.
 | `:tests:fixtures` | synthetic media — JPEG, HEIC, video, CR2, PNG, EXIF — generated, never committed; `:tests:fixtures:fixtureMedia` also writes the set the app suites sync (a still, a video, a Live Photo pair) |
 | `:tests:cli` | the end-to-end suite: declares a library and a zone, runs the *shipped* binary, asserts both |
 | `:tests:app` | its counterpart for the app: declares a zone — shards plus real media blobs — starts the real composition root, and asserts what the model reports and what lands on disk |
+| `:tests:zone` | the zone builder both app suites share — shards, thumbnail packs and real media blobs — with nothing Linux-only in it, so a Mac can run it |
 
 Not modules, and not Kotlin:
 

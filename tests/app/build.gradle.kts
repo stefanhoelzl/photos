@@ -4,8 +4,8 @@ plugins {
     alias(libs.plugins.compose)
 }
 
-// `:tests:cli`'s counterpart for the app: declare a zone, start the app against S3Mock, drive
-// it through the control API, assert the state it reports.
+// `:tests:cli`'s counterpart for the app: declare a zone (with `:tests:zone`'s builder, shared
+// with the iOS suite), start the app against S3Mock, assert the state it reports and the disk.
 //
 // It builds the same composition root `main` does -- real adapters, real S3Mock zone, real
 // control server -- but opens no window, because Compose Desktop needs a display for one and
@@ -24,6 +24,7 @@ kotlin {
             implementation(project(":app:domain"))
             implementation(project(":adapter:linux"))
             implementation(project(":app:desktop"))
+            implementation(project(":tests:zone"))
             implementation(compose.desktop.currentOs)
             implementation(libs.ktor.client.core)
             implementation(libs.ktor.client.okhttp)
