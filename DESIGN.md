@@ -921,6 +921,7 @@ is the thing being used:
 | component | why it needs interop |
 |---|---|
 | `PHLivePhotoView` | Live Photo playback is a system view; there is nothing to reimplement |
+| `AVPlayerViewController` | scrubbing, system volume, AirPlay and Picture in Picture are what a phone video is expected to have, and each would otherwise be a control drawn and got subtly wrong |
 | PhotoKit picker (§8) | `PHAssetCollection` browsing, and deletion after upload |
 
 Everything else is drawn, including the three hardest screens. `LazyVerticalGrid` exposes
@@ -1031,6 +1032,14 @@ Three facts about the build are decisions rather than defaults:
   Compose refuses to start rather than allow that quietly — which matters here more than in most
   apps, because §10's remaining unknown is a question about frame rate.
 
+- **Playback goes through an extension.** §2 names every blob by its hash alone, and
+  AVFoundation and PhotoKit both decide what a file is from its extension before reading a byte.
+  So a played blob is reached through a symbolic link, `playable/<id>.<ext>`, beside the cache —
+  no copy, and no second policy, since a link to a cleared blob is recreated when it lands
+  again. The extension is sniffed rather than assumed: a Live Photo's still is the camera's own
+  file, HEIC or JPEG. Measured on a simulator with one MP4: `AVURLAsset.playable` is **false**
+  for the blob under its hash and **true** for the same bytes through the link.
+
 `Scripts/ios-sim.sh` is the loop: build, boot a simulator, install, launch, screenshot. It is a
 script rather than a paragraph because the incantation spans four tools, one of which has a rule
 worth knowing — `simctl` forwards an environment variable only when it is named `SIMCTL_CHILD_*`
@@ -1041,6 +1050,14 @@ worth knowing — `simctl` forwards an environment variable only when it is name
 One screen, two states. Chrome is identical in both — back, then gear/share/set-cover, a
 filmstrip, and a bottom line carrying the date. A **LIVE badge appears once**, top-left, and is
 the only thing that differs.
+
+**Motion plays in the platform's own views.** A video opens on its poster and hands over to
+`AVPlayerViewController` once the transcode is on disk, playing as it appears and pausing when
+a swipe leaves it. A Live Photo plays in `PHLivePhotoView` from the two files the queue already
+fetched — the untouched still and its MOV — with Photos' own press-and-hold, and plays a brief
+hint once when it arrives so the motion is discoverable before the badge has to announce it.
+The desktop harness installs no Live Photo view: the still stays and the badge says what the
+phone would do with it.
 
 Swiping loads the 3200px image, and deep zoom needs nothing further: at 424 KiB one blob serves
 both, so the viewer has no escalation step and no second loading state.

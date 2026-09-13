@@ -23,6 +23,7 @@ import net.stho.photos.ui.screens.App
 import net.stho.photos.ui.screens.PhotosTheme
 import net.stho.photos.ui.screens.SetupScreen
 import net.stho.photos.app.SaveOutcome
+import net.stho.photos.app.LivePair
 import net.stho.photos.storage.asStorageUrl
 import net.stho.photos.app.AppModel
 import net.stho.photos.app.Catalog
@@ -257,8 +258,9 @@ class RenderTest {
     }
 
     /** No transcode ever arrives, so the poster is what the viewer keeps showing. */
-    private class FakeVideos : Videos {
+    private class FakeVideos(private val pair: LivePair? = null) : Videos {
         override suspend fun localFile(photo: PhotoRow): String? = null
+        override suspend fun livePair(photo: PhotoRow): LivePair? = pair
     }
 
     /** No previews: enough for the state tier, which decides *when* to ask, not what comes back. */

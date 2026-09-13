@@ -121,6 +121,18 @@ public class BlobPreviews(
         return Path(directory, blob.toString()).toString()
     }
 
+    /**
+     * Both halves of a Live Photo, once the queue holds both. They are already tier 0 — the open
+     * photo's `objectIds` include them — so this only waits, exactly as [localFile] does.
+     */
+    override suspend fun livePair(photo: PhotoRow): LivePair? {
+        val still = photo.liveStillId ?: return null
+        val video = photo.liveVideoId ?: return null
+        queue.awaitHeld(still)
+        queue.awaitHeld(video)
+        return LivePair(Path(directory, still.toString()).toString(), Path(directory, video.toString()).toString())
+    }
+
     /** Leaving the album abandons the queue *and* whatever it had already started. */
     override fun cancelPrefetch() {
         prefetching?.cancel()

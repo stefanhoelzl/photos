@@ -23,7 +23,7 @@ download queue and no screen to keep in order.
 | `:adapter:ios` | the phone's half of the same ports: the SQL driver over the platform SQLite, and the app container's directories |
 | `:app:cli` | the shipped `photos-cli`: argument parsing, a composition root, exit codes |
 | `:app:desktop` | the app's Linux root: JDBC, OkHttp, libvlc, the FFM decode shim, and the control server `:tests:app` drives |
-| `:app:ios` | the app's iOS root: SQLiter, NSURLSession, the ImageIO decoder, and the framework `app/ios/Photos.xcodeproj` wraps |
+| `:app:ios` | the app's iOS root: SQLiter, NSURLSession, the ImageIO decoder, `AVPlayerViewController` and `PHLivePhotoView` for playback, and the framework `app/ios/Photos.xcodeproj` wraps |
 | `:tests:fixtures` | synthetic media — JPEG, HEIC, video, CR2, PNG, EXIF — generated, never committed |
 | `:tests:cli` | the end-to-end suite: declares a library and a zone, runs the *shipped* binary, asserts both |
 | `:tests:app` | its counterpart for the app: declares a zone, starts the real composition root, drives it through the control API |

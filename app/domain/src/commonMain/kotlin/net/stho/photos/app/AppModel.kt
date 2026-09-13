@@ -49,6 +49,8 @@ public data class AppUi(
     val preview: Preview? = null,
     /** The open photo's transcode, once fetched — null for a still, or while it downloads. */
     val videoPath: String? = null,
+    /** The open Live Photo's still and MOV, once both are on disk — null otherwise. */
+    val livePair: LivePair? = null,
     /** The open album's thumbnails, keyed by `PhotoRow.id`. Loaded off the UI thread. */
     val thumbnails: Map<Uuid, ByteArray> = emptyMap(),
     val sync: SyncStatus = SyncStatus.Never,
@@ -351,7 +353,7 @@ public class AppModel(
         val screen = state.value.screen
         if (screen !is Screen.Photo || index !in state.value.photos.indices) return
         _state.update {
-            it.copy(stack = it.stack.replace(screen.copy(index = index)), preview = null, videoPath = null)
+            it.copy(stack = it.stack.replace(screen.copy(index = index)), preview = null, videoPath = null, livePair = null)
         }
         loadPreview(index)
         viewing(index, state.value.photos)
@@ -364,7 +366,7 @@ public class AppModel(
     /** Used by the control server's `POST /nav` as well as by the UI. */
     public fun navigate(change: (BackStack) -> BackStack) {
         val leaving = _state.value.screen
-        _state.update { it.copy(stack = change(it.stack), query = "", preview = null, videoPath = null) }
+        _state.update { it.copy(stack = change(it.stack), query = "", preview = null, videoPath = null, livePair = null) }
         // Leaving the album abandons the prefetch queue; staying inside it (grid ↔ photo)
         // keeps the pack and whatever has already been fetched.
         val arrived = _state.value.screen.albumOf()
@@ -487,12 +489,12 @@ public class AppModel(
     private fun loadPreview(index: Int, photos: List<PhotoRow> = state.value.photos) {
         val photo = photos.getOrNull(index) ?: return
         previews.cached(photo)?.let { cached ->
-            if (photo.mediaType == MediaType.VIDEO) loadVideo(photo)
+            loadMotion(photo)
             _state.update { it.copy(preview = cached) }
             previews.prefetch(photos, index)
             return
         }
-        if (photo.mediaType == MediaType.VIDEO) loadVideo(photo)
+        loadMotion(photo)
         scope.launch {
             val loaded = previews.load(photo)
             _state.update { current ->
@@ -507,15 +509,30 @@ public class AppModel(
         }
     }
 
-    /** §5's transcode, fetched on demand: the poster is already showing while this arrives. */
-    private fun loadVideo(photo: PhotoRow) {
-        scope.launch {
-            val path = videos.localFile(photo)
-            _state.update { current ->
-                val screen = current.screen
-                val open = (screen as? Screen.Photo)?.let { current.photos.getOrNull(it.index) }
-                if (open?.id == photo.id) current.copy(videoPath = path) else current
+    /**
+     * Whatever moves: a video's transcode or a Live Photo's pair, fetched on demand while the
+     * still is already showing. A plain photo has nothing to wait for.
+     */
+    private fun loadMotion(photo: PhotoRow) {
+        when (photo.mediaType) {
+            MediaType.VIDEO -> scope.launch {
+                val path = videos.localFile(photo)
+                updateIfStillOpen(photo) { it.copy(videoPath = path) }
             }
+            MediaType.LIVE_PHOTO -> scope.launch {
+                val pair = videos.livePair(photo)
+                updateIfStillOpen(photo) { it.copy(livePair = pair) }
+            }
+            else -> Unit
+        }
+    }
+
+    /** A swipe may have moved on while the download ran; an answer for a photo left behind is dropped. */
+    private fun updateIfStillOpen(photo: PhotoRow, change: (AppUi) -> AppUi) {
+        _state.update { current ->
+            val screen = current.screen
+            val open = (screen as? Screen.Photo)?.let { current.photos.getOrNull(it.index) }
+            if (open?.id == photo.id) change(current) else current
         }
     }
 
