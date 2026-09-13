@@ -38,4 +38,11 @@ kotlin {
 // gitignored, and wiped by `clean` like everything else there.
 tasks.named<Test>("jvmTest") {
     systemProperty("photos.test.scratch", layout.buildDirectory.dir("scenarios").get().asFile.absolutePath)
+    // Real HEIC, MP4 and a Live Photo pair, written by the linuxX64 generator in
+    // `:tests:fixtures` -- the JVM cannot encode them, and the macOS suite syncs the same files.
+    dependsOn(":tests:fixtures:fixtureMedia")
+    systemProperty(
+        "photos.fixture.media",
+        project(":tests:fixtures").layout.buildDirectory.dir("fixture-media").get().asFile.absolutePath,
+    )
 }

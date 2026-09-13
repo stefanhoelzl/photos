@@ -23,6 +23,10 @@ import net.stho.photos.storage.asStorageUrl
 import net.stho.photos.storage.list
 import net.stho.photos.ui.screens.VideoSurface
 import net.stho.photos.app.AppUi
+import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.unit.Density
+import net.stho.photos.ui.screens.App
+import net.stho.photos.ui.screens.PhotosTheme
 
 /**
  * One end-to-end scenario: declare a zone, start the app against it, assert what the app says.
@@ -66,7 +70,7 @@ internal const val PASSWORD: String = "test-secret"
 internal class Scenario(
     val zone: Zone,
     private val endpoint: String,
-    private val cacheRoot: Path,
+    val cacheRoot: Path,
 ) : AutoCloseable {
 
     private var app: PhotosApp? = null
@@ -106,6 +110,53 @@ internal class Scenario(
         error("the app never finished its first sync")
     }
 
+    /** Polls until [done] holds — for what arrives after the first sync: a fetch, a download. */
+    suspend fun await(what: String, done: (AppUi) -> Boolean): AppUi {
+        val deadline = System.currentTimeMillis() + 20_000
+        while (System.currentTimeMillis() < deadline) {
+            val ui = model.state.value
+            if (done(ui)) return ui
+            kotlinx.coroutines.delay(50)
+        }
+        error("timed out waiting for $what")
+    }
+
+    /** The same, for a condition the model does not report — what is on disk. */
+    suspend fun awaitTrue(what: String, done: () -> Boolean) {
+        await(what) { done() }
+    }
+
+    /**
+     * What `blobs/` holds, by name: the cache as the disk has it rather than as the model reports
+     * it (decision 8). A fetch in flight is a `.part` and is not counted, as `FileBlobStore` does not.
+     */
+    fun blobsOnDisk(): Set<String> = namesIn("blobs")
+
+    fun packsOnDisk(): Set<String> = namesIn("packs")
+
+    private fun namesIn(directory: String): Set<String> =
+        java.io.File(cacheRoot.toString(), directory).list()
+            ?.filterNot { it.endsWith(".part") }?.toSet().orEmpty()
+
+    /**
+     * One frame of the running app, written beside the scenario's cache for a person to look at.
+     *
+     * Never compared: the repo's rule for rendered frames, since a pixel diff fails on a font
+     * hinting differently rather than on a bug.
+     */
+    fun screenshot(name: String) {
+        val running = requireNotNull(app) { "launch() first" }
+        val scene = ImageComposeScene(width = 430, height = 890, density = Density(2f)) {
+            PhotosTheme { App(running.model, running.thumbnails, endpoint.asStorageUrl(), onLogOut = {}) }
+        }
+        try {
+            val png = requireNotNull(scene.render().encodeToData()) { "skia declined to encode" }.bytes
+            java.io.File(cacheRoot.toString()).parentFile.resolve("$name.png").writeBytes(png)
+        } finally {
+            scene.close()
+        }
+    }
+
     override fun close() {
         app?.close()
     }
@@ -129,8 +180,6 @@ internal class Zone(private val s3: S3Client, private val staging: Path) {
      * ingest could never produce.
      */
     suspend fun album(name: String, photos: Int, thumbnails: Boolean = true): Uuid {
-        kotlinx.io.files.SystemFileSystem.createDirectories(staging)
-        val albumId = Uuid.random()
         val rows = (0 until photos).map { index ->
             PhotoRow(
                 id = Uuid.random(),
@@ -142,6 +191,67 @@ internal class Zone(private val s3: S3Client, private val staging: Path) {
                 mediaType = MediaType.PHOTO,
             )
         }
+        return write(name, rows, thumbnails).id
+    }
+
+    /**
+     * An album of the three shapes a row can have, each backed by real bytes (decision 2).
+     *
+     * A still, a video with its poster and transcode, and a Live Photo with its viewing image,
+     * untouched still and MOV — six blobs, uploaded under the content hashes the rows name, from
+     * the media `:tests:fixtures` generated for this build. The app never learns how a blob was
+     * made, so nothing here runs ingest; that correctness is `:tests:cli`'s.
+     */
+    suspend fun mediaAlbum(name: String): MediaAlbum {
+        val media = java.io.File(
+            requireNotNull(System.getProperty("photos.fixture.media")) {
+                "photos.fixture.media is unset -- the build writes it with :tests:fixtures:fixtureMedia"
+            },
+        )
+        val files = mutableMapOf<ObjectId, java.io.File>()
+        suspend fun blob(file: String): ObjectId {
+            val source = java.io.File(media, file)
+            require(source.isFile) { "missing fixture media: $source" }
+            val path = Path(source.absolutePath)
+            val id = ObjectId.ofContent(path)
+            s3.put(id.blobKey, Body.File(path))
+            files[id] = source
+            return id
+        }
+        val at = Instant.parse("2024-06-01T12:00:00Z")
+        val still = blob(PHOTO)
+        val poster = blob(POSTER)
+        val video = blob(VIDEO)
+        val liveView = blob(LIVE_VIEW)
+        val liveStill = blob(LIVE_STILL)
+        val liveVideo = blob(LIVE_VIDEO)
+        // One `takenAt`, so §3's order is the filename's and the three rows sit in a known order.
+        val rows = listOf(
+            PhotoRow(
+                id = Uuid.random(), filename = "IMG_0001.HEIC", takenAt = at, width = 320, height = 240,
+                bytes = files.getValue(still).length(), mediaType = MediaType.PHOTO, imageId = still,
+            ),
+            PhotoRow(
+                id = Uuid.random(), filename = "IMG_0002.mp4", takenAt = at, width = 64, height = 48,
+                bytes = files.getValue(video).length(), mediaType = MediaType.VIDEO,
+                imageId = poster, videoId = video,
+            ),
+            PhotoRow(
+                id = Uuid.random(), filename = "IMG_0003.HEIC", takenAt = at, width = 352, height = 264,
+                bytes = files.getValue(liveView).length(), mediaType = MediaType.LIVE_PHOTO,
+                imageId = liveView, liveStillId = liveStill, liveVideoId = liveVideo,
+                liveVideoFilename = "IMG_0003.mov",
+            ),
+        )
+        val written = write(name, rows, thumbnails = true)
+        return MediaAlbum(written.id, written.thumbsId, rows, files)
+    }
+
+    private class Written(val id: Uuid, val thumbsId: ObjectId?)
+
+    private suspend fun write(name: String, rows: List<PhotoRow>, thumbnails: Boolean): Written {
+        kotlinx.io.files.SystemFileSystem.createDirectories(staging)
+        val albumId = Uuid.random()
         // Packed first, then named after what it holds — since §2 a blob's key *is* its
         // content, so the id cannot be minted before the bytes exist.
         var thumbsId: ObjectId? = null
@@ -162,7 +272,18 @@ internal class Zone(private val s3: S3Client, private val staging: Path) {
             rows,
         ).writeTo(shardFile, drivers)
         s3.put(albumId.shardKey, Body.File(shardFile))
-        return albumId
+        return Written(albumId, thumbsId)
+    }
+
+    private companion object {
+        // The generator's file names (`FixtureMedia` in `:tests:fixtures`). Spelled again here
+        // because this suite runs on the JVM and cannot link that linuxX64 module.
+        const val PHOTO = "photo.heic"
+        const val POSTER = "poster.heic"
+        const val VIDEO = "video.mp4"
+        const val LIVE_VIEW = "live-view.heic"
+        const val LIVE_STILL = "live-still.heic"
+        const val LIVE_VIDEO = "live.mov"
     }
 
     /** A 16px square. Small on purpose: these are asserted on, never looked at. */
@@ -173,4 +294,19 @@ internal class Zone(private val s3: S3Client, private val staging: Path) {
             out.toByteArray()
         }
     }
+}
+
+/** A media album as declared: its rows, and the source file behind every blob they name. */
+internal class MediaAlbum(
+    val id: Uuid,
+    val thumbsId: ObjectId?,
+    val rows: List<PhotoRow>,
+    private val files: Map<ObjectId, java.io.File>,
+) {
+    /** Every blob the rows own — what a download must fetch, and nothing more. */
+    val objectIds: Set<ObjectId> get() = rows.flatMap { it.objectIds }.toSet()
+
+    fun bytesOf(id: ObjectId): ByteArray = files.getValue(id).readBytes()
+
+    fun row(type: MediaType): PhotoRow = rows.single { it.mediaType == type }
 }
