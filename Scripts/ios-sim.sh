@@ -6,6 +6,10 @@
 # grammar, simctl's device lifecycle, the bundle id, and simctl's rule that it forwards only
 # variables named SIMCTL_CHILD_* -- and none of that is worth rediscovering per session.
 #
+# It signs ad-hoc (`CODE_SIGN_IDENTITY=-`), which needs no certificate and is what a simulator
+# accepts. That is not a formality: without a signature the app carries no entitlements, and
+# every Keychain call then fails with -34018 while the rest of the app runs perfectly.
+#
 #   Scripts/ios-sim.sh                 build, install, launch, screenshot
 #   Scripts/ios-sim.sh build           build only
 #   Scripts/ios-sim.sh shot out.png    screenshot a running app
@@ -38,7 +42,9 @@ build() {
     -scheme "$SCHEME" \
     -destination "platform=iOS Simulator,name=$DEVICE" \
     -derivedDataPath "$DERIVED" \
-    CODE_SIGNING_ALLOWED=NO \
+    CODE_SIGN_IDENTITY=- \
+    CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGNING_ALLOWED=YES \
     | grep -iE "error:|warning: .*\.(swift|kt):|BUILD" || true
   [ -d "$APP" ] || { echo "no app bundle at $APP" >&2; exit 1; }
 }

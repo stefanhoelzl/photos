@@ -21,6 +21,9 @@ import org.jetbrains.skia.EncodedImageFormat
 import org.jetbrains.skia.Surface
 import net.stho.photos.ui.screens.App
 import net.stho.photos.ui.screens.PhotosTheme
+import net.stho.photos.ui.screens.SetupScreen
+import net.stho.photos.app.SaveOutcome
+import net.stho.photos.storage.asStorageUrl
 import net.stho.photos.app.AppModel
 import net.stho.photos.app.Catalog
 import net.stho.photos.app.Notice
@@ -43,6 +46,8 @@ import net.stho.photos.app.Thumbnails
  */
 class RenderTest {
 
+    private val SAMPLE_URL = "https://de-s3.storage.bunnycdn.com/my-photos".asStorageUrl()
+
     @Test
     fun everyE1ScreenRendersInBothSchemes() = runTest {
         val out = File(System.getProperty("java.io.tmpdir"), "photos-render").apply { mkdirs() }
@@ -63,18 +68,35 @@ class RenderTest {
             render(out, "grid-$scheme", dark) { gridModel(this@runTest, packed = true) }
             render(out, "grid-pending-$scheme", dark) { gridModel(this@runTest, packed = false) }
             render(out, "loading-$scheme", dark) { loadingModel(this@runTest) }
+            // §1's two screens that exist before there is a model at all. They render from a
+            // composable rather than from `App`, so they get their own path here -- and this is
+            // the whole reason the desktop target exists: no screen should be unreviewable
+            // without Apple hardware.
+            renderSetup(out, "setup-$scheme", dark)
         }
 
         val written = out.listFiles()?.filter { it.name.endsWith(".png") }.orEmpty()
-        assertTrue(written.size >= 14, "expected a frame per screen per scheme, got ${written.size}")
+        assertTrue(written.size >= 16, "expected a frame per screen per scheme, got ${written.size}")
         assertTrue(written.all { it.length() > 1_000 }, "a frame that small drew nothing")
         println("frames in $out")
+    }
+
+    private fun renderSetup(directory: File, name: String, dark: Boolean) {
+        val scene = ImageComposeScene(width = 430, height = 890, density = Density(2f)) {
+            PhotosTheme(dark = dark) { SetupScreen { _, _ -> SaveOutcome.Rejected("not reached") } }
+        }
+        try {
+            val png = requireNotNull(scene.render().encodeToData()) { "skia declined to encode" }
+            File(directory, "$name.png").writeBytes(png.bytes)
+        } finally {
+            scene.close()
+        }
     }
 
     private fun render(directory: File, name: String, dark: Boolean, build: () -> AppModel) {
         val model = build()
         val scene = ImageComposeScene(width = 430, height = 890, density = Density(2f)) {
-            PhotosTheme(dark = dark) { App(model, FakeThumbnails()) }
+            PhotosTheme(dark = dark) { App(model, FakeThumbnails(), SAMPLE_URL, onLogOut = {}) }
         }
         try {
             val png = requireNotNull(scene.render().encodeToData()) { "skia declined to encode" }

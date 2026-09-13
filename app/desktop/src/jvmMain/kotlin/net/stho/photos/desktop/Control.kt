@@ -9,6 +9,8 @@ import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import kotlin.uuid.Uuid
 import net.stho.photos.app.AppModel
+import net.stho.photos.app.Launch
+import net.stho.photos.app.Launcher
 import net.stho.photos.app.Screen
 
 /**
@@ -36,9 +38,19 @@ import net.stho.photos.app.Screen
  */
 public class ControlServer(
     private val port: Int,
-    private val model: AppModel,
+    /**
+     * The launcher rather than a model, because before §1's setup screen is answered there is
+     * no model to hold: the S3 client and the sync loop are built from a credential. Every
+     * endpoint below resolves it per request, so the suite can drive setup and then drive the
+     * app through the same server.
+     */
+    private val launcher: Launcher,
     private val content: @Composable () -> Unit,
 ) {
+    /** The running session's model, or null while the setup screen is up. */
+    private val model: AppModel?
+        get() = (launcher.state.value as? Launch.Running)?.session?.model
+
     private val server: HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
 
     public fun start() {
@@ -46,9 +58,9 @@ public class ControlServer(
         server.createContext("/nav") { exchange ->
             val to = exchange.query("to") ?: "albums"
             when {
-                to == "back" -> model.back()
-                to == "albums" -> model.navigate { it.root() }
-                to == "settings" -> model.openSettings()
+                to == "back" -> model?.back()
+                to == "albums" -> model?.navigate { it.root() }
+                to == "settings" -> model?.openSettings()
                 // The viewer was the one screen the harness could not reach at all, which made
                 // its loading state unreviewable without a device.
                 to.startsWith("photo/") -> {
@@ -58,13 +70,13 @@ public class ControlServer(
                     if (id == null || at == null) {
                         return@createContext exchange.reply(400, "expected photo/<uuid>/<index>")
                     }
-                    model.navigate { it.push(Screen.Grid(id, to)) }
-                    model.openPhoto(at)
+                    model?.navigate { it.push(Screen.Grid(id, to)) }
+                    model?.openPhoto(at)
                 }
                 to.startsWith("album/") -> {
                     val id = runCatching { Uuid.parse(to.removePrefix("album/")) }.getOrNull()
                     if (id == null) return@createContext exchange.reply(400, "bad album id")
-                    model.navigate { it.push(Screen.Grid(id, to)) }
+                    model?.navigate { it.push(Screen.Grid(id, to)) }
                 }
                 else -> return@createContext exchange.reply(400, "unknown destination")
             }
@@ -73,7 +85,7 @@ public class ControlServer(
         server.createContext("/cache") { exchange ->
             val id = runCatching { Uuid.parse(exchange.query("album").orEmpty()) }.getOrNull()
                 ?: return@createContext exchange.reply(400, "bad album id")
-            val album = model.state.value.albums.firstOrNull { it.id == id }
+            val album = model?.state?.value?.albums?.firstOrNull { it.id == id }
                 ?: return@createContext exchange.reply(404, "no such album")
             val action = when (exchange.query("action")) {
                 "download" -> net.stho.photos.app.CacheAction.Download
@@ -81,12 +93,12 @@ public class ControlServer(
                 "clear" -> net.stho.photos.app.CacheAction.Clear
                 else -> return@createContext exchange.reply(400, "unknown action")
             }
-            model.act(album, action)
+            model?.act(album, action)
             exchange.replyJson(state())
         }
-        server.createContext("/sort") { model.cycleSort(); it.replyJson(state()) }
-        server.createContext("/search") { model.search(it.query("q") ?: ""); it.replyJson(state()) }
-        server.createContext("/refresh") { model.refresh(); it.replyJson(state()) }
+        server.createContext("/sort") { model?.cycleSort(); it.replyJson(state()) }
+        server.createContext("/search") { model?.search(it.query("q") ?: ""); it.replyJson(state()) }
+        server.createContext("/refresh") { model?.refresh(); it.replyJson(state()) }
         server.createContext("/screenshot") { exchange ->
             runCatching { screenshot(exchange.query("w")?.toIntOrNull() ?: 430, exchange.query("h")?.toIntOrNull() ?: 890) }
                 .onSuccess { png ->
@@ -128,7 +140,10 @@ public class ControlServer(
      * shipped app for the sake of a development surface.
      */
     private fun state(): String {
-        val ui = model.state.value
+        val ui = model?.state?.value
+            // No session yet: the suite is looking at the setup screen, and saying so is more
+            // use than an empty album list that looks like a working app with no photographs.
+            ?: return """{"screen":"setup"}"""
         val screen = when (val s = ui.screen) {
             is Screen.Albums -> "albums"
             is Screen.Container -> "container/${s.albumId}"

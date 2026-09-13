@@ -1,6 +1,5 @@
 package net.stho.photos.ios
 
-import androidx.compose.runtime.Composable
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.darwin.Darwin
 import kotlinx.coroutines.CoroutineScope
@@ -19,12 +18,11 @@ import net.stho.photos.app.CatalogSyncer
 import net.stho.photos.app.FileBlobStore
 import net.stho.photos.app.MergedCatalogSource
 import net.stho.photos.app.PackFetcher
+import net.stho.photos.app.Session
 import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.storage.S3Client
 import net.stho.photos.storage.StorageUrl
 import net.stho.photos.storage.retryStorageFailures
-import net.stho.photos.ui.screens.App
-import net.stho.photos.ui.screens.PhotosTheme
 
 /**
  * The composition root, as a value — `:app:desktop`'s `PhotosApp` with four lines changed.
@@ -41,7 +39,7 @@ public class PhotosApp(
     storage: StorageUrl,
     password: String,
     cacheRoot: Path,
-) {
+) : Session {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val drivers = NativeSqlDrivers()
     private val http = HttpClient(Darwin) { retryStorageFailures() }
@@ -54,7 +52,7 @@ public class PhotosApp(
     /** The scheduler itself lives in `:app:domain`; this is only the wiring. */
     public val queue: CacheQueue = CacheQueue(store = store, scope = scope)
 
-    public val packs: PackFetcher = PackFetcher(cacheRoot, drivers, sync.mergedPath, queue, store)
+    override val thumbnails: PackFetcher = PackFetcher(cacheRoot, drivers, sync.mergedPath, queue, store)
 
     private val blobs = BlobPreviews(
         cacheRoot = cacheRoot,
@@ -63,10 +61,10 @@ public class PhotosApp(
         scope = scope,
     )
 
-    public val model: AppModel = AppModel(
+    override val model: AppModel = AppModel(
         catalog = catalog,
-        syncer = CatalogSyncer(sync) { packs.sweep(catalog.everyAlbum()) },
-        thumbnails = packs,
+        syncer = CatalogSyncer(sync) { thumbnails.sweep(catalog.everyAlbum()) },
+        thumbnails = thumbnails,
         previews = blobs,
         videos = blobs,
         queue = queue,
@@ -80,28 +78,17 @@ public class PhotosApp(
             var albums = catalog.everyAlbum()
             queue.held.collect { held ->
                 if (albums.isEmpty()) albums = catalog.everyAlbum()
-                packs.noteArrivals(held, albums)
+                thumbnails.noteArrivals(held, albums)
                 delay(150)
             }
         }
     }
 
-    /**
-     * What the window shows.
-     *
-     * No `LocalVideoSurface` yet, deliberately: the default surface draws nothing, so a video
-     * row shows its poster and no player. AVPlayer and `PHLivePhotoView` are the next commit —
-     * the two pieces of UIKit interop §6 names, and the only parts of this screen a simulator
-     * cannot really answer for.
-     */
-    @Composable
-    public fun Content() {
-        PhotosTheme {
-            App(model, packs)
-        }
+    override fun start() {
+        model.start()
     }
 
-    public fun close() {
+    override fun close() {
         scope.cancel()
         sync.close()
         http.close()

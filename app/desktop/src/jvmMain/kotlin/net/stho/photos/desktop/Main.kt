@@ -11,19 +11,20 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.io.files.Path
-import net.stho.photos.CredentialFailure
 import net.stho.photos.adapter.linux.FfmImaging
 import net.stho.photos.adapter.linux.JdbcSqlDrivers
 import net.stho.photos.adapter.linux.desktopKeyring
-import net.stho.photos.ingest.Credentials
 import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.storage.S3Client
 import net.stho.photos.storage.retryStorageFailures
-import net.stho.photos.ui.screens.App
 import androidx.compose.runtime.CompositionLocalProvider
 import net.stho.photos.ui.screens.LocalVideoSurface
 import net.stho.photos.ui.screens.PhotosTheme
-import net.stho.photos.app.AppModel
+import androidx.compose.runtime.Composable
+import net.stho.photos.app.Account
+import net.stho.photos.app.Launch
+import net.stho.photos.app.Launcher
+import net.stho.photos.ui.screens.Photos
 
 /**
  * The composition root (§7's rule, applied to the app).
@@ -32,55 +33,48 @@ import net.stho.photos.app.AppModel
  * constructs anything: `:ui` never learns that the SQL driver is JDBC, that the HTTP engine is
  * OkHttp, or that a control server exists at all.
  *
- * Credentials resolve exactly as the CLI's do — environment, then keyring — because
- * `Credentials` is the domain's and both roots hand it the same two things. So
- * `secrets-env ./gradlew :app:desktop:run` works as it always did, and so now does a plain run
- * on a machine where `photos-cli login` has been done: same items, same `service photos-cli`
- * attributes, reached over dbus-java here and over libdbus there.
- *
- * The setup screen that *writes* them is the next piece of work; until it exists a machine with
- * neither answer is told what to do rather than shown an empty library.
+ * Credentials resolve exactly as the CLI's do — environment, then keyring — and a machine with
+ * neither now gets §1's setup screen rather than an error. So there are three ways in and they
+ * agree: `secrets-env ./gradlew :app:desktop:run`, a `photos-cli login` done earlier, or typing
+ * the two values once into the screen this root now hosts.
  */
 public fun main(args: Array<String>) {
     val options = Options.parse(args)
-    val credentials = Credentials(System.getenv(), desktopKeyring())
-    val (storage, password) = try {
-        credentials.storage().value to credentials.password().value
-    } catch (failure: CredentialFailure) {
-        // §1 forbids opaque failures, and a missing credential before the setup screen exists
-        // is a startup problem rather than something the UI can say anything useful about.
-        // The message is the domain's, which is what keeps it identical to the CLI's.
-        System.err.println(
-            "${failure.message}\n" +
-                "  photos-cli login                        — store them in the keyring, or\n" +
-                "  secrets-env ./gradlew :app:desktop:run  — take them from Proton Pass",
+    val account = Account(desktopKeyring(), System.getenv())
+    // The factory is the only part of a session a root owns: which SQL driver, which HTTP
+    // engine, which decoder. `Launcher` decides *when* to build one.
+    val launcher = Launcher(account) { storage, password ->
+        PhotosApp(
+            storage = storage,
+            password = password,
+            cacheRoot = options.cacheRoot,
+            decodeLibrary = options.decodeLibrary,
         )
-        kotlin.system.exitProcess(3)
+    }
+    val content: @Composable () -> Unit = {
+        PhotosTheme {
+            CompositionLocalProvider(LocalVideoSurface provides VlcVideoSurface()) {
+                Photos(launcher)
+            }
+        }
+    }
+    val control = options.controlPort?.let { port ->
+        ControlServer(port, launcher, content).also(ControlServer::start)
     }
 
-    val app = PhotosApp(
-        storage = storage,
-        password = password,
-        cacheRoot = options.cacheRoot,
-        decodeLibrary = options.decodeLibrary,
-    )
-    val control = options.controlPort?.let {
-        ControlServer(it, app.model) { app.Content() }.also(ControlServer::start)
-    }
-
-    app.model.start()
+    launcher.start()
     application {
         Window(
             onCloseRequest = {
                 control?.stop()
-                app.close()
+                (launcher.state.value as? Launch.Running)?.session?.close()
                 exitApplication()
             },
             title = "Photos",
             // The phone's proportions, so what is reviewed here is what a device would show.
             state = rememberWindowState(size = DpSize(430.dp, 890.dp)),
         ) {
-            app.Content()
+            content()
         }
     }
 }
