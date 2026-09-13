@@ -1040,6 +1040,14 @@ Three facts about the build are decisions rather than defaults:
   file, HEIC or JPEG. Measured on a simulator with one MP4: `AVURLAsset.playable` is **false**
   for the blob under its hash and **true** for the same bytes through the link.
 
+- **Debug and Release link different frameworks.** Both are named `PhotosKit`; Release's is
+  `:app:ios`, and Debug's is `:app:ios-debug` — the same app plus `:app:control`, the control
+  server. A Kotlin framework cannot vary its dependencies by build type, so the boundary is a
+  module rather than a flag: a TestFlight binary carries no listener code at all. The Debug app
+  starts the server only when launched with `PHOTOS_CONTROL_PORT`, binds it to loopback, and adds
+  `NSAllowsLocalNetworking` to its processed `Info.plist` so it can reach a mock zone on the host;
+  Release keeps App Transport Security whole.
+
 `Scripts/ios-sim.sh` is the loop: build, boot a simulator, install, launch, screenshot. It is a
 script rather than a paragraph because the incantation spans four tools, one of which has a rule
 worth knowing — `simctl` forwards an environment variable only when it is named `SIMCTL_CHILD_*`

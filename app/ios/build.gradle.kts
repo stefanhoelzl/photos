@@ -8,10 +8,10 @@ plugins {
 // SQL driver is SQLiter, that the HTTP engine is NSURLSession, or that a HEIC is decoded by
 // ImageIO. Everything it constructs is `:app:domain`'s.
 //
-// It is also the framework Xcode links. `app/ios/Photos.xcodeproj` builds the .app around it;
-// this module is where the Kotlin side of that boundary lives, and `PhotosViewController` is
-// the whole of its Objective-C surface -- one function returning a UIViewController, which is
-// all a Compose app needs to be launched by UIKit.
+// It is also the framework Xcode's **Release** configuration links. `PhotosEntry` is the whole
+// of its Objective-C surface -- one function returning a UIViewController, which is all a Compose
+// app needs to be launched by UIKit. The Debug configuration links `:app:ios-debug` instead,
+// which is this module plus the control server.
 kotlin {
     compilerOptions { optIn.add("kotlin.uuid.ExperimentalUuidApi") }
 
@@ -37,9 +37,6 @@ kotlin {
             implementation(project(":adapter:ios"))
             implementation(compose.runtime)
             implementation(compose.ui)
-            // For `Unconfigured`, the one screen this module draws itself.
-            implementation(compose.foundation)
-            implementation(compose.material3)
             implementation(libs.ktor.client.darwin)
             implementation(libs.coroutines.core)
             implementation(libs.kotlinx.io.core)
