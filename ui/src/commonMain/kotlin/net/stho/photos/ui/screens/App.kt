@@ -95,6 +95,7 @@ public fun App(
                             index = screen.index,
                             preview = ui.preview,
                             videoPath = ui.videoPath,
+                            livePair = ui.livePair,
                             moving = ui.openPhotoMoving,
                             thumbnails = ui.thumbnails,
                             onSelect = model::showPhoto,

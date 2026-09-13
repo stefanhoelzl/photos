@@ -27,3 +27,20 @@ public fun interface VideoSurface {
  */
 public val LocalVideoSurface: androidx.compose.runtime.ProvidableCompositionLocal<VideoSurface> =
     staticCompositionLocalOf { VideoSurface { _, _ -> } }
+
+/**
+ * A Live Photo's still and MOV, played as one — the other thing on the viewer no shared code
+ * can draw.
+ *
+ * A UI-interop port exactly like [VideoSurface]. On iOS it is `PHLivePhotoView`, the system view
+ * §6 says there is nothing to reimplement; the desktop installs none, so the still §5 already
+ * put on screen stays and the LIVE badge says what the phone would do with it.
+ */
+public fun interface LivePhotoSurface {
+    @Composable
+    public fun Render(still: String, video: String, modifier: Modifier)
+}
+
+/** Provided by the composition root. The default draws nothing, for the reason [LocalVideoSurface]'s does. */
+public val LocalLivePhotoSurface: androidx.compose.runtime.ProvidableCompositionLocal<LivePhotoSurface> =
+    staticCompositionLocalOf { LivePhotoSurface { _, _, _ -> } }

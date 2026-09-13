@@ -147,6 +147,33 @@ class AppModelTest {
 
     // ------------------------------------------------------------------------------ fixtures
 
+    @Test
+    fun openingALivePhotoHandsTheViewerBothHalves() = runTest {
+        val live = PhotoRow(
+            id = Uuid.random(),
+            filename = "IMG_0001.HEIC",
+            mediaType = net.stho.photos.model.MediaType.LIVE_PHOTO,
+        )
+        val iceland = album("Iceland", 2024)
+        val pair = LivePair("/cache/blobs/still", "/cache/blobs/video")
+        val own = own(this)
+        val model = AppModel(
+            FakeCatalog(listOf(iceland), photos = listOf(live)),
+            FakeSyncer(SyncOutcome.Succeeded(1, 1)), FakeThumbnails(), FakePreviews(),
+            FakeVideos(pair), idleQueue(own), own,
+        )
+        model.start()
+        model.open(iceland)
+        model.openPhoto(0)
+
+        assertEquals(pair, model.state.value.livePair)
+        assertNull(model.state.value.videoPath, "a Live Photo is not a video")
+
+        // Leaving the photo drops the pair, so the next one opened never flashes the last one's.
+        model.back()
+        assertNull(model.state.value.livePair)
+    }
+
     private fun AppModel.names(): List<String> = state.value.albums.map { it.name }
 
     /**
@@ -175,11 +202,14 @@ class AppModelTest {
         return AppModel(FakeCatalog(albums), FakeSyncer(outcome), FakeThumbnails(), FakePreviews(), FakeVideos(), idleQueue(own), own)
     }
 
-    private class FakeCatalog(private val albums: List<Album>) : Catalog {
+    private class FakeCatalog(
+        private val albums: List<Album>,
+        private val photos: List<PhotoRow> = emptyList(),
+    ) : Catalog {
         override fun albums(under: Uuid?): List<Album> = if (under == null) albums else emptyList()
         override fun search(text: String): List<Album> =
             albums.filter { it.nameFolded.contains(text.lowercase()) }
-        override fun photos(inAlbum: Uuid): List<PhotoRow> = emptyList()
+        override fun photos(inAlbum: Uuid): List<PhotoRow> = photos
         override fun album(id: Uuid): Album? = albums.firstOrNull { it.id == id }
         override fun totals() = Totals(albums.size, albums.sumOf { it.photoCount })
         override fun blobs(): Map<Uuid, List<BlobRef>> = emptyMap()
@@ -252,8 +282,9 @@ class AppModelTest {
     )
 
     /** No transcode ever arrives, so the poster is what the viewer keeps showing. */
-    private class FakeVideos : Videos {
+    private class FakeVideos(private val pair: LivePair? = null) : Videos {
         override suspend fun localFile(photo: PhotoRow): String? = null
+        override suspend fun livePair(photo: PhotoRow): LivePair? = pair
     }
 
     /** No previews: enough for the state tier, which decides *when* to ask, not what comes back. */

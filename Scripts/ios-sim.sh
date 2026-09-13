@@ -35,6 +35,7 @@ DEVICE="${PHOTOS_SIM_DEVICE:-iPhone 17 Pro}"
 DERIVED=build/DerivedData
 APP="$DERIVED/Build/Products/Debug-iphonesimulator/Photos.app"
 LOG=build/ios-sim.log
+BUILD_LOG=build/ios-sim-build.log
 
 build() {
   xcodebuild build \
@@ -45,8 +46,16 @@ build() {
     CODE_SIGN_IDENTITY=- \
     CODE_SIGNING_REQUIRED=NO \
     CODE_SIGNING_ALLOWED=YES \
-    | grep -iE "error:|warning: .*\.(swift|kt):|BUILD" || true
-  [ -d "$APP" ] || { echo "no app bundle at $APP" >&2; exit 1; }
+    >"$BUILD_LOG" 2>&1 || {
+      # Checked by exit status, never by whether a bundle exists: a failed build leaves the
+      # previous run's Photos.app in place, and launching that is a run that looks like it
+      # worked while testing code that was never compiled -- measured, once, as a probe that
+      # printed nothing because the app it launched did not contain it.
+      grep -E "e: file://|error: [^C]" "$BUILD_LOG" | sort -u >&2 || tail -20 "$BUILD_LOG" >&2
+      echo "build failed; full log in $BUILD_LOG" >&2
+      exit 1
+    }
+  grep -E "BUILD SUCCEEDED" "$BUILD_LOG"
 }
 
 booted() {

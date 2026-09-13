@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import kotlin.uuid.Uuid
 import net.stho.photos.model.MediaType
 import net.stho.photos.model.PhotoRow
+import net.stho.photos.app.LivePair
 import net.stho.photos.app.Preview
 
 /**
@@ -48,6 +49,8 @@ public fun Viewer(
     index: Int,
     preview: Preview?,
     videoPath: String?,
+    /** Both halves of an open Live Photo, once on disk. */
+    livePair: LivePair?,
     thumbnails: Map<Uuid, ByteArray>,
     /** A worker is fetching this photo's blob right now, so the placeholder pulses. */
     moving: Boolean,
@@ -79,6 +82,14 @@ public fun Viewer(
         }
         if (photo.mediaType == MediaType.VIDEO && videoPath != null) {
             LocalVideoSurface.current.Render(videoPath, Modifier.fillMaxSize().padding(bottom = 96.dp))
+        }
+
+        if (photo.mediaType == MediaType.LIVE_PHOTO && livePair != null) {
+            LocalLivePhotoSurface.current.Render(
+                livePair.still,
+                livePair.video,
+                Modifier.fillMaxSize().padding(bottom = 96.dp),
+            )
         }
 
         if (photo.mediaType == MediaType.LIVE_PHOTO) {

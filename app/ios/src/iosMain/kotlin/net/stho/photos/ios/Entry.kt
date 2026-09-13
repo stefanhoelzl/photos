@@ -1,9 +1,12 @@
 package net.stho.photos.ios
 
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.window.ComposeUIViewController
 import net.stho.photos.adapter.ios.KeychainKeyring
 import net.stho.photos.app.Account
 import net.stho.photos.app.Launcher
+import net.stho.photos.ui.screens.LocalLivePhotoSurface
+import net.stho.photos.ui.screens.LocalVideoSurface
 import net.stho.photos.ui.screens.Photos
 import net.stho.photos.ui.screens.PhotosTheme
 import platform.UIKit.UIViewController
@@ -36,7 +39,13 @@ public object PhotosEntry {
         launcher.start()
         return ComposeUIViewController {
             PhotosTheme {
-                Photos(launcher)
+                // The two things on the viewer no shared code can draw (§6's interop table).
+                CompositionLocalProvider(
+                    LocalVideoSurface provides AvVideoSurface(),
+                    LocalLivePhotoSurface provides PhLivePhotoSurface(),
+                ) {
+                    Photos(launcher)
+                }
             }
         }
     }
