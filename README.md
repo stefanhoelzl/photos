@@ -24,9 +24,9 @@ download queue and no screen to keep in order.
 | `:app:cli` | the shipped `photos-cli`: argument parsing, a composition root, exit codes |
 | `:app:desktop` | the app's Linux root: JDBC, OkHttp, libvlc, the FFM decode shim, and the control server `:tests:app` drives |
 | `:app:ios` | the app's iOS root: SQLiter, NSURLSession, the ImageIO decoder, `AVPlayerViewController` and `PHLivePhotoView` for playback, and the framework `app/ios/Photos.xcodeproj` wraps |
-| `:tests:fixtures` | synthetic media — JPEG, HEIC, video, CR2, PNG, EXIF — generated, never committed |
+| `:tests:fixtures` | synthetic media — JPEG, HEIC, video, CR2, PNG, EXIF — generated, never committed; `:tests:fixtures:fixtureMedia` also writes the set the app suites sync (a still, a video, a Live Photo pair) |
 | `:tests:cli` | the end-to-end suite: declares a library and a zone, runs the *shipped* binary, asserts both |
-| `:tests:app` | its counterpart for the app: declares a zone, starts the real composition root, drives it through the control API |
+| `:tests:app` | its counterpart for the app: declares a zone — shards plus real media blobs — starts the real composition root, and asserts what the model reports and what lands on disk |
 
 Not modules, and not Kotlin:
 
