@@ -28,6 +28,10 @@ ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-curl = { module = "io.ktor:ktor-client-curl", version.ref = "ktor" }
 ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
 ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
+# The control server both app roots start in development builds (:app:control). CIO because it is
+# the one Ktor engine published for Kotlin/Native iOS as well as the JVM.
+ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
+ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
 vlcj = { module = "uk.co.caprica:vlcj", version.ref = "vlcj" }
 slf4j-nop = { module = "org.slf4j:slf4j-nop", version = "2.0.16" }
 dbus-java-core = { module = "com.github.hypfvieh:dbus-java-core", version.ref = "dbus-java" }

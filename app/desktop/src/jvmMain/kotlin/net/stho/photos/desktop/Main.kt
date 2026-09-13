@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import net.stho.photos.app.Account
 import net.stho.photos.app.Launch
 import net.stho.photos.app.Launcher
+import net.stho.photos.control.ControlServer
 import net.stho.photos.ui.screens.Photos
 
 /**
@@ -59,7 +60,7 @@ public fun main(args: Array<String>) {
         }
     }
     val control = options.controlPort?.let { port ->
-        ControlServer(port, launcher, content).also(ControlServer::start)
+        ControlServer(port, launcher, screenshot = offscreen(content)).also(ControlServer::start)
     }
 
     launcher.start()

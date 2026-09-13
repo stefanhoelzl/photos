@@ -20,6 +20,8 @@ kotlin {
         jvmMain.dependencies {
             implementation(project(":ui"))
             implementation(project(":app:domain"))
+            // The control server, always: the desktop is a development surface (decision 7).
+            implementation(project(":app:control"))
             implementation(project(":domain"))
             implementation(project(":adapter:linux"))
             implementation(compose.desktop.currentOs)

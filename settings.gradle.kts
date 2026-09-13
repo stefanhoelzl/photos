@@ -34,7 +34,11 @@ include(":app:cli")
 // follows the same rule: value adapters only, and no Compose import anywhere. What the phone
 // needs that a value cannot express -- a video surface, a decoded image -- lives in `:app:ios`,
 // which is already a UI module.
+// `:app:control` is the server both roots start when they are being driven by a test or an
+// agent. A module of its own so that the release boundary is an edge a build can check: the iOS
+// Release framework does not link it, so a TestFlight binary carries no listener at all.
 include(":app:domain")
+include(":app:control")
 include(":ui")
 include(":app:desktop")
 include(":adapter:ios")
