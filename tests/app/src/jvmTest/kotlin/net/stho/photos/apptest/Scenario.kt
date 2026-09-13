@@ -50,7 +50,14 @@ internal fun scenario(label: String, body: suspend Scenario.() -> Unit) {
     // after a failure, and it is gitignored with the rest of `build/`.
     val root = System.getProperty("photos.test.scratch")?.let(java.nio.file.Path::of)
         ?: Files.createTempDirectory("photos-app")
-    val scratch = root.resolve(label).also { Files.createDirectories(it) }
+    // Emptied first, as `zone.clear()` empties the bucket. The cache is kept after a run so a
+    // failure can be inspected, which means the *next* run inherits it -- and a pack from a
+    // previous run's album, under a different content hash, is exactly what a scenario asserting
+    // "packs holds this album's pack and nothing else" then trips over.
+    val scratch = root.resolve(label).also {
+        it.toFile().deleteRecursively()
+        Files.createDirectories(it)
+    }
     val cacheRoot = Path(scratch.resolve("cache").absolutePathString())
     runBlocking {
         val s3 = S3Client(
