@@ -43,6 +43,10 @@ include(":ui")
 include(":app:desktop")
 include(":adapter:ios")
 include(":app:ios")
+// The Debug build's framework: `:app:ios` plus the control server. Xcode's Debug configuration
+// links this one and Release links `:app:ios`, so the release boundary of decision 5 is which
+// module a configuration builds -- not a flag inside one binary.
+include(":app:ios-debug")
 
 // Test-only modules. `:tests:fixtures` generates the synthetic media both the adapter's own
 // tests and the end-to-end suite work from; `:tests:cli` drives the shipped binary.

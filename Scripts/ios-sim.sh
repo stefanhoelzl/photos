@@ -17,13 +17,16 @@
 # The app's console goes to build/ios-sim.log, which is where an uncaught Kotlin exception
 # ends up -- the failure this loop hits most.
 #
-# Credentials come from PHOTOS_ENDPOINT / PHOTOS_PASSWORD, exactly as the CLI and the desktop
-# app take them, so `secrets-env Scripts/ios-sim.sh` works. Without them the app says it is not
-# set up rather than showing an empty library -- until §1's setup screen lands, at which point
-# this half of the script goes away.
+# It builds the Debug configuration, whose framework carries the control server. Launched with
+# PHOTOS_CONTROL_PORT set, the app starts it on loopback, and `curl 127.0.0.1:$PORT/state` is the
+# app's own account of itself; `/setup?url=…&password=…` gets past §1's setup screen without a
+# keyboard, through the real Keychain.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# The build and console logs land here. On a fresh checkout nothing has created it yet, and a
+# redirect into a missing directory fails before xcodebuild ever starts.
+mkdir -p build
 
 PROJECT=app/ios/Photos.xcodeproj
 SCHEME=Photos
@@ -74,8 +77,7 @@ launch() {
   #
   # simctl passes on only SIMCTL_CHILD_*, stripping the prefix as it does. Measured the hard
   # way: a plain `export PHOTOS_ENDPOINT` reaches simctl and not the app.
-  SIMCTL_CHILD_PHOTOS_ENDPOINT="${PHOTOS_ENDPOINT:-}" \
-  SIMCTL_CHILD_PHOTOS_PASSWORD="${PHOTOS_PASSWORD:-}" \
+  SIMCTL_CHILD_PHOTOS_CONTROL_PORT="${PHOTOS_CONTROL_PORT:-}" \
     xcrun simctl launch --console-pty "$DEVICE" "$BUNDLE_ID" >"$LOG" 2>&1 &
   CONSOLE_PID=$!
   # The screenshot wants the first frame, not the first instant.

@@ -16,12 +16,16 @@ struct PhotosApp: App {
     }
 }
 
-// The bridge, and it is deliberately this small. `PhotosEntry.viewController()` is the
-// framework's whole exported surface -- one object, one function -- so nothing here can drift
-// from the Kotlin side without the compiler saying so.
+// The bridge, and it is deliberately this small. Each configuration links its own PhotosKit and
+// calls its one entry point: Debug's also starts the control server when launched with a port,
+// and Release's framework has no control server in it to start (decision 5).
 struct ComposeView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIViewController {
+        #if DEBUG
+        PhotosDebugEntry.shared.viewController()
+        #else
         PhotosEntry.shared.viewController()
+        #endif
     }
 
     func updateUIViewController(_ controller: UIViewController, context: Context) {}

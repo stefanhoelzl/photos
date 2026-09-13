@@ -24,6 +24,7 @@ download queue and no screen to keep in order.
 | `:app:cli` | the shipped `photos-cli`: argument parsing, a composition root, exit codes |
 | `:app:control` | the control server both roots start when driven by a test or an agent — `/state`, navigation, cache actions, `/setup`, `/logout`; kept out of the iOS release build |
 | `:app:desktop` | the app's Linux root: JDBC, OkHttp, libvlc, the FFM decode shim, and the offscreen render behind `/screenshot` |
+| `:app:ios-debug` | the framework Xcode's Debug configuration links: `:app:ios` plus `:app:control`, started when launched with `PHOTOS_CONTROL_PORT` |
 | `:app:ios` | the app's iOS root: SQLiter, NSURLSession, the ImageIO decoder, `AVPlayerViewController` and `PHLivePhotoView` for playback, and the framework `app/ios/Photos.xcodeproj` wraps |
 | `:tests:fixtures` | synthetic media — JPEG, HEIC, video, CR2, PNG, EXIF — generated, never committed; `:tests:fixtures:fixtureMedia` also writes the set the app suites sync (a still, a video, a Live Photo pair) |
 | `:tests:cli` | the end-to-end suite: declares a library and a zone, runs the *shipped* binary, asserts both |

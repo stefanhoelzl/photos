@@ -66,6 +66,7 @@
 				A1000600 /* Sources */,
 				A1000200 /* Frameworks */,
 				A1000601 /* Resources */,
+				A1000502 /* Allow loopback HTTP in Debug */,
 			);
 			buildRules = (
 			);
@@ -134,7 +135,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Gradle builds the framework, and Xcode links what it produces. `embedAndSign...`\n# reads CONFIGURATION, SDK_NAME, ARCHS and TARGET_BUILD_DIR out of this environment,\n# which is why it can only run here and not from a terminal.\n#\n# `cd` four levels because this project lives at app/ios/ and the wrapper is at the root.\ncd \"$SRCROOT/../..\" || exit 1\n./gradlew :app:ios:embedAndSignAppleFrameworkForXcode\n";
+			shellScript = "# Gradle builds the framework, and Xcode links what it produces. `embedAndSign...`\n# reads CONFIGURATION, SDK_NAME, ARCHS and TARGET_BUILD_DIR out of this environment,\n# which is why it can only run here and not from a terminal.\n#\n# `cd` four levels because this project lives at app/ios/ and the wrapper is at the root.\ncd \"$SRCROOT/../..\" || exit 1\n# Debug links :app:ios-debug -- the app plus the control server. Every other configuration links\n# :app:ios, which cannot reach the control server at all (decision 5). Both frameworks are named\n# PhotosKit, so App.swift imports one name and picks its entry point with #if DEBUG.\nif [ \"$CONFIGURATION\" = Debug ]; then module=:app:ios-debug; else module=:app:ios; fi\n./gradlew \"$module:embedAndSignAppleFrameworkForXcode\"\n";
+		};
+		A1000502 /* Allow loopback HTTP in Debug */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
+			);
+			name = "Allow loopback HTTP in Debug";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Decision 10: plain HTTP to loopback, so the Debug app reaches S3Mock on the host. Debug only --\n# a Release build keeps App Transport Security whole. Written into the *processed* plist rather\n# than the source one, so there is one Info.plist in the repo and no preprocessing of XML.\n[ \"$CONFIGURATION\" = Debug ] || exit 0\nplist=\"$TARGET_BUILD_DIR/$INFOPLIST_PATH\"\n/usr/libexec/PlistBuddy -c \"Add :NSAppTransportSecurity dict\" \"$plist\" 2>/dev/null || true\n/usr/libexec/PlistBuddy -c \"Delete :NSAppTransportSecurity:NSAllowsLocalNetworking\" \"$plist\" 2>/dev/null || true\n/usr/libexec/PlistBuddy -c \"Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true\" \"$plist\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -209,7 +226,7 @@
 				ENABLE_PREVIEWS = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(SRCROOT)/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
+					"$(SRCROOT)/../ios-debug/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
 				);
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Photos/Info.plist;
