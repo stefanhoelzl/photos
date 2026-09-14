@@ -46,6 +46,25 @@ class MergedCatalogTest {
     }
 
     /**
+     * §8 writes a phone album's shard before its objects, so while it is `uploading` the shard
+     * names blobs that may not exist yet. No reader shows it until the second write lands.
+     */
+    @Test
+    fun anAlbumStillUploadingStaysHiddenUntilItHasLanded() {
+        val built = build(
+            listOf(
+                album("Landed", photos = listOf(photo("IMG_0001.heic")), state = AlbumState.UPLOADED),
+                album("In flight", photos = listOf(photo("IMG_0002.heic")), state = AlbumState.UPLOADING),
+            ),
+        )
+
+        assertEquals(listOf("Landed"), built.reader.allAlbums().map(Album::name))
+        assertEquals(1, built.reader.photoCount())
+        assertEquals(1, built.summary.albums)
+        assertEquals(1, built.summary.photos)
+    }
+
+    /**
      * §4's rebuild has no incremental path. Replaying a *smaller* set must leave nothing behind
      * from the larger one, or "stale rows are impossible" is merely a wish.
      */

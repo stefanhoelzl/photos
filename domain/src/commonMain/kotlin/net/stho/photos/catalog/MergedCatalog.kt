@@ -64,16 +64,23 @@ public class CatalogWriter(public val path: Path, drivers: SqlDrivers) : AutoClo
      *
      * Shards arrive already parsed. A shard too new to read never reaches here — the sync skips
      * it and reports it — so anything in [shards] is replayable.
+     *
+     * Replayable is not the same as shown. An album the phone is still uploading has a shard
+     * naming objects that may not exist yet (§8 writes it first, on purpose), so it stays out of
+     * the catalog on every device until the second write marks it `uploaded`. The phone doing
+     * the uploading shows its progress instead, and nothing else could tell it apart from an
+     * album whose blobs went missing.
      */
     public fun rebuild(shards: List<Shard>): RebuildSummary {
-        val present = shards.mapTo(mutableSetOf()) { it.info.id }
+        val visible = shards.filter { it.info.state != AlbumState.UPLOADING }
+        val present = visible.mapTo(mutableSetOf()) { it.info.id }
         val queries = database.mergedQueries
 
         database.transaction {
             queries.deleteAllPhotos()
             queries.deleteAllAlbums()
 
-            for (shard in shards) {
+            for (shard in visible) {
                 val info = shard.info
                 // A parent naming a shard that is not here is not an error: the album surfaces
                 // at the root and the sync reports it, so no album can become unreachable
@@ -120,9 +127,9 @@ public class CatalogWriter(public val path: Path, drivers: SqlDrivers) : AutoClo
         }
 
         return RebuildSummary(
-            albums = shards.size,
-            photos = shards.sumOf { it.photos.size },
-            orphanedAlbums = shards.mapNotNull { shard ->
+            albums = visible.size,
+            photos = visible.sumOf { it.photos.size },
+            orphanedAlbums = visible.mapNotNull { shard ->
                 shard.info.id.takeIf { shard.info.parent?.let(present::contains) == false }
             },
         )
