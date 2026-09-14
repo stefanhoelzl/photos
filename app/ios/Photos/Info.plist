@@ -27,6 +27,11 @@
 	<true/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- Full library access, not the picker's (§8): albums are listed to name the new one, and the
+	     photos can be deleted once they have landed. Without this key the first request for
+	     access terminates the app. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Upload albums from your library to your storage zone, and optionally remove them from this iPhone once they have arrived.</string>
 	<!-- HTTPS to the storage zone and the platform's own crypto for SigV4 and the Keychain,
 	     and nothing proprietary: that is precisely what this exemption covers. Declared here so
 	     an upload goes straight to internal testers rather than stalling in Missing Compliance,
