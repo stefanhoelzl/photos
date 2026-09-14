@@ -43,6 +43,7 @@ import platform.Photos.PHAssetResourceManager
 import platform.Photos.PHAssetResourceRequestOptions
 import platform.Photos.PHAssetResourceType
 import platform.Photos.PHAssetResourceTypeFullSizePairedVideo
+import platform.Photos.PHAssetResourceTypeFullSizePhoto
 import platform.Photos.PHAssetResourceTypeFullSizeVideo
 import platform.Photos.PHAssetResourceTypePairedVideo
 import platform.Photos.PHAssetResourceTypePhoto
@@ -60,7 +61,6 @@ import platform.Photos.PHImageManager
 import platform.Photos.PHImageManagerMaximumSize
 import platform.Photos.PHImageRequestOptions
 import platform.Photos.PHImageRequestOptionsDeliveryModeHighQualityFormat
-import platform.Photos.PHImageRequestOptionsVersionCurrent
 import platform.Photos.PHPhotoLibrary
 import platform.UIKit.UIApplication
 import platform.UIKit.UIApplicationOpenSettingsURLString
@@ -153,9 +153,9 @@ internal class PhotoKitGallery : Gallery {
         var paired: Path? = null
         when (asset.mediaType) {
             MediaType.VIDEO -> file = write(resources.pick(PHAssetResourceTypeFullSizeVideo, PHAssetResourceTypeVideo), directory)
-            MediaType.PHOTO -> file = still(found, directory)
+            MediaType.PHOTO -> file = still(found, resources, directory)
             MediaType.LIVE_PHOTO -> {
-                file = still(found, directory)
+                file = still(found, resources, directory)
                 paired = write(resources.pick(PHAssetResourceTypeFullSizePairedVideo, PHAssetResourceTypePairedVideo), directory)
             }
         }
@@ -189,25 +189,21 @@ internal class PhotoKitGallery : Gallery {
 
     // ------------------------------------------------------------------------------ exporting
 
-    private suspend fun still(asset: PHAsset, directory: Path): Path {
-        val (data, uti) = suspendCancellableCoroutine<Pair<NSData?, String?>> { continuation ->
-            val options = PHImageRequestOptions().apply {
-                version = PHImageRequestOptionsVersionCurrent
-                deliveryMode = PHImageRequestOptionsDeliveryModeHighQualityFormat
-                networkAccessAllowed = true
-            }
-            PHImageManager.defaultManager().requestImageDataAndOrientationForAsset(asset, options) { data, uti, _, _ ->
-                if (continuation.isActive) continuation.resume(data to uti)
-            }
-        }
-        val extension = when (uti) {
-            "public.heic" -> "heic"
-            "public.jpeg" -> "jpg"
-            "public.png" -> "png"
-            else -> null
-        }
-        if (data != null && extension != null) return save(data, directory, extension)
-        // A RAW, or anything the pull cannot use: rendered, exactly as Photos draws it.
+    /**
+     * The still's own bytes — its edit's full-size render when it was edited, otherwise the file as
+     * it entered the library — and a rendering only for a RAW, which the pull cannot use.
+     *
+     * By resource rather than through `PHImageManager`'s image data, whose type identifiers turned
+     * out to be the wrong thing to match on: measured on the simulator, a HEIF identified as
+     * `public.heif` rather than `public.heic` fell through to the render and went up as a JPEG. A
+     * resource is written byte for byte whatever it is called, which is what §8 asks for — and for
+     * a Live Photo it is what keeps the maker note that pairs the still with its MOV.
+     */
+    private suspend fun still(asset: PHAsset, resources: List<PHAssetResource>, directory: Path): Path {
+        val resource = resources.firstOrNull { it.type == PHAssetResourceTypeFullSizePhoto }
+            ?: resources.firstOrNull { it.type == PHAssetResourceTypePhoto }
+        if (resource != null && "raw" !in resource.uniformTypeIdentifier.lowercase()) return write(resource, directory)
+        // A RAW (ProRAW's DNG, a camera RAW with no JPEG beside it): rendered, as Photos draws it.
         val rendered = requireNotNull(image(asset, PHImageManagerMaximumSize.readValue(), PHImageContentModeDefault)) {
             "the photo library could not render this photo"
         }

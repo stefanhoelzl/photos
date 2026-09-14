@@ -1956,13 +1956,20 @@ shows whether the overlay keeps up with the native map while panning.
 
 **G · iOS upload** = A+B.
 
-> **G runs on the harness and is written for the phone.** The whole flow — picker, name dialog,
+> **G runs on the harness and on a simulator.** The whole flow — picker, name dialog,
 > preparation, shard first, transfer with read-back, landing, gallery deletion, cancel — runs on
 > the desktop against S3Mock with a folder standing in for the library (`:tests:app`'s
-> `UploadTest`), and every reader skips an `uploading` shard. The phone's two adapters, the
-> PhotoKit gallery and the background `URLSession` uploader, are written but have not yet been
-> built or run on macOS. Still owed on a device: whether an edited Live Photo's pair keeps its
-> content identifier.
+> `UploadTest`), and every reader skips an `uploading` shard. On a simulator `:tests:ios`'s
+> `UploadTest` uploads the device's own library through PhotoKit and a background `URLSession`,
+> and asserts the zone: an `uploaded` shard, a row per asset, every object at the size its row
+> names, and a seeded HEIC byte for byte. Still owed on a device: deleting from the library, which
+> iOS confirms through an alert no scenario can answer, and whether an edited Live Photo's pair
+> keeps its content identifier.
+>
+> Two things the simulator taught. `simctl privacy grant photos` records a system-set grant that
+> iOS 26 still prompts for, so the harness rewrites it as the user's choice. And a still is
+> exported by resource, byte for byte: matching `PHImageManager`'s type identifier sent a HEIF
+> labelled `public.heif` through the render path, and it went up as a JPEG.
 
 **H · systemd units** = D. Pull is not part of it: `sync` already pulls and claims
 phone-owned albums, so H is the units and nothing more.
