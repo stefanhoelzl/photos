@@ -368,7 +368,8 @@ public class ControlServer(
             }
             listOf(
                 """"picker":{"access":${picker.access?.name?.json() ?: "null"},"albums":[$galleryAlbums],""" +
-                    """"assets":[$assets],"selected":${picker.selected.size},"naming":$naming}""",
+                    """"assets":[$assets],"selected":${picker.selected.size},"naming":$naming,""" +
+                    """"failure":${picker.failure?.json() ?: "null"}}""",
                 "\"uploads\":[$statuses]",
             )
         }.orEmpty()

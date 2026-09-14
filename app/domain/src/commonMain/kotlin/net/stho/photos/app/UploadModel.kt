@@ -1,6 +1,7 @@
 package net.stho.photos.app
 
 import kotlin.uuid.Uuid
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,6 +23,8 @@ public data class PickerUi(
     val thumbnails: Map<String, ByteArray> = emptyMap(),
     /** The name dialog, while it is up. */
     val naming: Naming? = null,
+    /** Why the library could not be read — §1's rule: a picker that stays empty says so. */
+    val failure: String? = null,
 )
 
 public data class Naming(
@@ -56,15 +59,24 @@ public class UploadModel(
         loading?.cancel()
         _picker.value = PickerUi(parent = parent, parentName = parentName)
         loading = scope.launch {
-            val access = gallery.requestAccess()
-            _picker.update { it.copy(access = access) }
-            if (access != GalleryAccess.Full) return@launch
-            val albums = gallery.albums()
-            val assets = gallery.assets(null)
-            _picker.update { it.copy(albums = albums, assets = assets) }
-            for (asset in assets) {
-                val jpeg = gallery.thumbnail(asset) ?: continue
-                _picker.update { it.copy(thumbnails = it.thumbnails + (asset.id to jpeg)) }
+            try {
+                val access = gallery.requestAccess()
+                _picker.update { it.copy(access = access) }
+                if (access != GalleryAccess.Full) return@launch
+                val albums = gallery.albums()
+                val assets = gallery.assets(null)
+                _picker.update { it.copy(albums = albums, assets = assets) }
+                for (asset in assets) {
+                    val jpeg = gallery.thumbnail(asset) ?: continue
+                    _picker.update { it.copy(thumbnails = it.thumbnails + (asset.id to jpeg)) }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                // Otherwise the coroutine dies quietly and the picker says "opening" for ever.
+                _picker.update {
+                    it.copy(failure = "The photo library could not be read: ${failure.message ?: failure::class.simpleName}")
+                }
             }
         }
     }

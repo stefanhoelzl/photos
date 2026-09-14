@@ -47,8 +47,10 @@ import platform.Photos.PHAssetResourceTypeFullSizeVideo
 import platform.Photos.PHAssetResourceTypePairedVideo
 import platform.Photos.PHAssetResourceTypePhoto
 import platform.Photos.PHAssetResourceTypeVideo
+import platform.Photos.PHAuthorizationStatus
 import platform.Photos.PHAuthorizationStatusAuthorized
 import platform.Photos.PHAuthorizationStatusLimited
+import platform.Photos.PHAuthorizationStatusNotDetermined
 import platform.Photos.PHFetchOptions
 import platform.Photos.PHFetchResult
 import platform.Photos.PHImageContentMode
@@ -86,16 +88,21 @@ import platform.posix.memcpy
  */
 internal class PhotoKitGallery : Gallery {
 
-    override suspend fun requestAccess(): GalleryAccess = suspendCancellableCoroutine { continuation ->
-        PHPhotoLibrary.requestAuthorizationForAccessLevel(PHAccessLevelReadWrite) { status ->
-            continuation.resume(
-                when (status) {
-                    PHAuthorizationStatusAuthorized -> GalleryAccess.Full
-                    PHAuthorizationStatusLimited -> GalleryAccess.Limited
-                    else -> GalleryAccess.Denied
-                },
-            )
+    /** Asks only when nobody has decided yet; a decision already made is read, not requested again. */
+    override suspend fun requestAccess(): GalleryAccess {
+        val known = PHPhotoLibrary.authorizationStatusForAccessLevel(PHAccessLevelReadWrite)
+        if (known != PHAuthorizationStatusNotDetermined) return access(known)
+        return suspendCancellableCoroutine { continuation ->
+            PHPhotoLibrary.requestAuthorizationForAccessLevel(PHAccessLevelReadWrite) { status ->
+                if (continuation.isActive) continuation.resume(access(status))
+            }
         }
+    }
+
+    private fun access(status: PHAuthorizationStatus): GalleryAccess = when (status) {
+        PHAuthorizationStatusAuthorized -> GalleryAccess.Full
+        PHAuthorizationStatusLimited -> GalleryAccess.Limited
+        else -> GalleryAccess.Denied
     }
 
     override suspend fun albums(): List<GalleryAlbum> {
