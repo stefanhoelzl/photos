@@ -981,8 +981,12 @@ it jumped a slot each time the map came and went.
 | Albums (map) | gear, **list**, upload |
 | Container list | gear, **map**, sort, upload |
 | Container map | gear, **list**, upload |
-| Album grid | gear, **map**, upload — no sort: an album's photos have one order (§3) |
-| Album map | gear, **grid**, upload |
+| Album grid | gear, **map** — no sort: an album's photos have one order (§3) |
+| Album map | gear, **grid** |
+
+**An album's own screens carry no upload.** An upload always makes a new album whose parent is
+the screen it started from (§8), and an album holds photos or sub-albums, never both (§2) — so
+from inside an album of photos there is nowhere legal for one to go.
 | Fullscreen viewer | gear, share, set-cover |
 | Settings | — |
 

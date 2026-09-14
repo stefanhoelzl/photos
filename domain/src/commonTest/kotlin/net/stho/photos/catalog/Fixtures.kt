@@ -77,6 +77,7 @@ internal fun album(
     coverPhotoId: Uuid? = null,
     thumbsId: ObjectId? = blobId(),
     schemaVersion: Int = SHARD_SCHEMA_VERSION,
+    state: AlbumState = AlbumState.ENCODED,
 ): Shard = Shard(
     info = AlbumInfo(
         id = Uuid.random(),
@@ -85,6 +86,9 @@ internal fun album(
         sourcePath = name,
         coverPhotoId = coverPhotoId,
         thumbsId = thumbsId,
+        state = state,
+        // The schema's CHECK: only an encoded album has a profile.
+        encodingVersion = if (state == AlbumState.ENCODED) DerivativeSpec.ENCODING_VERSION else 0,
         addedAt = fixtureEpoch,
         schemaVersion = schemaVersion,
     ),

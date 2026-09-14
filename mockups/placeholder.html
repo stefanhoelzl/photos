@@ -483,7 +483,7 @@ phone(`${st}${hdr('Albums','239 albums · map view',gb(I.gear)+gb(I.list)+gb(I.s
 
 /* 8 map drilled */
 const dots=[[38,40],[44,46],[41,52],[52,44],[49,55],[57,50],[36,58],[61,61],[46,63],[55,37],[64,42],[33,47]];
-phone(`${st}${hdr('Coast Road 2019','88 GPS-tagged photos · map view',gb(I.gear)+gb(I.grid)+gb(I.sort)+gb(I.up),true)}
+phone(`${st}${hdr('Coast Road 2019','88 GPS-tagged photos · map view',gb(I.gear)+gb(I.grid)+gb(I.sort),true)}
  <div class="body"><div class="map">
   <div class="land" style="left:8%;top:22%;width:84%;height:58%"></div>
   ${dots.map(d=>`<div class="dot" style="left:${d[0]}%;top:${d[1]}%"></div>`).join('')}
