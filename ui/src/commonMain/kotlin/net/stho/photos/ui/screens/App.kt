@@ -3,7 +3,10 @@ package net.stho.photos.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,7 +42,10 @@ public fun App(
     val ui by model.state.collectAsState()
     val arrivals by thumbnails.arrivals.collectAsState()
     run {
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
+        // The ground runs under the status bar and home indicator; the content does not. On a
+        // phone those insets are the notch and the bottom bar, and without this the nav bar's
+        // gear sat under the clock (measured on an SE2). On the desktop they are zero.
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing)) {
             Column(Modifier.fillMaxSize()) {
                 when (val screen = ui.screen) {
                     is Screen.Albums -> {
