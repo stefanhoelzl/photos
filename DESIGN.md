@@ -1019,7 +1019,7 @@ in rather than generated.
 The Kotlin framework exports **one object with one function**, `PhotosEntry.viewController()`.
 Swift never learns that there is a model, a queue or a catalog.
 
-Three facts about the build are decisions rather than defaults:
+Five facts about the build are decisions rather than defaults:
 
 - **The framework is static**, so the `.app` embeds no dynamic framework and re-signs nothing.
   The consequence is that the final link is Xcode's rather than Kotlin's, which is why the app
@@ -1031,7 +1031,6 @@ Three facts about the build are decisions rather than defaults:
 - **`CADisableMinimumFrameDurationOnPhone` is set.** Without it iOS caps the app at 60 fps and
   Compose refuses to start rather than allow that quietly — which matters here more than in most
   apps, because §10's remaining unknown is a question about frame rate.
-
 - **Playback goes through an extension.** §2 names every blob by its hash alone, and
   AVFoundation and PhotoKit both decide what a file is from its extension before reading a byte.
   So a played blob is reached through a symbolic link, `playable/<id>.<ext>`, beside the cache —
@@ -1814,8 +1813,14 @@ means offering it no cache controls, since it has nothing to fetch and nothing t
 
 > **E.2 is the download queue** (§6): the ladder, the three worker roles, the per-album strip on
 > the album list, and Settings losing its album list. It is built and running on the harness
-> against the live zone. Two pieces of it are iOS-only and therefore unbuilt: tier 5's
+> against the live zone. Two pieces of it are iOS-only and still unbuilt: tier 5's
 > background `URLSession`, and persisting the requested-album set across a kill.
+>
+> **E.3 is the phone.** The app builds for iOS, plays videos and Live Photos in the platform's
+> own views, keeps the key in the Keychain, and runs the desktop harness's scenarios on a
+> simulator on every pull request. Still owed: share from the viewer, and anything only a device
+> answers — §10's grid unknown, and the Keychain's biometric gate, which a simulator stores but
+> does not enforce.
 
 **F · Map** = B — parallel with E.
 

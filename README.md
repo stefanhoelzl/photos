@@ -109,7 +109,7 @@ an estimate.
 Scripts/build-native.sh          # once: imaging stack, sqlite, openssl, curl, dbus
 ./gradlew build                  # 319 tests
 ./gradlew :app:cli:linkReleaseExecutableLinuxX64
-./gradlew :tests:cli:e2e         # 14 scenarios against the shipped binary — opt-in
+./gradlew :tests:cli:e2e         # 17 scenarios against the shipped binary — opt-in
 ```
 
 ### The phone
