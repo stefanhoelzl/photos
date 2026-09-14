@@ -1,5 +1,7 @@
 package net.stho.photos.ui.screens
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -39,7 +41,8 @@ public fun SettingsScreen(
     storageUrl: StorageUrl,
     onLogOut: () -> Unit,
 ) {
-    Column(Modifier.fillMaxSize()) {
+    // Scrolls: on a small phone, with a sync failure's detail row, Log out sits below the fold.
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         // §1: read-only, and nothing carries a disclosure arrow. Changing either value means
         // logging out and setting up again, so an edit affordance here would be a second path
         // to a configured state -- which is the thing §1 refuses to have.
