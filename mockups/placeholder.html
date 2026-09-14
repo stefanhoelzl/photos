@@ -353,7 +353,7 @@ const CACHE=[
 const cache=i=>CACHE[i%CACHE.length];
 
 /* 1 album list */
-phone(`${st}${hdr('Albums','239 albums · sorted by date, newest first',gb(I.gear)+gb(I.sort),false)}
+phone(`${st}${hdr('Albums','239 albums · newest first',gb(I.gear)+gb(I.sort),false)}
  <div class="search">${I.search} Search albums</div>
  <div class="body"><div class="scroll"><div class="alist">${D.albums.map((a,i)=>arow(a,cache(i))).join('')}</div></div></div>`,
  'Album list — no tab bar',
@@ -365,7 +365,7 @@ phone(`${st}${hdr('Albums','239 albums · sorted by date, newest first',gb(I.gea
 const phrow=(a,moving)=>`<div class="arow"><span class="edge"></span><span class="ph${moving?' moving':''}">${I.image}</span>
  <div class="t"><div class="n">${esc(a.name)}</div>
  <div class="m"><span>${contents(a)}</span></div></div></div>`;
-phone(`${st}${hdr('Albums','239 albums · fetching thumbnails 34/288',gb(I.gear)+gb(I.sort),false)}
+phone(`${st}${hdr('Albums','239 albums · newest first · thumbnails 34/288',gb(I.gear)+gb(I.sort),false)}
  <div class="qbar"><i style="width:12%"></i></div>
  <div class="search">${I.search} Search albums</div>
  <div class="body"><div class="scroll"><div class="alist">${D.albums.slice(0,2).map((a,i)=>arow(a,cache(i))).join('')}${phrow(D.albums[2],true)}${phrow(D.albums[3],true)}${phrow(D.albums[4])}${phrow(D.albums[5])}${phrow(D.albums[6])}</div></div></div>`,
@@ -389,7 +389,7 @@ phone(`${st}${hdr('Albums','swipe left on any album',gb(I.gear)+gb(I.sort),false
  '<b>Icons only, no labels, and which ones appear is the album\u2019s state</b> \u2014 top to bottom: nothing held, held but stopped, downloading now, complete. One list, not two: the cache controls live on the album list itself and Settings keeps only account, storage totals, sync and log out. The rows say what each album <i>contains</i> \u2014 everything about the cache is in the strip. <b>Swipe-right is unused</b> \u2014 it collides with the interactive back gesture, which matters at every level of the list. Clear also pauses, so it is offered while a download runs; it needs no confirmation because re-downloading restores it and nothing in the zone is touched.');
 
 /* 1c album list — sync failed */
-phone(`${st}${hdr('Albums','239 albums · sorted by date, newest first',gb(I.gear)+gb(I.sort),false)}
+phone(`${st}${hdr('Albums','239 albums · newest first',gb(I.gear)+gb(I.sort),false)}
  <div class="search">${I.search} Search albums</div>
  <div class="body"><div class="scroll"><div class="alist">${D.albums.slice(0,6).map((a,i)=>arow(a,cache(i))).join('')}</div></div>
   <div class="toast stack err"><span class="ico">${I.lock}</span>
@@ -399,7 +399,7 @@ phone(`${st}${hdr('Albums','239 albums · sorted by date, newest first',gb(I.gea
  '\u00a71 forbids opaque errors, so the status and the cause are both named. A toast rather than a banner: it never reflows the list and never blocks \u2014 the catalog and every thumbnail are on disk, so a failed sync must not stop you browsing. <b>A 403 needs a person, so this one stays until dismissed</b> and carries an action to the sync row.');
 
 /* 1d album list — transient failure */
-phone(`${st}${hdr('Albums','239 albums · sorted by date, newest first',gb(I.gear)+gb(I.sort),false)}
+phone(`${st}${hdr('Albums','239 albums · newest first',gb(I.gear)+gb(I.sort),false)}
  <div class="search">${I.search} Search albums</div>
  <div class="body"><div class="scroll"><div class="alist">${D.albums.slice(0,6).map((a,i)=>arow(a,cache(i))).join('')}</div></div>
   <div class="toast"><span class="ico">${I.wifi}</span>
@@ -415,19 +415,19 @@ phone(`${st}${hdr('Iceland','8 sub-albums · 412 photos',gb(I.gear)+gb(I.sort),t
 
 /* 3 grid */
 const g=D.grid.photos.filter(Boolean);
-phone(`${st}${hdr('Coast Road 2019',D.grid.count.toLocaleString()+' photos · 2019',gb(I.gear)+gb(I.sort),true)}
+phone(`${st}${hdr('Coast Road 2019',D.grid.count.toLocaleString()+' photos · 2019',gb(I.gear),true)}
  <div class="body"><div class="scroll"><div class="grid g4">${g.slice(0,48).map(p=>`<img src="${p}">`).join('')}</div></div></div>`,
  'Album grid — 4 columns',
    '256px JPEG thumbs read from packs/&lt;thumbs-uuid&gt;.db on disk \u2014 <b>no network at all</b>, because every album\u2019s pack is fetched during sync. F adds the map icon back; G adds upload.');
 
 /* 3b grid — pack pending */
-phone(`${st}${hdr('Coast Road 2019',D.grid.count.toLocaleString()+' photos · 2019',gb(I.gear)+gb(I.sort),true)}
+phone(`${st}${hdr('Coast Road 2019',D.grid.count.toLocaleString()+' photos · 2019',gb(I.gear),true)}
  <div class="body"><div class="scroll"><div class="grid g4">${Array.from({length:48},()=>`<span class="ph moving">${I.image}</span>`).join('')}</div></div></div>`,
  'Album grid \u2014 pack pending',
  'Opened before its pack arrived. The tile count comes from <code>photo_count</code> in the merged DB, which is exactly what distinguishes this from \u00a710\u2019s zero-photo album \u2014 that one shows no tiles at all. Tapping in here moved this album to the front of the queue, so a worker is on it and every tile pulses; a pack is one blob, so they all arrive together.');
 
 /* 3c grid — the album's images downloading behind the thumbs */
-phone(`${st}${hdr('Coast Road 2019',D.grid.count.toLocaleString()+' photos · downloading 214/1,755',gb(I.gear)+gb(I.sort),true)}
+phone(`${st}${hdr('Coast Road 2019',D.grid.count.toLocaleString()+' photos · downloading 214/1,755',gb(I.gear),true)}
  <div class="qbar"><i style="width:36%"></i></div>
  <div class="body"><div class="scroll"><div class="grid g4">${g.slice(0,48).map(p=>`<img src="${p}">`).join('')}</div></div>
  <div class="pinch" style="top:auto;bottom:14px"><b>Opening an album starts its download</b>the grid is already complete from the pack;<br>the 3200px images arrive behind it</div></div>`,
@@ -435,7 +435,7 @@ phone(`${st}${hdr('Coast Road 2019',D.grid.count.toLocaleString()+' photos · do
  'Opening an album is one of the only two things that fetch images \u2014 the other is asking for it on the list. The grid needs none of them: it is drawn from the pack and was complete on arrival. <b>Leaving the album stops this</b>, keeping whatever landed.');
 
 /* 4 pinch */
-phone(`${st}${hdr('Coast Road 2019',D.grid.count.toLocaleString()+' photos · 2019',gb(I.gear)+gb(I.sort),true)}
+phone(`${st}${hdr('Coast Road 2019',D.grid.count.toLocaleString()+' photos · 2019',gb(I.gear),true)}
  <div class="body"><div class="scroll"><div class="grid g2">${g.slice(0,12).map(p=>`<img src="${p}">`).join('')}</div></div>
    <div class="pinch"><b>Pinch \u00b7 ctrl+scroll to change density</b>2 cols \u2192 the cached 3200px image where<br>one is on disk, upscaled thumb otherwise.<br>Still never <i>asks</i> for a blob.</div></div>`,
  'Pinched to 2 columns',

@@ -1,5 +1,8 @@
 package net.stho.photos.app
 
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.ImageBitmapConfig
+import androidx.compose.ui.graphics.colorspace.ColorSpaces
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -13,8 +16,10 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import net.stho.photos.catalog.Album
 import net.stho.photos.model.PhotoRow
@@ -37,9 +42,43 @@ class AppModelTest {
         model.cycleSort()
         assertEquals(listOf("Zeta", "Alpha"), model.names(), "then oldest first")
         model.cycleSort()
-        assertEquals(listOf("Alpha", "Zeta"), model.names(), "then by name")
+        assertEquals(AlbumSort.DateNewest, model.state.value.sort, "and back: a toggle, not a cycle")
+        assertEquals(listOf("Alpha", "Zeta"), model.names())
+    }
+
+    /**
+     * An album spanning the whole library used to top both date orders: newest first read its
+     * latest date and oldest first its earliest, so the first row never moved when the icon was
+     * tapped. Both orders now read the latest date, and oldest first is the exact reverse.
+     */
+    @Test
+    fun oldestFirstIsNewestFirstReversedEvenForAnAlbumSpanningEveryYear() = runTest {
+        val everything = album("Everything", 2001).copy(dateMax = Instant.parse("2024-12-31T00:00:00Z"))
+        val model = model(this, albums = listOf(everything, album("Iceland", 2019), album("Rome", 2010)))
+        model.start()
+
+        assertEquals(listOf("Everything", "Iceland", "Rome"), model.names())
         model.cycleSort()
-        assertEquals(AlbumSort.DateNewest, model.state.value.sort, "and back round")
+        assertEquals(listOf("Rome", "Iceland", "Everything"), model.names())
+    }
+
+    /**
+     * A container owns no photos, so read straight from the catalog it said "0 photos" and sorted
+     * as undated — at the far end of both date orders. It carries its descendants' instead.
+     */
+    @Test
+    fun aContainerSortsByItsNewestDescendantAndCountsWhatItHolds() = runTest {
+        val trips = album("Trips", null).copy(photoCount = 0)
+        val iceland = album("Iceland", 2024).copy(parent = trips.id)
+        val rome = album("Rome", 2010).copy(parent = trips.id)
+        val model = model(this, albums = listOf(album("Garden", 2019), trips, iceland, rome))
+        model.start()
+
+        assertEquals(listOf("Trips", "Garden"), model.names(), "Trips holds 2024")
+        model.cycleSort()
+        assertEquals(listOf("Garden", "Trips"), model.names(), "and is last when oldest comes first")
+        assertEquals("2 albums · 2 photos", model.state.value.contentsOf(trips))
+        assertEquals("1 photos", model.state.value.contentsOf(iceland))
     }
 
     /** §3: albums with no dated photo at all collect at one end, whichever way dates run. */
@@ -58,9 +97,9 @@ class AppModelTest {
         val model = model(this, albums = listOf(album("One", 2024)))
         model.start()
 
-        assertEquals("1 albums · sorted by date, newest first", model.state.value.subtitle)
+        assertEquals("1 albums · newest first", model.state.value.subtitle)
         model.cycleSort()
-        assertEquals("1 albums · sorted by date, oldest first", model.state.value.subtitle)
+        assertEquals("1 albums · oldest first", model.state.value.subtitle)
     }
 
     @Test
@@ -122,7 +161,7 @@ class AppModelTest {
         thumbs.outstanding.value = 254
         thumbs.arrivals.value = 34
 
-        assertEquals("1 albums · fetching thumbnails 34/288", model.state.value.subtitle)
+        assertEquals("1 albums · newest first · thumbnails 34/288", model.state.value.subtitle)
     }
 
     @Test
@@ -214,6 +253,44 @@ class AppModelTest {
     }
 
     /**
+     * A swipe drags a neighbour into view before it settles, so the photos either side are decoded
+     * too — and only those: a decoded frame is tens of megabytes, so a swipe drops the one it left.
+     */
+    @Test
+    fun thePhotosEitherSideOfTheOpenOneAreDecodedForTheSwipe() = runTest {
+        val photos = List(3) { PhotoRow(id = Uuid.random(), filename = "IMG_000$it.HEIC") }
+        val iceland = album("Iceland", 2024)
+        // A scheduler that runs launches when advanced, not on the spot: the model starts preview
+        // loads from inside a state update, and an eager dispatcher lets that update overwrite them.
+        val own = CoroutineScope(StandardTestDispatcher(testScheduler))
+        val decoding = object : Previews {
+            override fun cached(photo: PhotoRow): Preview? = null
+            override suspend fun load(photo: PhotoRow): Preview = Preview(photo.id, NoPixels)
+            override fun prefetch(photos: List<PhotoRow>, index: Int) = Unit
+            override fun cancelPrefetch() = Unit
+        }
+        val model = AppModel(
+            FakeCatalog(listOf(iceland), photos = photos), FakeSyncer(SyncOutcome.Succeeded(1, 3)),
+            FakeThumbnails(), decoding, FakeVideos(), idleQueue(own), own,
+        )
+        model.start()
+        advanceUntilIdle()
+        model.open(iceland)
+        model.openPhoto(1)
+        advanceUntilIdle()
+
+        assertEquals(photos[1].id, model.state.value.preview?.id)
+        assertEquals(setOf(photos[0].id, photos[2].id), model.state.value.nearby.keys)
+
+        model.showPhoto(2)
+        advanceUntilIdle()
+        // The photo two behind is dropped. The one now open stays: it is what the viewer draws for
+        // the frames between the pager settling and the model's own preview landing.
+        assertEquals(setOf(photos[1].id, photos[2].id), model.state.value.nearby.keys, "the photo two behind is dropped")
+        own.cancel()
+    }
+
+    /**
      * Opening an album starts its images whether or not its thumbnail pack has landed.
      *
      * They used to wait for it, and the wait was built as "only if the pack is already there" with
@@ -284,7 +361,7 @@ class AppModelTest {
         private val albums: List<Album>,
         private val photos: List<PhotoRow> = emptyList(),
     ) : Catalog {
-        override fun albums(under: Uuid?): List<Album> = if (under == null) albums else emptyList()
+        override fun albums(under: Uuid?): List<Album> = albums.filter { it.parent == under }
         override fun search(text: String): List<Album> =
             albums.filter { it.nameFolded.contains(text.lowercase()) }
         override fun photos(inAlbum: Uuid): List<PhotoRow> = photos
@@ -366,6 +443,21 @@ class AppModelTest {
     }
 
     /** No previews: enough for the state tier, which decides *when* to ask, not what comes back. */
+    /**
+     * A bitmap with nothing behind it. `ImageBitmap(w, h)` allocates through Skia, whose native
+     * library this JVM test run does not load — the fake decoder threw, and the preview it was
+     * meant to deliver silently never arrived.
+     */
+    private object NoPixels : ImageBitmap {
+        override val width = 1
+        override val height = 1
+        override val colorSpace = ColorSpaces.Srgb
+        override val hasAlpha = false
+        override val config = ImageBitmapConfig.Argb8888
+        override fun readPixels(buffer: IntArray, startX: Int, startY: Int, width: Int, height: Int, bufferOffset: Int, stride: Int) = Unit
+        override fun prepareToDraw() = Unit
+    }
+
     private class FakePreviews : Previews {
         override fun cached(photo: PhotoRow): Preview? = null
         override suspend fun load(photo: PhotoRow): Preview? = null
