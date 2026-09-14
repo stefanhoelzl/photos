@@ -33,12 +33,13 @@ import net.stho.photos.app.LivePair
 import net.stho.photos.app.Preview
 
 /**
- * §6's fullscreen viewer: one screen, and in E.1 one state.
+ * §6's fullscreen viewer: one screen, drawn the same for a still, a video and a Live Photo.
  *
  * Chrome is back and gear only. **Set-as-cover moved to G** — it rewrites the album's shard
- * with `If-Match`, and E is meant to be read-only — and **share moved to E.3**, being
- * `UIActivityViewController` interop only a device can exercise. The LIVE badge is drawn, but
- * playback is E.3's: `PHLivePhotoView` is a system view with nothing to reimplement.
+ * with `If-Match`, and E is meant to be read-only — and **share is not built yet**, being
+ * `UIActivityViewController` interop only a device can exercise. Motion is the platform's own:
+ * each root supplies the surfaces a video and a Live Photo render into, and the harness's
+ * leave the still in place.
  *
  * The ground is the app surface, not black: iOS Photos does it that way, and a black viewer
  * inside an otherwise light app reads as a bug.
@@ -108,9 +109,6 @@ public fun Viewer(
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                // §3: `bytes` is the size of the blob a tap actually fetches, so this is true
-                // for a transcoded video and a carved RAW as well as for an untouched JPEG.
-                photo.bytes?.let { Badge("Original ${it.megabytes()}") }
             }
         }
     }
@@ -154,9 +152,4 @@ private fun Badge(text: String, modifier: Modifier = Modifier) {
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .padding(horizontal = 9.dp, vertical = 4.dp),
     )
-}
-
-private fun Long.megabytes(): String {
-    val mb = this / 1_000_000.0
-    return if (mb >= 10) "${mb.toInt()} MB" else "${(mb * 10).toInt() / 10.0} MB"
 }
