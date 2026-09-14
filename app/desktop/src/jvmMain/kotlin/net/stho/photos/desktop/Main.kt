@@ -59,11 +59,14 @@ public fun main(args: Array<String>) {
             }
         }
     }
+    // Before the control server, not after: the launcher's state starts as `Setup` until `start()`
+    // has read the environment and the keyring, and a server already listening would report
+    // "setup" for an app that is set up. The iOS suite caught the same order there.
+    launcher.start()
     val control = options.controlPort?.let { port ->
         ControlServer(port, launcher, screenshot = offscreen(content)).also(ControlServer::start)
     }
 
-    launcher.start()
     application {
         Window(
             onCloseRequest = {

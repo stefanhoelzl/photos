@@ -34,10 +34,15 @@ public object PhotosDebugEntry {
 
     public fun viewController(): UIViewController {
         val root = PhotosRoot(onLivePhoto = { livePhoto.value = it })
+        // The view controller first: building it is what runs `launcher.start()`, which reads the
+        // Keychain. The launcher's state starts as `Setup`, so a server started before that read
+        // answers `/state` with "setup" for an app that is in fact set up -- measured, as the iOS
+        // suite's relaunch check failing on a slow runner and passing on faster ones.
+        val controller = root.viewController()
         getenv("PHOTOS_CONTROL_PORT")?.toKString()?.toIntOrNull()?.let { port ->
             server = ControlServer(port, root.launcher, extras = { mapOf("livePhoto" to livePhoto.value) })
                 .also { it.start() }
         }
-        return root.viewController()
+        return controller
     }
 }
