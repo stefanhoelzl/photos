@@ -1,0 +1,5 @@
+runner-profile: macos
+build: mkdir -p build && xcodebuild -project app/ios/Photos.xcodeproj -scheme Photos -configuration Debug -destination generic/platform=iOS -archivePath build/Photos.xcarchive CODE_SIGNING_ALLOWED=NO archive
+archive: build/Photos.xcarchive
+project: app/ios/Photos.xcodeproj
+configuration: Debug
