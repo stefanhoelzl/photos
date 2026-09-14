@@ -19,6 +19,8 @@ import net.stho.photos.app.FileBlobStore
 import net.stho.photos.app.MergedCatalogSource
 import net.stho.photos.app.PackFetcher
 import net.stho.photos.app.Session
+import net.stho.photos.app.UploadModel
+import net.stho.photos.app.Uploads
 import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.storage.S3Client
 import net.stho.photos.storage.StorageUrl
@@ -71,6 +73,13 @@ public class PhotosApp(
         scope = scope,
     )
 
+    private val gallery = PhotoKitGallery()
+
+    /** §8's upload: PhotoKit to read from, a background `URLSession` to send through. */
+    private val upload = Uploads(gallery, UrlSessionUploader, sync, drivers, cacheRoot, scope, onLanded = { model.refresh() })
+
+    override val uploads: UploadModel = UploadModel(gallery, upload, scope)
+
     init {
         // The nav bar counts packs down as they land. The queue knows what is held; only this
         // root knows which of those ids are packs, so the counting happens here.
@@ -86,6 +95,9 @@ public class PhotosApp(
 
     override fun start() {
         model.start()
+        // Re-attaches to what a previous run left, silently (§8): a force-quit cancels every
+        // background transfer, and only this relaunch can notice and send them again.
+        upload.resume()
     }
 
     override fun close() {
