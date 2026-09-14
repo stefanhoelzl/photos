@@ -18,6 +18,7 @@ plugins {
 //   the scheduler     CacheQueue: §6's ladder, its three worker roles and its retry policy
 //   the cache         FileBlobStore, PackFetcher, BlobPreviews, MergedCatalogSource -- §4's
 //                     on-device layout, which needs a filesystem and a zone but no platform
+//   the upload        Uploads, UploadModel, and §8's two ports, Gallery and BackgroundUploader
 //
 // The last group used to live in `:app:desktop`, where it was reachable by one of the two
 // apps. None of it is platform-specific: kotlinx-io reaches a filesystem on both, and the
@@ -43,6 +44,9 @@ kotlin {
             implementation(compose.ui)
             implementation(libs.coroutines.core)
             implementation(libs.kotlinx.io.core)
+            // For the foreground uploader's PUT to a pre-signed URL, which is not an S3Client call:
+            // the URL already carries its signature (§8).
+            implementation(libs.ktor.client.core)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))

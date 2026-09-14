@@ -1699,25 +1699,65 @@ what the zone contains; the other two decide nothing at all.
 gallery albums (so no name prefill) and cannot delete (so no post-upload cleanup). Those two
 requirements force a real permission grant.
 
+**Full access or nothing.** Denied or "Selected photos" access shows the picker's explanation —
+albums are needed for the name, and deleting needs full access too — with a button into
+Settings. There is no reduced mode: it would be a second picker to build and to test.
+
 **Flow.**
 
 ```
-upload icon
+upload icon               on the album list or a container, never inside an album
   → gallery picker        album, or loose photos with drag-across-to-select
   → name dialog           name prefilled from the gallery album,
-                          parent = the album you started from,
+                          parent = the list you started from,
                           delete-from-gallery checkbox
   → [tap Upload]
-  → pre-sign every PUT URL for this album
-  → background upload
+  → prepare               export every asset to disk, name its file, pack the thumbnails
+  → write the shard       at `uploading`, naming every object
+  → background upload     every PUT pre-signed; each object read back by HEAD
+  → write the shard       at `uploaded`, If-Match
+  → delete from gallery   when asked
 ```
 
 **No prompt appears during the upload flow.** The password was read from the Keychain when the
 app launched (§1) and is already in memory; tapping Upload uses it to pre-sign every PUT for
 this album, and the background session then runs against those URLs alone.
 
-**The album you are in becomes the parent** — from the root this creates a top-level album, from
-inside an album, a sub-album of it.
+**An upload always makes a new album, and the list you started from becomes its parent** — from
+the root a top-level album, from a container a sub-album of it. It never adds to an existing
+album: a shard has one `state` for the whole album, and an encoded album holding rows the laptop
+has not archived would need that state per photo, in the pull and the sweep alike. So an album's
+own grid and map carry no upload icon (§6): an album of photos cannot hold a sub-album (§2).
+
+**What goes up, per asset** — the version the Photos app shows, since that is what the library
+then keeps:
+
+| asset | uploaded as |
+|---|---|
+| still | the edited full-size image when there is one, otherwise the original; `image_id` |
+| RAW or ProRAW | its rendered JPEG/HEIC only — the RAW is neither uploaded nor archived |
+| video | the original file in `video_id`, **no poster**: §7's pull archives `image_id` before `video_id`, so a poster would be archived in place of the video. The viewer shows the thumbnail until the laptop encodes it |
+| Live Photo | the still in `image_id` *and* `live_still_id` (one object), the MOV in `live_video_id`. The edited pair when edited — provided an edited pair keeps its content identifier, which is unverified; otherwise always the original pair |
+| iCloud-only | downloaded during preparation |
+
+**A row's filename is the camera's stem and the extension of the bytes sent** — `IMG_1234.heic`,
+never an edit's `FullSizeRender.heic` — and a Live Photo's MOV is named beside it. A clash within
+the album gains ` (2)`, compared ignoring case since the pull writes into a library that may not
+tell case apart. The names are fixed during preparation, so the shard written first is final.
+
+**Date, location and size come from PhotoKit's record, and are provisional.** EXIF stays the
+authority (§3): the laptop re-derives every row from the files when it encodes the album, so a
+date or place edited only in Photos reverts then. What PhotoKit supplies is what the album shows
+for the hour before that.
+
+**Preparation is foreground work, one album at a time.** It is where iCloud-only assets are
+fetched and every file is exported — background transfers need files on disk — and it pauses
+while the app is in the background. Further uploads queue behind it; their transfers may overlap
+the one before.
+
+**An `uploading` album is shown by no reader**, on any device — its shard names objects that may
+not exist yet. The uploading phone shows the sheet or pill instead. Once `uploaded` it appears as
+any other album: the grid from the phone-built pack, the viewer fetching the full-quality files.
 
 **The phone uploads full quality, and derives only thumbnails.** ImageIO produces the packed
 thumbs on-device — 0.42% extra upload bytes — so the album is browsable in the grid the moment
@@ -1760,8 +1800,24 @@ Presented as a **bottom sheet, minimizable** to a progress pill.
 
 This is the one HTTP path that does not go through Ktor, whose Darwin engine cannot drive a
 background session — so it is a **`BackgroundUploader` port**, with a Kotlin/Native adapter
-over `URLSession` on iOS and a plain foreground implementation everywhere else. The manifest
-below is the port's own state, which is what makes reconciliation testable without a device.
+over `URLSession` on iOS and a plain foreground implementation everywhere else, one PUT at a
+time. Its sibling is the **`Gallery` port**: PhotoKit on the phone, and on the desktop a
+directory whose subfolders stand in for gallery albums — so the whole flow is driven and tested
+on the harness (`--gallery`, `POST /upload/…`, `:tests:app`'s `UploadTest`).
+
+**Each album's upload keeps its state on disk**, under `uploads/<album-id>/`: the request, the
+shard as written, every exported file, and how far it got — requested, prepared, written,
+landed. **What finished transferring is never remembered; it is asked of the zone.** An object
+counts once a HEAD returns its size, which is also the read-back verification deletion waits
+for. A relaunch that missed every event therefore still knows exactly what landed.
+
+**Failures name their status (§1).** A transfer that errors without a status, or lands at the
+wrong size, is retried three times; one that answers 403 — a bad password or an expired URL —
+stops the album with the status on the pill, and Retry signs every PUT again.
+
+**Cancel is allowed, and deletes nothing in the zone** — the app never does (§7). The transfers
+stop and the local state goes; a shard already written stays at `uploading`, shown by no reader,
+until the CLI removes it once its URLs have expired.
 
 **Resume.** The app persists an upload manifest, re-creates the background session with the same
 identifier on launch, diffs `getAllTasks` against the manifest and re-queues what is missing —
@@ -1899,6 +1955,14 @@ and the stand-in everywhere headless. Still owed: the map on a real device, the 
 shows whether the overlay keeps up with the native map while panning.
 
 **G · iOS upload** = A+B.
+
+> **G runs on the harness and is written for the phone.** The whole flow — picker, name dialog,
+> preparation, shard first, transfer with read-back, landing, gallery deletion, cancel — runs on
+> the desktop against S3Mock with a folder standing in for the library (`:tests:app`'s
+> `UploadTest`), and every reader skips an `uploading` shard. The phone's two adapters, the
+> PhotoKit gallery and the background `URLSession` uploader, are written but have not yet been
+> built or run on macOS. Still owed on a device: whether an edited Live Photo's pair keeps its
+> content identifier.
 
 **H · systemd units** = D. Pull is not part of it: `sync` already pulls and claims
 phone-owned albums, so H is the units and nothing more.

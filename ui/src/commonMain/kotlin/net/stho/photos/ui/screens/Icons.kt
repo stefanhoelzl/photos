@@ -3,15 +3,20 @@ package net.stho.photos.ui.screens
 import androidx.compose.material.icons.Icons as MaterialIcons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Upload
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
@@ -37,4 +42,11 @@ internal object Icons {
     val pause: ImageVector = MaterialIcons.Filled.Pause
     val trash: ImageVector = MaterialIcons.Filled.Delete
     val image: ImageVector = MaterialIcons.Filled.Image
+
+    /** G's: the bar icon, the picker's tick and disclosure, and the sheet's expand and collapse. */
+    val upload: ImageVector = MaterialIcons.Filled.Upload
+    val check: ImageVector = MaterialIcons.Filled.Check
+    val chevron: ImageVector = MaterialIcons.Filled.ChevronRight
+    val expand: ImageVector = MaterialIcons.Filled.KeyboardArrowUp
+    val collapse: ImageVector = MaterialIcons.Filled.KeyboardArrowDown
 }

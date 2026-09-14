@@ -8,13 +8,16 @@ import kotlin.time.Instant
 import kotlin.uuid.Uuid
 import kotlinx.io.files.Path
 import net.stho.photos.catalog.AlbumInfo
+import net.stho.photos.catalog.AlbumState
 import net.stho.photos.catalog.ObjectId
 import net.stho.photos.catalog.PAGE_SIZE
 import net.stho.photos.catalog.Shard
 import net.stho.photos.catalog.blobKey
 import net.stho.photos.catalog.packThumbnails
+import net.stho.photos.catalog.readShard
 import net.stho.photos.catalog.shardKey
 import net.stho.photos.catalog.writeTo
+import net.stho.photos.derivative.DerivativeSpec
 import net.stho.photos.model.MediaType
 import net.stho.photos.model.PhotoRow
 import net.stho.photos.ports.Journal
@@ -38,7 +41,8 @@ public class Zone(private val s3: S3Client, private val staging: Path) {
      * One album: a shard, and a pack holding a thumbnail for each of its photos.
      *
      * Written with the same writer the CLI uses, so a scenario cannot declare a zone the real
-     * ingest could never produce.
+     * ingest could never produce. [state] declares a phone album mid-upload, or landed and not
+     * yet pulled (§8).
      */
     public suspend fun album(
         name: String,
@@ -48,6 +52,8 @@ public class Zone(private val s3: S3Client, private val staging: Path) {
         at: Pair<Double, Double>? = null,
         /** Per photo, by position, overriding [at]: a null entry is a photo with no location. */
         places: List<Pair<Double, Double>?>? = null,
+        parent: Uuid? = null,
+        state: AlbumState = AlbumState.ENCODED,
     ): Uuid {
         val rows = (0 until photos).map { index ->
             val place = if (places != null) places.getOrNull(index) else at
@@ -63,7 +69,7 @@ public class Zone(private val s3: S3Client, private val staging: Path) {
                 mediaType = MediaType.PHOTO,
             )
         }
-        return write(name, rows, thumbnails).id
+        return write(name, rows, thumbnails, parent, state).id
     }
 
     /**
@@ -75,15 +81,9 @@ public class Zone(private val s3: S3Client, private val staging: Path) {
      * made, so nothing here runs ingest; that correctness is `:tests:cli`'s.
      */
     public suspend fun mediaAlbum(name: String): MediaAlbum {
-        val media = java.io.File(
-            requireNotNull(System.getProperty("photos.fixture.media")) {
-                "photos.fixture.media is unset -- the build writes it with :tests:fixtures:fixtureMedia"
-            },
-        )
         val files = mutableMapOf<ObjectId, java.io.File>()
         suspend fun blob(file: String): ObjectId {
-            val source = java.io.File(media, file)
-            require(source.isFile) { "missing fixture media: $source" }
+            val source = fixtureMedia(file)
             val path = Path(source.absolutePath)
             val id = ObjectId.ofContent(path)
             s3.put(id.blobKey, Body.File(path))
@@ -115,13 +115,51 @@ public class Zone(private val s3: S3Client, private val staging: Path) {
                 liveVideoFilename = "IMG_0003.mov",
             ),
         )
-        val written = write(name, rows, thumbnails = true)
+        val written = write(name, rows, thumbnails = true, parent = null, state = AlbumState.ENCODED)
         return MediaAlbum(written.id, written.thumbsId, rows, files)
+    }
+
+    /**
+     * A phone's photo library as the desktop's gallery stand-in reads it (§8): one folder named
+     * [album] under [root], holding a still, a video and a Live Photo pair from the fixture media,
+     * under the names a camera gives them.
+     */
+    public fun galleryAlbum(root: java.io.File, album: String): java.io.File {
+        val folder = java.io.File(root, album).apply { mkdirs() }
+        fixtureMedia(PHOTO).copyTo(java.io.File(folder, "IMG_0001.heic"), overwrite = true)
+        fixtureMedia(VIDEO).copyTo(java.io.File(folder, "IMG_0002.mp4"), overwrite = true)
+        fixtureMedia(LIVE_STILL).copyTo(java.io.File(folder, "IMG_0003.heic"), overwrite = true)
+        fixtureMedia(LIVE_VIDEO).copyTo(java.io.File(folder, "IMG_0003.mov"), overwrite = true)
+        return folder
+    }
+
+    /** The shard the zone holds for [id], as its readers see it. Null when there is none. */
+    public suspend fun shard(id: Uuid): Shard? {
+        if (s3.head(id.shardKey) == null) return null
+        val file = Path(staging, "read-${Uuid.random()}.db")
+        kotlinx.io.files.SystemFileSystem.createDirectories(staging)
+        s3.download(id.shardKey, file)
+        return file.readShard(drivers)
+    }
+
+    /** An object's bytes, or null when the zone does not hold it. */
+    public suspend fun bytes(id: ObjectId): ByteArray? {
+        if (s3.head(id.blobKey) == null) return null
+        val file = Path(staging, "read-${Uuid.random()}")
+        kotlinx.io.files.SystemFileSystem.createDirectories(staging)
+        s3.download(id.blobKey, file)
+        return java.io.File(file.toString()).readBytes()
     }
 
     private class Written(val id: Uuid, val thumbsId: ObjectId?)
 
-    private suspend fun write(name: String, rows: List<PhotoRow>, thumbnails: Boolean): Written {
+    private suspend fun write(
+        name: String,
+        rows: List<PhotoRow>,
+        thumbnails: Boolean,
+        parent: Uuid?,
+        state: AlbumState,
+    ): Written {
         kotlinx.io.files.SystemFileSystem.createDirectories(staging)
         val albumId = Uuid.random()
         // Packed first, then named after what it holds — since §2 a blob's key *is* its
@@ -138,13 +176,26 @@ public class Zone(private val s3: S3Client, private val staging: Path) {
             AlbumInfo(
                 id = albumId,
                 name = name,
+                parent = parent,
                 addedAt = Instant.parse("2024-01-01T00:00:00Z"),
                 thumbsId = thumbsId,
+                state = state,
+                // The schema's CHECK: only an encoded album has a profile.
+                encodingVersion = if (state == AlbumState.ENCODED) DerivativeSpec.ENCODING_VERSION else 0,
             ),
             rows,
         ).writeTo(shardFile, drivers)
         s3.put(albumId.shardKey, Body.File(shardFile))
         return Written(albumId, thumbsId)
+    }
+
+    private fun fixtureMedia(file: String): java.io.File {
+        val media = java.io.File(
+            requireNotNull(System.getProperty("photos.fixture.media")) {
+                "photos.fixture.media is unset -- the build writes it with :tests:fixtures:fixtureMedia"
+            },
+        )
+        return java.io.File(media, file).also { require(it.isFile) { "missing fixture media: $it" } }
     }
 
     private companion object {

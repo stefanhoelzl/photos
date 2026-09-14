@@ -17,6 +17,9 @@ public interface Session : AutoCloseable {
     public val model: AppModel
     public val thumbnails: Thumbnails
 
+    /** §8's upload, or null on a root that has no gallery to upload from. */
+    public val uploads: UploadModel? get() = null
+
     /**
      * Begins syncing.
      *

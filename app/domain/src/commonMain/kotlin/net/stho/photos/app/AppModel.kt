@@ -610,6 +610,23 @@ public class AppModel(
         return out
     }
 
+    // --------------------------------------------------------------------------- the upload
+
+    /**
+     * The upload icon. The list on screen becomes the new album's parent (§8), so only the album
+     * list and a container offer it: an album of photos cannot hold a sub-album (§2). Null anywhere
+     * else, and nothing moves.
+     */
+    public fun openUpload(): Screen.Upload? {
+        val upload = when (val here = state.value.screen) {
+            Screen.Albums -> Screen.Upload(parent = null, parentName = "Albums")
+            is Screen.Container -> Screen.Upload(parent = here.albumId, parentName = here.name)
+            else -> return null
+        }
+        navigate { it.push(upload) }
+        return upload
+    }
+
     /** Used by the control server's `POST /nav` as well as by the UI. */
     public fun navigate(change: (BackStack) -> BackStack) {
         val leaving = _state.value.screen

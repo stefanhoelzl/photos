@@ -9,6 +9,7 @@ import net.stho.photos.storage.S3Client
 import net.stho.photos.storage.asStorageUrl
 import net.stho.photos.ui.screens.VideoSurface
 import net.stho.photos.app.AppUi
+import net.stho.photos.app.UploadModel
 import net.stho.photos.zone.Zone
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.unit.Density
@@ -69,8 +70,14 @@ internal class Scenario(
 
     private var app: PhotosApp? = null
 
-    /** Starts the app, exactly as `main` would minus the window, and lets the first sync run. */
-    suspend fun launch(): AppUi {
+    /** The scenario's stand-in for the phone's photo library, beside its cache (§8). */
+    val gallery: java.io.File get() = java.io.File(cacheRoot.toString()).parentFile.resolve("gallery")
+
+    /**
+     * Starts the app, exactly as `main` would minus the window, and lets the first sync run.
+     * [withGallery] turns upload on, reading [gallery].
+     */
+    suspend fun launch(withGallery: Boolean = false): AppUi {
         val started = PhotosApp(
             storage = endpoint.asStorageUrl(),
             password = PASSWORD,
@@ -81,13 +88,18 @@ internal class Scenario(
             // A player that opens nothing. `expect`/`actual` could not have been substituted
             // here, which is why the video surface is an injected port (decision 28).
             videoSurface = VideoSurface { _, _ -> },
+            galleryRoot = if (withGallery) gallery.also { it.mkdirs() }.path else null,
         )
         app = started
-        started.model.start()
+        started.start()
         return settle()
     }
 
     val model get() = requireNotNull(app) { "launch() first" }.model
+
+    val uploads: UploadModel get() = requireNotNull(requireNotNull(app) { "launch() first" }.uploads) {
+        "launch(withGallery = true) to upload"
+    }
 
     /** Waits for the sync and any pack fetch the app queued behind it. */
     suspend fun settle(): AppUi {
@@ -141,7 +153,9 @@ internal class Scenario(
     fun screenshot(name: String) {
         val running = requireNotNull(app) { "launch() first" }
         val scene = ImageComposeScene(width = 430, height = 890, density = Density(2f)) {
-            PhotosTheme { App(running.model, running.thumbnails, endpoint.asStorageUrl(), onLogOut = {}) }
+            PhotosTheme {
+                App(running.model, running.thumbnails, endpoint.asStorageUrl(), onLogOut = {}, uploads = running.uploads)
+            }
         }
         try {
             val png = requireNotNull(scene.render().encodeToData()) { "skia declined to encode" }.bytes

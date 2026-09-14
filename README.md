@@ -17,13 +17,13 @@ download queue and no screen to keep in order.
 | module | what |
 |---|---|
 | `:domain` | app ∩ CLI: EXIF interpretation, the S3 client and signer, the catalog and its sync loop, the library walk, the ingest rules |
-| `:app:domain` | Linux app ∩ iOS app: the app's ports, its model, §6's download scheduler, and §4's on-device cache |
+| `:app:domain` | Linux app ∩ iOS app: the app's ports, its model, §6's download scheduler, §4's on-device cache, and §8's upload with its `Gallery` and `BackgroundUploader` ports |
 | `:ui` | one Compose UI, compiled for the desktop and the phone. Composables and nothing else |
 | `:app:map` | the map's basemap and nothing else: MapLibre Native drawing VersaTiles' vector tiles behind `:ui`'s `BaseMap` port. The desktop window and the phone install it; a headless render — `/screenshot`, `:tests:app` — keeps `:ui`'s plain stand-in, since MapLibre needs a window to present into |
 | `:adapter:linux` | the imaging backend over `native/CImaging`, the Secret Service — one protocol over two transports, libdbus for the CLI and dbus-java for the app — the flock run lock, XDG paths |
 | `:adapter:ios` | the phone's half of the same ports: the SQL driver over the platform SQLite, and the app container's directories |
 | `:app:cli` | the shipped `photos-cli`: argument parsing, a composition root, exit codes |
-| `:app:control` | the control server both roots start when driven by a test or an agent — `/state`, navigation, cache actions, the map (`/map` and its camera, taps and sheet), `/setup`, `/logout`; kept out of the iOS release build |
+| `:app:control` | the control server both roots start when driven by a test or an agent — `/state`, navigation, cache actions, the map (`/map` and its camera, taps and sheet), `/upload/…`, `/setup`, `/logout`; kept out of the iOS release build |
 | `:app:desktop` | the app's Linux root: JDBC, OkHttp, libvlc, the FFM decode shim, and the offscreen render behind `/screenshot` |
 | `:app:ios-debug` | the framework Xcode's Debug configuration links: `:app:ios` plus `:app:control`, started when launched with `PHOTOS_CONTROL_PORT` |
 | `:app:ios` | the app's iOS root: SQLiter, NSURLSession, the ImageIO decoder, `AVPlayerViewController` and `PHLivePhotoView` for playback, and the framework `app/ios/Photos.xcodeproj` wraps |
