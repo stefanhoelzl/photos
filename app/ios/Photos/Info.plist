@@ -35,11 +35,14 @@
 	<false/>
 	<key>UILaunchScreen</key>
 	<dict/>
-	<!-- Portrait only. §6's layout is a phone column: a large title, a list, and a grid whose
-	     density is pinched rather than rotated. -->
+	<!-- Every orientation the app may ever take. §6's layout is a phone column -- a large title,
+	     a list, and a grid whose density is pinched rather than rotated -- so the app delegate
+	     narrows this to portrait at run time, and widens it only while a photo is open. -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 </dict>
 </plist>
