@@ -220,7 +220,29 @@ internal class Simulator(private val device: String) {
 
     fun resetKeychain() = run("xcrun", "simctl", "keychain", device, "reset")
 
-    fun grantPhotos() = run("xcrun", "simctl", "privacy", device, "grant", "photos", BUNDLE_ID)
+    /**
+     * Full photo-library access, as a person tapping "Allow Full Access" records it.
+     *
+     * `simctl privacy grant photos` alone is not enough on iOS 26: it writes the grant as set by the
+     * system (`auth_reason` 4, `auth_version` 1), and PhotoKit still puts up its full-access alert —
+     * then waits on it inside `PLPrivacy`, so the app's request never returns. Measured on the
+     * runner: the same row rewritten as the user's choice at the current version (`auth_reason` 2,
+     * `auth_version` 2), with `tccd` restarted to drop its cache, answers Full with no alert.
+     */
+    fun grantPhotos() {
+        run("xcrun", "simctl", "privacy", device, "grant", "photos", BUNDLE_ID)
+        // The simulator's HOME is its data directory on the host, where TCC.db lives.
+        val database = File(run("xcrun", "simctl", "getenv", device, "HOME").trim(), "Library/TCC/TCC.db")
+        check(database.isFile) { "no TCC database at $database" }
+        run(
+            "sqlite3", database.absolutePath,
+            "update access set auth_reason = 2, auth_version = 2 " +
+                "where client = '$BUNDLE_ID' and service = 'kTCCServicePhotos';",
+        )
+        run("xcrun", "simctl", "spawn", device, "launchctl", "kill", "TERM", "user/foreground/com.apple.tccd")
+        // launchd brings tccd back on the next request; give it a moment to be there.
+        Thread.sleep(2_000)
+    }
 
     fun addMedia(files: List<File>) = run("xcrun", "simctl", "addmedia", device, *files.map { it.absolutePath }.toTypedArray())
 
