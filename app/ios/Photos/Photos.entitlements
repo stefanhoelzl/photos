@@ -4,11 +4,11 @@
 <dict>
 	<!-- The app's own group, and only its own. Without an entitlements file at all the app has
 	     no application-identifier, and every Keychain call fails with -34018
-	     (errSecMissingEntitlement) -- which is how §1's credential store came to be unreachable
+	     (errSecMissingEntitlement), which is how §1's credential store came to be unreachable
 	     on a simulator while the app was otherwise running perfectly. -->
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)$(CFBundleIdentifier)</string>
+		<string>$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	</array>
 </dict>
 </plist>
