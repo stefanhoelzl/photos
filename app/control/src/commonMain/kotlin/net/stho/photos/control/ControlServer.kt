@@ -87,7 +87,13 @@ public class ControlServer(
                             if (id == null || at == null) {
                                 return@post call.fail(HttpStatusCode.BadRequest, "expected photo/<uuid>/<index>")
                             }
-                            model.open(id) ?: return@post call.fail(HttpStatusCode.NotFound, "no such album")
+                            // Already inside that album -- how a person reaches a photo -- the album
+                            // list is the grid's now and no longer holds it, so it is not looked up
+                            // again. Found by the iOS suite, which navigates exactly that way.
+                            val here = model.state.value.screen
+                            if (!(here is Screen.Grid && here.albumId == id)) {
+                                model.open(id) ?: return@post call.fail(HttpStatusCode.NotFound, "no such album")
+                            }
                             model.openPhoto(at)
                         }
                         to.startsWith("album/") -> {
