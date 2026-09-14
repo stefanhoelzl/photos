@@ -354,6 +354,10 @@ public class ControlServer(
             val galleryAlbums = picker.albums.joinToString(",") {
                 """{"id":${it.id.json()},"name":${it.name.json()},"count":${it.count}}"""
             }
+            // Ids, so a scenario can pick loose photos: on the phone they are PhotoKit's own.
+            val assets = picker.assets.joinToString(",") {
+                """{"id":${it.id.json()},"type":"${it.mediaType}"}"""
+            }
             val naming = picker.naming?.let {
                 """{"name":${it.name.json()},"count":${it.count},"delete":${it.deleteFromGallery}}"""
             } ?: "null"
@@ -364,7 +368,7 @@ public class ControlServer(
             }
             listOf(
                 """"picker":{"access":${picker.access?.name?.json() ?: "null"},"albums":[$galleryAlbums],""" +
-                    """"assets":${picker.assets.size},"selected":${picker.selected.size},"naming":$naming}""",
+                    """"assets":[$assets],"selected":${picker.selected.size},"naming":$naming}""",
                 "\"uploads\":[$statuses]",
             )
         }.orEmpty()
