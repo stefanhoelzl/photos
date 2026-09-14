@@ -61,6 +61,12 @@ public class ControlServer(
      * offscreen scene, so it passes null and the host takes `simctl io screenshot` instead.
      */
     private val screenshot: ((width: Int, height: Int) -> ByteArray)? = null,
+    /**
+     * Fields a root adds to `/state` about things the model cannot see — on iOS, what `PHLivePhoto`
+     * last answered for the open Live Photo, which lives in a native view rather than in `AppUi`.
+     * Strings only, and added to every state body, set up or not.
+     */
+    private val extras: () -> Map<String, String> = { emptyMap() },
 ) {
     private var server: EmbeddedServer<*, *>? = null
 
@@ -176,11 +182,14 @@ public class ControlServer(
             ?: return when (launch) {
                 // Saying so is more use than an empty album list that looks like a working app
                 // whose library happens to hold no photographs.
-                is Launch.Blocked -> """{"screen":"blocked","reason":${launch.reason.json()}}"""
-                else -> """{"screen":"setup"}"""
+                is Launch.Blocked -> body(listOf("\"screen\":\"blocked\"", "\"reason\":${launch.reason.json()}"))
+                else -> body(listOf("\"screen\":\"setup\""))
             }
         return render(ui)
     }
+
+    private fun body(fields: List<String>): String =
+        "{" + (fields + extras().map { (name, value) -> "${name.json()}:${value.json()}" }).joinToString(",") + "}"
 
     private fun render(ui: AppUi): String {
         val screen = when (val s = ui.screen) {
@@ -204,7 +213,7 @@ public class ControlServer(
             """{"kind":"${it.kind}","title":${it.title.json()},"detail":${it.detail.json()}}"""
         } ?: "null"
         val livePair = ui.livePair?.let { """{"still":${it.still.json()},"video":${it.video.json()}}""" } ?: "null"
-        return "{" + listOf(
+        return body(listOf(
             "\"screen\":\"$screen\"",
             "\"sort\":\"${ui.sort}\"",
             "\"query\":${ui.query.json()}",
@@ -216,7 +225,7 @@ public class ControlServer(
             "\"photos\":[$photos]",
             "\"videoPath\":${ui.videoPath?.json() ?: "null"}",
             "\"livePair\":$livePair",
-        ).joinToString(",") + "}"
+        ))
     }
 
     private fun String.json(): String =

@@ -58,9 +58,14 @@ public fun exifApp1(
 }
 
 /**
- * Apple's maker note, as far as `pi_emit_apple_content_id` reads one: a 14-byte header —
- * `"Apple iOS\0"`, version, byte-order mark — and then an ordinary TIFF IFD whose offsets are
- * relative to the maker note's own start rather than to the TIFF header.
+ * Apple's maker note, byte for byte as an iPhone writes it: a 14-byte header — `"Apple iOS\0"`,
+ * version `00 01`, `"MM"` — and then a **big-endian** TIFF IFD whose offsets are relative to the
+ * maker note's own start rather than to the TIFF header.
+ *
+ * Big-endian inside, whatever the surrounding EXIF says, and that was measured rather than copied:
+ * ImageIO reads the identifier from this maker note in `MM` and ignores the identical note in `II`,
+ * which is what kept `PHLivePhoto` from pairing the fixture still with anything. `pi_emit_apple_content_id`
+ * reads the note's own byte-order mark, so ingest takes either.
  *
  * Hand-built because this is the only way the Live Photo pairing signal can be produced at all:
  * libexif has no Apple maker note support, so the fixture has to write the same bytes an iPhone
@@ -68,14 +73,16 @@ public fun exifApp1(
  */
 private fun appleMakerNote(contentIdentifier: String): ByteArray {
     val value = contentIdentifier.encodeToByteArray() + byteArrayOf(0)
-    val header = "Apple iOS".encodeToByteArray() + byteArrayOf(0) + le16(1) + "II".encodeToByteArray()
+    val header = "Apple iOS".encodeToByteArray() + byteArrayOf(0) + be16(1) + "MM".encodeToByteArray()
     val valueOffset = header.size + 2 + 12 + 4
     return header +
-        le16(1) +
-        TiffEntry(0x0011, type = 2, count = value.size, at = valueOffset).bytes() +
-        le32(0) +
+        be16(1) +
+        be16(0x0011) + be16(2) + be32(value.size) + be32(valueOffset) +
+        be32(0) +
         value
 }
+
+private fun be16(value: Int): ByteArray = byteArrayOf((value ushr 8).toByte(), value.toByte())
 
 /** One IFD entry, as far as the fixtures need to write one. */
 private data class TiffEntry(

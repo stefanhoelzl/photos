@@ -55,7 +55,12 @@ public fun writeSyntheticHeic(
     }
 }
 
-/** A short HEVC/MP4 clip, optionally carrying a display matrix and a Live Photo identifier. */
+/**
+ * A short HEVC clip, optionally carrying a display matrix and a Live Photo identifier.
+ *
+ * A `.mov` is QuickTime and anything else MP4 (the shim picks the muxer). A `.mov` carrying an
+ * identifier then has its metadata moved to where Apple writes it — see [toQuickTimeMetadata].
+ */
 public fun writeSyntheticVideo(
     path: Path,
     width: Int = 64,
@@ -66,5 +71,59 @@ public fun writeSyntheticVideo(
 ) {
     imagingCall { err ->
         pi_fixture_write_video(path.toString(), width, height, frames, rotation, contentIdentifier, err)
+    }
+    if (contentIdentifier != null && path.name.endsWith(".mov", ignoreCase = true)) {
+        path.write(toQuickTimeMetadata(path.readBytes()))
+    }
+}
+
+/**
+ * ffmpeg's metadata, reframed the way `PHLivePhoto` requires it.
+ *
+ * ffmpeg's mov muxer writes the right *contents* — an `mdta` handler, a `keys` box naming
+ * `com.apple.quicktime.content.identifier`, the value as item 1 — but as an ISO full box inside
+ * `moov/udta`, where AVFoundation reads iTunes tags. Apple writes the same `meta` directly under
+ * `moov`, with no version and flags. Measured on macOS against this very file: as ffmpeg wrote it,
+ * and with the box only moved, `PHLivePhoto` assembles nothing; moved *and* reframed, it assembles a
+ * full Live Photo, and AVFoundation lists the identifier under `com.apple.quicktime.mdta`.
+ *
+ * `moov` follows `mdat` here, so changing its size moves no chunk offset. That is required, and
+ * checked, rather than assumed.
+ */
+internal fun toQuickTimeMetadata(file: ByteArray): ByteArray {
+    val top = boxes(file, 0, file.size)
+    val mdat = top.single { it.type == "mdat" }
+    val moov = top.single { it.type == "moov" }
+    check(moov.at > mdat.at) { "moov precedes mdat; resizing it would move every chunk offset" }
+    val udta = boxes(file, moov.at + 8, moov.end).single { it.type == "udta" }
+    val meta = boxes(file, udta.at + 8, udta.end).single { it.type == "meta" }
+
+    // QuickTime `meta`: the same children, without the 4 bytes of version and flags.
+    val children = file.copyOfRange(meta.at + 12, meta.end)
+    val quickTime = be32(8 + children.size) + "meta".encodeToByteArray() + children
+
+    val otherMoovChildren = boxes(file, moov.at + 8, moov.end).filter { it.type != "udta" }
+    val remainingUdta = boxes(file, udta.at + 8, udta.end).filter { it.type != "meta" }
+    val newUdta = if (remainingUdta.isEmpty()) ByteArray(0) else {
+        val body = remainingUdta.fold(ByteArray(0)) { acc, box -> acc + file.copyOfRange(box.at, box.end) }
+        be32(8 + body.size) + "udta".encodeToByteArray() + body
+    }
+    val moovBody = otherMoovChildren.fold(ByteArray(0)) { acc, box -> acc + file.copyOfRange(box.at, box.end) } +
+        newUdta + quickTime
+    val newMoov = be32(8 + moovBody.size) + "moov".encodeToByteArray() + moovBody
+    return file.copyOfRange(0, moov.at) + newMoov + file.copyOfRange(moov.end, file.size)
+}
+
+private class Box(val type: String, val at: Int, val end: Int)
+
+/** The boxes between [start] and [end], 32-bit sizes only — all a fixture writer produces. */
+private fun boxes(file: ByteArray, start: Int, end: Int): List<Box> = buildList {
+    var at = start
+    while (at + 8 <= end) {
+        val size = ((file[at].toInt() and 0xFF) shl 24) or ((file[at + 1].toInt() and 0xFF) shl 16) or
+            ((file[at + 2].toInt() and 0xFF) shl 8) or (file[at + 3].toInt() and 0xFF)
+        check(size >= 8 && at + size <= end) { "malformed box at $at" }
+        add(Box(file.copyOfRange(at + 4, at + 8).decodeToString(), at, at + size))
+        at += size
     }
 }

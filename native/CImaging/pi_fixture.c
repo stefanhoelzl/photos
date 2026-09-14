@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -32,8 +33,16 @@ int pi_fixture_write_video(const char *path, int width, int height,
     const AVCodec *codec = avcodec_find_encoder_by_name("libx265");
     if (!codec) return pi_fail(err, PI_ERR_UNSUPPORTED, "fixture: libx265 missing");
 
-    if (avformat_alloc_output_context2(&ofmt, NULL, "mp4", path) < 0 || !ofmt)
-        return pi_fail(err, PI_ERR_ENCODE, "fixture: cannot create mp4");
+    /* A .mov is written as QuickTime, not as an MP4 under a .mov name. It matters for Live
+     * Photos: PHLivePhoto assembles a pair only when the MOV is a QuickTime file carrying
+     * com.apple.quicktime.content.identifier in its mdta keys -- measured on macOS, where the same
+     * frames and identifier in an MP4 container come back as no Live Photo at all, while the
+     * still-image-time metadata track Apple also writes turned out not to be required. */
+    size_t path_len = strlen(path);
+    const char *muxer =
+        (path_len >= 4 && strcasecmp(path + path_len - 4, ".mov") == 0) ? "mov" : "mp4";
+    if (avformat_alloc_output_context2(&ofmt, NULL, muxer, path) < 0 || !ofmt)
+        return pi_fail(err, PI_ERR_ENCODE, "fixture: cannot create %s", muxer);
 
     enc = avcodec_alloc_context3(codec);
     enc->width = width;
