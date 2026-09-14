@@ -213,6 +213,45 @@ class AppModelTest {
         assertEquals(listOf(blob), fetched, "the open photo's blob is fetched with no pack on disk")
     }
 
+    /**
+     * Opening an album starts its images whether or not its thumbnail pack has landed.
+     *
+     * They used to wait for it, and the wait was built as "only if the pack is already there" with
+     * nothing to try again when it arrived — so an album opened early never fetched its images.
+     * No ordering needed that: the album's pack is queued as a visible pack, a tier above the
+     * album's images, so the pack is still what the queue fetches first.
+     */
+    @Test
+    fun openingAnAlbumFetchesItsImagesEvenBeforeItsPackHasLanded() = runTest {
+        val pack = requireNotNull(net.stho.photos.catalog.ObjectId.parse("cd".repeat(32)))
+        val image = requireNotNull(net.stho.photos.catalog.ObjectId.parse("ef".repeat(32)))
+        val iceland = album("Iceland", 2024).copy(thumbsId = pack)
+        val still = PhotoRow(id = Uuid.random(), filename = "IMG_0001.HEIC", imageId = image, bytes = 1_000)
+        val fetched = mutableListOf<net.stho.photos.catalog.ObjectId>()
+        val own = own(this)
+        val queue = CacheQueue(
+            store = object : BlobStore {
+                override fun has(id: net.stho.photos.catalog.ObjectId) = id in fetched
+                override suspend fun fetch(id: net.stho.photos.catalog.ObjectId) { fetched += id }
+                override fun delete(id: net.stho.photos.catalog.ObjectId) = Unit
+                override fun present() = fetched.toSet()
+            },
+            scope = own,
+            backoff = { },
+        )
+        val catalog = object : Catalog by FakeCatalog(listOf(iceland), photos = listOf(still)) {
+            override fun blobs(): Map<Uuid, List<BlobRef>> = mapOf(iceland.id to listOf(BlobRef(image, 1_000, iceland.id)))
+        }
+        val model = AppModel(
+            catalog, FakeSyncer(SyncOutcome.Succeeded(1, 1)),
+            FakeThumbnails(present = false), FakePreviews(), FakeVideos(), queue, own,
+        )
+        model.start()
+        model.open(iceland)
+
+        assertEquals(listOf(pack, image), fetched, "the pack first, then the album's image -- with no pack on disk yet")
+    }
+
     private fun AppModel.names(): List<String> = state.value.albums.map { it.name }
 
     /**
