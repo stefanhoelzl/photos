@@ -133,7 +133,8 @@ neither `PHOTOS_ENDPOINT`/`PHOTOS_PASSWORD` nor a `photos-cli login` has answere
 `./gradlew :tests:ios:e2e` runs the app scenarios on a simulator — the same zones as
 `:tests:app`, against the real Debug app, the Keychain included. It needs the fixture media the
 Linux build writes (`:tests:fixtures:fixtureMedia`), passed as `-Pphotos.fixtureMedia=<dir>`, and
-it fails rather than skips when anything it needs is missing.
+it fails rather than skips when anything it needs is missing. CI runs it on every pull request, in
+a macOS job that waits for the Linux job's media, and a failure blocks the merge like any other.
 
 `./gradlew :app:domain:iosSimulatorArm64Test` runs the app tier's suites against iOS's own
 SQLite; `:domain`'s run there too, which is what answers §3's question about the platform
