@@ -23,6 +23,7 @@ import platform.Foundation.NSURLSessionTask
 import platform.Foundation.NSURLSessionTaskDelegateProtocol
 import platform.Foundation.NSURLSessionTaskStateRunning
 import platform.Foundation.NSURLSessionTaskStateSuspended
+import platform.Foundation.setHTTPMethod
 import platform.darwin.NSObject
 
 /**
@@ -61,7 +62,7 @@ internal object UrlSessionUploader : BackgroundUploader {
         for (transfer in transfers) {
             if (transfer.key in flying) continue
             val url = NSURL.URLWithString(transfer.url) ?: continue
-            val request = NSMutableURLRequest.requestWithURL(url).apply { HTTPMethod = "PUT" }
+            val request = NSMutableURLRequest.requestWithURL(url).apply { setHTTPMethod("PUT") }
             // From a file, as a background session requires; its length is sent with it.
             session.uploadTaskWithRequest(request, fromFile = NSURL.fileURLWithPath(transfer.file.toString())).apply {
                 taskDescription = transfer.key
