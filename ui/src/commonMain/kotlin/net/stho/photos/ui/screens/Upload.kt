@@ -73,9 +73,12 @@ internal fun UploadScreen(uploads: UploadModel, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxSize()) {
         NavBar("Choose photos", "into ${picker.parentName}", onBack = { uploads.close(); onClose() }) {}
-        when (val access = picker.access) {
-            null -> EmptyState("Opening the photo library…")
-            GalleryAccess.Full -> GalleryPicker(
+        val failure = picker.failure
+        val access = picker.access
+        when {
+            failure != null -> EmptyState(failure)
+            access == null -> EmptyState("Opening the photo library…")
+            access == GalleryAccess.Full -> GalleryPicker(
                 picker,
                 onAlbum = { album -> scope.launch { uploads.chooseAlbum(album) } },
                 onToggle = uploads::toggle,
