@@ -58,7 +58,7 @@ internal fun iosScenario(label: String, body: suspend IosScenario.() -> Unit) {
         )
         val zone = Zone(s3, Path(File(scratch, "staging").absolutePath))
         zone.clear()
-        IosScenario(zone, endpoint, simulator, app, scratch).use { it.body() }
+        IosScenario(zone, endpoint, simulator, app, scratch, media).use { it.body() }
     }
 }
 
@@ -74,7 +74,20 @@ internal class IosScenario(
     private val simulator: Simulator,
     private val app: File,
     private val scratch: File,
+    private val media: File,
 ) : AutoCloseable {
+
+    /**
+     * Full photo-library access for the installed app, as a person tapping Allow would give it
+     * (§8). Granted after [install], which is what resets it.
+     */
+    fun allowPhotos() = simulator.grantPhotos()
+
+    /**
+     * Fixture media into the simulator's own photo library — the phone's gallery for an upload
+     * scenario. The library is the device's, not the app's, so a reinstall does not empty it.
+     */
+    fun addToLibrary(vararg fixtures: String) = simulator.addMedia(fixtures.map { File(media, it) })
 
     /**
      * A fresh port for every launch, not one per scenario. A terminated app can still hold its
@@ -206,6 +219,10 @@ internal class Simulator(private val device: String) {
     fun uninstall() = run("xcrun", "simctl", "uninstall", device, BUNDLE_ID, allowFailure = true)
 
     fun resetKeychain() = run("xcrun", "simctl", "keychain", device, "reset")
+
+    fun grantPhotos() = run("xcrun", "simctl", "privacy", device, "grant", "photos", BUNDLE_ID)
+
+    fun addMedia(files: List<File>) = run("xcrun", "simctl", "addmedia", device, *files.map { it.absolutePath }.toTypedArray())
 
     fun terminate() = run("xcrun", "simctl", "terminate", device, BUNDLE_ID, allowFailure = true)
 
