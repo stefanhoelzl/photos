@@ -71,11 +71,15 @@ public class Account(
         } catch (failure: StorageUrlFailure) {
             return SaveOutcome.Rejected(failure.message)
         }
-        if (password.isBlank()) return SaveOutcome.Rejected("The password cannot be empty.")
+        // Trimmed like the URL: a zone password never contains whitespace, and a pasted one that
+        // carries a trailing space or newline would otherwise be stored happily and fail every
+        // request as `SignatureDoesNotMatch`, which names nothing a person could see.
+        val secret = password.trim()
+        if (secret.isEmpty()) return SaveOutcome.Rejected("The password cannot be empty.")
         return try {
             keyring.write(ENDPOINT, storageUrl.trim())
-            keyring.write(PASSWORD, password)
-            SaveOutcome.Saved(parsed, password)
+            keyring.write(PASSWORD, secret)
+            SaveOutcome.Saved(parsed, secret)
         } catch (failure: Exception) {
             SaveOutcome.Rejected(failure.message ?: "The credentials could not be stored.")
         }
@@ -122,7 +126,7 @@ public sealed interface AccountState {
     public data object Absent : AccountState
 
     /**
-     * The store could not be asked — a locked collection, no session bus, no biometric consent.
+     * The store could not be asked — a locked collection, no session bus, a locked phone.
      *
      * Deliberately not the same as [Absent]: showing setup here would invite someone to retype
      * a password they have already stored, and storing it again would not fix a locked keyring.

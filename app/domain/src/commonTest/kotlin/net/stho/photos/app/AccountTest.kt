@@ -92,6 +92,16 @@ class AccountTest {
     }
 
     @Test
+    fun aPastedPasswordIsStoredWithoutSurroundingWhitespace() {
+        // A trailing newline from a password manager would otherwise sign every request with the
+        // wrong secret, and the zone would answer SignatureDoesNotMatch.
+        val keyring = FakeKeyring()
+        val saved = assertIs<SaveOutcome.Saved>(Account(keyring).save(URL, " hunter2\n"))
+        assertEquals("hunter2", keyring.stored[PASSWORD])
+        assertEquals("hunter2", saved.password)
+    }
+
+    @Test
     fun aBlankPasswordIsRejected() {
         assertIs<SaveOutcome.Rejected>(Account(FakeKeyring()).save(URL, "   "))
     }
