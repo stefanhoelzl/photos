@@ -73,6 +73,17 @@ jobs:
       - name: Build and test
         run: ./gradlew build
 
+      # The media the app suites sync, written by the linuxX64 generator during `build` (the
+      # desktop suite depends on it). No Mac can run that generator, so the iOS suite below gets
+      # these exact files from here -- one generator, byte-identical media on both platforms.
+      - name: Upload the app suites' fixture media
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-media
+          path: tests/fixtures/build/fixture-media
+          retention-days: 1
+          if-no-files-found: error
+
       # Excluded from `build` on purpose, so it is asked for by name.
       - name: End-to-end scenarios
         run: ./gradlew :tests:cli:e2e
@@ -147,3 +158,50 @@ jobs:
           -destination 'generic/platform=iOS Simulator'
           -derivedDataPath build/DerivedData
           CODE_SIGNING_ALLOWED=NO
+
+  # The app's scenarios against the signed Debug app on a simulator (`:tests:ios`). Its own job,
+  # so the compile and simulator unit tests above still run beside the Linux job rather than
+  # waiting for it; only this one waits, because it needs the Linux job's fixture media.
+  #
+  # Safe on a fork's pull request for the same reason the job above is: the app is signed ad-hoc
+  # for the simulator, which needs no certificate, and nothing here reads a secret.
+  ios-e2e:
+    runs-on: macos-26
+    needs: build
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Cache the Kotlin/Native distribution
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: konan-${{ runner.os }}-
+
+      - name: Download the fixture media
+        uses: actions/download-artifact@v8
+        with:
+          name: fixture-media
+          path: .fixture-media
+
+      # Fails rather than skips when anything it needs is missing -- a simulator, the media,
+      # S3Mock -- so a green check here means the scenarios really ran.
+      - name: App scenarios on the simulator
+        run: ./gradlew :tests:ios:e2e -Pphotos.fixtureMedia=.fixture-media
+
+      # Whatever happened: a failing scenario's last frame is the first thing worth looking at.
+      - name: Upload the scenario screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-scenario-screenshots
+          path: tests/ios/build/scenarios/**/*.png
+          retention-days: 7
+          if-no-files-found: warn
