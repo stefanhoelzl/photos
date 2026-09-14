@@ -341,11 +341,19 @@ public class AppModel(
         navigate { it.push(screen) }
     }
 
-    /** Opening a photo from the grid. The album's order is what [index] indexes. */
+    /**
+     * Opening a photo from the grid. The album's order is what [index] indexes.
+     *
+     * Queues the photo itself at tier 0 and its neighbours at tier 1, exactly as a swipe does. It
+     * used not to: the open photo was fetched only as one of the album's images, and those start
+     * only once the album's thumbnail pack has landed — so a photo opened before that was fetched by
+     * nothing until the next swipe. The iOS suite found it, as a Live Photo that never downloaded.
+     */
     public fun openPhoto(index: Int) {
         val screen = state.value.screen
         if (screen !is Screen.Grid) return
         navigate { it.push(Screen.Photo(screen.albumId, screen.name, index)) }
+        viewing(index, state.value.photos)
     }
 
     /** Swiping, or tapping the filmstrip. */

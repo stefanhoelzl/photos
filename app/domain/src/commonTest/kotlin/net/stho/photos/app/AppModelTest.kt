@@ -174,6 +174,45 @@ class AppModelTest {
         assertNull(model.state.value.livePair)
     }
 
+    /**
+     * Opening a photo fetches it, whether or not its album's thumbnail pack has landed.
+     *
+     * The iOS suite found this: a scenario that opened a Live Photo straight after the first sync,
+     * before the pack arrived, waited a minute for blobs that never downloaded. Opening an album
+     * starts its images only once the pack is there, and the open photo's own top-tier fetch was
+     * queued only by a swipe — so a photo opened first was fetched by nothing.
+     */
+    @Test
+    fun openingAPhotoFetchesItEvenBeforeItsAlbumsPackHasLanded() = runTest {
+        val blob = requireNotNull(net.stho.photos.catalog.ObjectId.parse("ab".repeat(32)))
+        val still = PhotoRow(id = Uuid.random(), filename = "IMG_0001.HEIC", imageId = blob, bytes = 1_000)
+        val iceland = album("Iceland", 2024)
+        val fetched = mutableListOf<net.stho.photos.catalog.ObjectId>()
+        val own = own(this)
+        val queue = CacheQueue(
+            store = object : BlobStore {
+                override fun has(id: net.stho.photos.catalog.ObjectId) = id in fetched
+                override suspend fun fetch(id: net.stho.photos.catalog.ObjectId) { fetched += id }
+                override fun delete(id: net.stho.photos.catalog.ObjectId) = Unit
+                override fun present() = fetched.toSet()
+            },
+            scope = own,
+            backoff = { },
+        )
+        val catalog = object : Catalog by FakeCatalog(listOf(iceland), photos = listOf(still)) {
+            override fun blobs(): Map<Uuid, List<BlobRef>> = mapOf(iceland.id to listOf(BlobRef(blob, 1_000, iceland.id)))
+        }
+        val model = AppModel(
+            catalog, FakeSyncer(SyncOutcome.Succeeded(1, 1)),
+            FakeThumbnails(present = false), FakePreviews(), FakeVideos(), queue, own,
+        )
+        model.start()
+        model.open(iceland)
+        model.openPhoto(0)
+
+        assertEquals(listOf(blob), fetched, "the open photo's blob is fetched with no pack on disk")
+    }
+
     private fun AppModel.names(): List<String> = state.value.albums.map { it.name }
 
     /**
