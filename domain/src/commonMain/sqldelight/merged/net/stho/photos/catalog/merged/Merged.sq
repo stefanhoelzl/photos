@@ -156,6 +156,14 @@ SELECT p.id, p.filename, p.source_filename, p.taken_at, p.lat, p.lon, p.width, p
 FROM photo p WHERE p.album_id IN (SELECT album_id FROM descendant)
 ORDER BY p.taken_at IS NULL, p.taken_at, p.filename LIMIT 1;
 
+-- The album a photo belongs to, for the pack its thumbnail is in. A container has no pack of its
+-- own (§2), so its cover -- found above by descending -- is read from the pack of the descendant
+-- that holds it.
+selectAlbumOfPhoto:
+SELECT a.album_id, a.name, a.name_folded, a.parent, a.photo_count, a.date_min, a.date_max, a.lat, a.lon,
+       a.cover_photo_id, a.thumbs_id
+FROM album a JOIN photo p ON p.album_id = a.album_id WHERE p.id = ? LIMIT 1;
+
 selectPlacedPhotos:
 SELECT album_id, id, filename, source_filename, taken_at, lat, lon, width, height, bytes,
        source_bytes, original_hash, media_type, image_id, live_still_id, live_video_id, video_id
