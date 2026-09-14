@@ -4,13 +4,17 @@
 name: ci
 
 on:
-  pull_request:
-  # Also on main, and only for the cache. `gradle/actions/setup-gradle` writes its Gradle
-  # home cache from the default branch alone and reads it everywhere else -- so with a
-  # pull_request-only trigger nothing ever wrote it, and every PR re-downloaded the
-  # distribution and re-resolved every dependency. This run is what fills it.
+  # Every push to every branch, so a branch is checked before anyone opens a PR for it. A PR's
+  # required checks are matched by commit and job name, so the push run on its head satisfies
+  # them. On main this is also what fills the cache: `gradle/actions/setup-gradle` writes its
+  # Gradle home cache from the default branch alone and reads it everywhere else.
+  #
+  # Deliberately NOT also `pull_request`. That would run everything twice for every PR from a
+  # branch here, and skipping the duplicate is not an option: a skipped job reports a passing
+  # check, so a PR's skipped `build` would satisfy the ruleset while the push run was failing.
+  # The cost is that a PR from a fork gets no checks at all and so cannot merge -- which fails
+  # closed, and a fork's pushes are what a maintainer would re-push from here anyway.
   push:
-    branches: [main]
 
 permissions:
   contents: read
@@ -109,9 +113,9 @@ jobs:
   # The phone (DESIGN §6). A second job rather than more steps on the first: nothing here needs
   # the imaging prefix or the Linux toolchain, and the two run at once instead of in sequence.
   #
-  # This repo is PUBLIC, so macOS minutes are free -- and, more to the point, a pull request
-  # from a fork can reach this job. It therefore holds no certificate and signs nothing: the
-  # archive and the TestFlight upload are a separate workflow that runs only on `main`.
+  # This repo is PUBLIC, so macOS minutes are free -- and every branch's push reaches this job.
+  # It therefore holds no certificate and signs nothing: the archive and the TestFlight upload
+  # are a separate workflow that runs only on `main`.
   ios:
     runs-on: macos-26
     steps:
@@ -149,7 +153,7 @@ jobs:
       # nothing about the Info.plist, the Run Script phase, the asset catalog or the Swift entry
       # point -- and those fail at archive time, on main, where the upload gates. Building for a
       # simulator destination exercises all four and needs no certificate, which is what makes
-      # it safe to run on a pull request from a fork at all.
+      # it safe to run on every branch at all.
       - name: Build the app for a simulator
         run: >-
           xcodebuild build
@@ -163,7 +167,7 @@ jobs:
   # so the compile and simulator unit tests above still run beside the Linux job rather than
   # waiting for it; only this one waits, because it needs the Linux job's fixture media.
   #
-  # Safe on a fork's pull request for the same reason the job above is: the app is signed ad-hoc
+  # Safe on every branch for the same reason the job above is: the app is signed ad-hoc
   # for the simulator, which needs no certificate, and nothing here reads a secret.
   ios-e2e:
     runs-on: macos-26
