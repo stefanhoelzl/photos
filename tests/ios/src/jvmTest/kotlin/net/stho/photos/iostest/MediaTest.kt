@@ -44,6 +44,11 @@ class MediaTest {
         assertContentEquals(album.bytesOf(requireNotNull(live.liveStillId)), File(pair.string("still")).readBytes())
         assertContentEquals(album.bytesOf(requireNotNull(live.liveVideoId)), File(pair.string("video")).readBytes())
         assertNull(opened.nullableString("videoPath"), "a Live Photo is not a video")
+
+        // The pair is one iOS assembles (FixtureMedia), so the app's own view, handed the app's
+        // own files, must get a *full* Live Photo from PHLivePhoto -- not the degraded one it
+        // builds from the still alone, and not the `none` an unassemblable pair ends with.
+        awaitState("PHLivePhoto to assemble the pair in full") { it.nullableString("livePhoto") == "full" }
         screenshot("media-live")
     }
 }

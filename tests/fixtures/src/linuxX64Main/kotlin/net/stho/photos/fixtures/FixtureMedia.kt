@@ -15,8 +15,9 @@ import kotlinx.io.files.SystemFileSystem
  * with equal bytes would be one blob, and a scenario asserting "exactly this album's objects"
  * would be asserting against a set smaller than the rows it declared.
  *
- * The Live Photo's `.mov` is an MP4 container under a `.mov` name, because that is what
- * `writeSyntheticVideo` writes whatever the extension — and what `:tests:cli` already ingests.
+ * The Live Photo pair is one iOS assembles: the `.mov` is QuickTime with its `mdta` metadata box
+ * directly under `moov`, and the still carries Apple's maker note big-endian, as an iPhone writes
+ * both. The iOS suite asserts that `PHLivePhoto` builds a full Live Photo from exactly these files.
  */
 public fun main(args: Array<String>) {
     val out = Path(requireNotNull(args.firstOrNull()) { "usage: fixtureMedia <directory>" })

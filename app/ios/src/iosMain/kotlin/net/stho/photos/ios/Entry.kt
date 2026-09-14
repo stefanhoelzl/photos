@@ -38,7 +38,14 @@ public object PhotosEntry {
  * §1's flow, and the phone has only one way in: the setup screen, or the Keychain. No
  * environment is consulted for credentials — a TestFlight build has none to read.
  */
-public class PhotosRoot {
+public class PhotosRoot(
+    /**
+     * Told what `PHLivePhoto` last answered for the open Live Photo: `requested`, `degraded`, `full`
+     * or `none`. Only the Debug entry passes one, so the control server can report it; release
+     * passes nothing and the view reports to no one.
+     */
+    private val onLivePhoto: ((String) -> Unit)? = null,
+) {
     private val cacheRoot = PhotosApp.defaultCacheRoot()
 
     public val launcher: Launcher = Launcher(Account(KeychainKeyring())) { storage, password ->
@@ -52,7 +59,7 @@ public class PhotosRoot {
                 // The two things on the viewer no shared code can draw (§6's interop table).
                 CompositionLocalProvider(
                     LocalVideoSurface provides AvVideoSurface(),
-                    LocalLivePhotoSurface provides PhLivePhotoSurface(),
+                    LocalLivePhotoSurface provides PhLivePhotoSurface(onLivePhoto),
                 ) {
                     Photos(launcher)
                 }

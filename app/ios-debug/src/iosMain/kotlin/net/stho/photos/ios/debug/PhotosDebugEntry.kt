@@ -1,7 +1,8 @@
-@file:OptIn(ExperimentalForeignApi::class)
+@file:OptIn(ExperimentalForeignApi::class, kotlin.concurrent.atomics.ExperimentalAtomicApi::class)
 
 package net.stho.photos.ios.debug
 
+import kotlin.concurrent.AtomicReference
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
 import net.stho.photos.control.ControlServer
@@ -25,10 +26,17 @@ public object PhotosDebugEntry {
     /** Held so the server lives as long as the app does. */
     private var server: ControlServer? = null
 
+    /**
+     * What `PHLivePhoto` last answered for the open Live Photo. Written on the main queue, read on
+     * the server's, hence the atomic.
+     */
+    private val livePhoto = AtomicReference("none")
+
     public fun viewController(): UIViewController {
-        val root = PhotosRoot()
+        val root = PhotosRoot(onLivePhoto = { livePhoto.value = it })
         getenv("PHOTOS_CONTROL_PORT")?.toKString()?.toIntOrNull()?.let { port ->
-            server = ControlServer(port, root.launcher).also { it.start() }
+            server = ControlServer(port, root.launcher, extras = { mapOf("livePhoto" to livePhoto.value) })
+                .also { it.start() }
         }
         return root.viewController()
     }

@@ -1064,6 +1064,24 @@ the only thing that differs.
 a swipe leaves it. A Live Photo plays in `PHLivePhotoView` from the two files the queue already
 fetched — the untouched still and its MOV — with Photos' own press-and-hold, and plays a brief
 hint once when it arrives so the motion is discoverable before the badge has to announce it.
+
+> **A pair iOS will not assemble still shows its still.** `PHLivePhoto` answers twice: a degraded
+> photo built from the still, then the full one — or, when the pair cannot be assembled, *no
+> photo*, not cancelled. Measured on a simulator, 167 ms apart. Assigning each answer replaced the
+> degraded photo with nothing and left an empty native view over the viewer's own still, which is
+> a blank screen; so the view is mounted only once a photo exists and an empty later answer never
+> replaces one.
+>
+> **What makes a pair assemble was measured, not assumed.** On macOS, with Apple-written files:
+> the MOV must be a **QuickTime** file whose `mdta` metadata box — handler `mdta`, a `keys` box
+> naming `com.apple.quicktime.content.identifier` — sits **directly under `moov`, with no version
+> and flags**. The same frames and identifier in an MP4 container come back as no Live Photo, and
+> so does the same box where ffmpeg's mov muxer writes it, as an ISO full box inside `moov/udta`;
+> the fixture writer reframes it. The still-image-time metadata track Apple also writes is not
+> required. The still's identifier lives
+> in Apple's maker note, which ImageIO reads only **big-endian**. The synthetic pair the app suites
+> sync is written that way, and the iOS suite asserts the app's own view gets a full Live Photo
+> from it. A real library's MOV and still are uploaded as-is (§5), so genuine pairs keep both.
 The desktop harness installs no Live Photo view: the still stays and the badge says what the
 phone would do with it.
 

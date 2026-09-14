@@ -258,7 +258,10 @@ if ! have ffmpeg; then
         --enable-zlib
         # containers we actually hold
         --enable-demuxer=mov,avi,mpegps,mpegvideo,matroska,image2
-        --enable-muxer=mp4,image2
+        # mov: the Live Photo fixture's MOV (tests/fixtures), which iOS pairs only as QuickTime.
+        # It is the mp4 muxer's own code under a second name, so it costs the shipped binary
+        # almost nothing -- and nothing in the pipeline selects it.
+        --enable-muxer=mp4,mov,image2
         --enable-protocol=file
         # video decoders, one per measured codec
         --enable-decoder=h264,hevc,mjpeg,mpeg1video,mpeg2video,mpeg4,msmpeg4v2,msmpeg4v3,h263,h263i

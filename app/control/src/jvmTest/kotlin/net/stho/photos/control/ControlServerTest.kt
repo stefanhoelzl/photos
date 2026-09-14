@@ -75,6 +75,22 @@ class ControlServerTest {
     }
 
     @Test
+    fun aRootsExtraFieldsReachState() {
+        val extraPort = ServerSocket(0).use { it.localPort }
+        val withExtras = ControlServer(extraPort, launcher, extras = { mapOf("livePhoto" to "full") }).also { it.start() }
+        try {
+            launcher.start()
+            val body = http.send(
+                HttpRequest.newBuilder(URI("http://127.0.0.1:$extraPort/state")).GET().build(),
+                HttpResponse.BodyHandlers.ofString(),
+            ).body()
+            assertEquals("""{"screen":"setup","livePhoto":"full"}""", body)
+        } finally {
+            withExtras.stop()
+        }
+    }
+
+    @Test
     fun aRootThatCannotRenderAnswersScreenshotWith404() {
         assertEquals(404, get("/screenshot").statusCode())
     }
