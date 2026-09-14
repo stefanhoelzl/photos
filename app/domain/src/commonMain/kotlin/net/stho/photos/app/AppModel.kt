@@ -390,16 +390,18 @@ public class AppModel(
     }
 
     /**
-     * An opened album's images, once its *own* pack has landed.
+     * An opened album's images, queued the moment it opens.
      *
-     * Not once the whole sweep has: waiting for all 288 would make the first album opened on a
-     * cold launch sit about a minute before a single image arrived. The ladder already puts this
-     * above the remaining sweep, so it does not have to wait for it either.
+     * With no wait for anything: not for the background sweep of every pack, and not for this
+     * album's own pack either. Ordering is the ladder's job, and it already has it — [open] queues
+     * the album's pack as a visible pack, a tier above these images, so the pack is fetched first
+     * without being waited on. Waiting was worse than redundant: it was built as "only if the pack
+     * is already there", nothing retried when the pack arrived, and an album opened before then
+     * never fetched its images at all.
      */
     private fun startAlbumImages(albumId: Uuid) {
         val album = catalog.album(albumId) ?: return
         if (album.photoCount == 0) return
-        if (!thumbnails.has(album)) return
         queue.openAlbum(blobs[albumId].orEmpty())
     }
 
