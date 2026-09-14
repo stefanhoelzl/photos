@@ -196,6 +196,20 @@ class MergedCatalogTest {
         assertTrue(cover.filename.startsWith("2002_"), cover.filename)
     }
 
+    /** A container has no pack, so its cover's thumbnail is in the pack of the album holding it. */
+    @Test
+    fun aContainersCoverPhotoLeadsToThePackOfTheAlbumHoldingIt() {
+        val shards = containerTree("Weihnachten", listOf("2002", "2003")).mapIndexed { i, shard ->
+            if (shard.photos.isEmpty()) shard
+            else shard.copy(info = shard.info.copy(thumbsId = ObjectId.ofContent("pack $i".encodeToByteArray())))
+        }
+        val built = build(shards)
+
+        val cover = assertNotNull(built.reader.coverPhoto(of = shards[0].info.id))
+        val holder = shards.first { shard -> shard.photos.any { it.id == cover.id } }
+        assertEquals(assertNotNull(holder.info.thumbsId), built.reader.albumOf(cover.id)?.thumbsId)
+    }
+
     @Test
     fun anExplicitCoverOnAContainerIsNotOverriddenByTheDescent() {
         val shards = containerTree("Weihnachten", listOf("2002", "2003")).toMutableList()

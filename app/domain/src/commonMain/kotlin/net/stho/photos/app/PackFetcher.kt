@@ -49,14 +49,24 @@ public class PackFetcher(
         album.thumbsId?.let { SystemFileSystem.exists(store.packPath(it)) } == true
 
     override fun cover(album: Album): ByteArray? {
-        val thumbs = album.thumbsId ?: return null
-        val path = store.packPath(thumbs)
-        if (!SystemFileSystem.exists(path)) return null
+        // An album of photos whose own pack has not landed stops here, before opening the merged
+        // DB. A container has no pack (§2) and always goes on.
+        album.thumbsId?.let { if (!SystemFileSystem.exists(store.packPath(it))) return null }
         // §3 resolves a cover by descending into children until a photo is found, unless one
-        // was set explicitly -- which is the reader's rule, not something to re-derive here.
-        val photo = runCatching {
-            CatalogReader(mergedPath, drivers).use { it.coverPhoto(of = album.id) }
+        // was set explicitly -- which is the reader's rule, not something to re-derive here. The
+        // thumbnail is then in the pack of whichever album holds that photo: the album itself, or
+        // for a container the descendant it came from. Reading only the album's own pack left
+        // every container row on the placeholder.
+        val (photo, pack) = runCatching {
+            CatalogReader(mergedPath, drivers).use { reader ->
+                val photo = reader.coverPhoto(of = album.id)
+                val pack = photo?.let { reader.albumOf(it.id)?.thumbsId }
+                photo to pack
+            }
         }.getOrNull() ?: return null
+        if (photo == null || pack == null) return null
+        val path = store.packPath(pack)
+        if (!SystemFileSystem.exists(path)) return null
         return runCatching { ThumbPack(path, drivers).thumbnail(photo.id) }.getOrNull()
     }
 

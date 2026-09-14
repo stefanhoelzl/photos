@@ -220,6 +220,12 @@ public class CatalogReader(public val path: Path, drivers: SqlDrivers) : AutoClo
         return queries.selectEarliestPhotoUnder(of, ::PhotoRow).executeAsOneOrNull()
     }
 
+    /**
+     * The album a photo belongs to — which is where its thumbnail's pack is. A container's cover
+     * photo belongs to a descendant, since a container has no pack of its own (§2).
+     */
+    public fun albumOf(photo: Uuid): Album? = queries.selectAlbumOfPhoto(photo, ::Album).executeAsOneOrNull()
+
     /** Photos with coordinates, for the map's photo layer. */
     public fun placedPhotos(): List<PlacedPhoto> = queries.selectPlacedPhotos {
         albumId, id, filename, sourceFilename, takenAt, lat, lon, width, height, bytes,
