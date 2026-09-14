@@ -56,3 +56,7 @@ include(":tests:cli")
 include(":tests:app")
 // The zone builder `:tests:app` and the iOS suite share, kept free of anything Linux-only.
 include(":tests:zone")
+// The iOS suite: `:tests:app`'s scenarios, run on a Mac against the signed Debug app on a
+// simulator, driven through its control server. Opt-in -- `:tests:ios:e2e` -- because it fails,
+// rather than skips, anywhere without a simulator.
+include(":tests:ios")

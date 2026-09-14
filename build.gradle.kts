@@ -212,6 +212,11 @@ project(":tests:app") {
     tasks.matching { it.name == "jvmTest" }.configureEach { configureS3MockJvm(this) }
 }
 
+// The iOS suite reaches the same S3Mock from the simulator, which shares the Mac's loopback.
+project(":tests:ios") {
+    tasks.matching { it.name == "jvmTest" }.configureEach { configureS3MockJvm(this) }
+}
+
 project(":tests:cli") {
     tasks.matching { it.name == "linuxX64Test" }.configureEach { configureS3Mock(this) }
 }

@@ -30,6 +30,7 @@ download queue and no screen to keep in order.
 | `:tests:cli` | the end-to-end suite: declares a library and a zone, runs the *shipped* binary, asserts both |
 | `:tests:app` | its counterpart for the app: declares a zone — shards plus real media blobs — starts the real composition root, and asserts what the model reports and what lands on disk |
 | `:tests:zone` | the zone builder both app suites share — shards, thumbnail packs and real media blobs — with nothing Linux-only in it, so a Mac can run it |
+| `:tests:ios` | the app scenarios again, on a Mac, against the signed Debug app on a simulator, driven through its control server; `:tests:ios:e2e`, and it fails rather than skips without a simulator |
 
 Not modules, and not Kotlin:
 
@@ -128,6 +129,11 @@ every Keychain call fails with -34018 while the rest of it runs perfectly.
 On the phone the app asks for the storage URL and password once, on first launch, and keeps them
 in the Keychain — the password behind Face ID. On the desktop the same screen appears only when
 neither `PHOTOS_ENDPOINT`/`PHOTOS_PASSWORD` nor a `photos-cli login` has answered first.
+
+`./gradlew :tests:ios:e2e` runs the app scenarios on a simulator — the same zones as
+`:tests:app`, against the real Debug app, the Keychain included. It needs the fixture media the
+Linux build writes (`:tests:fixtures:fixtureMedia`), passed as `-Pphotos.fixtureMedia=<dir>`, and
+it fails rather than skips when anything it needs is missing.
 
 `./gradlew :app:domain:iosSimulatorArm64Test` runs the app tier's suites against iOS's own
 SQLite; `:domain`'s run there too, which is what answers §3's question about the platform
