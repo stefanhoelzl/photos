@@ -27,6 +27,7 @@ public fun Photos(launcher: Launcher) {
             thumbnails = current.session.thumbnails,
             storageUrl = current.storage,
             onLogOut = launcher::logOut,
+            uploads = current.session.uploads,
         )
     }
 }

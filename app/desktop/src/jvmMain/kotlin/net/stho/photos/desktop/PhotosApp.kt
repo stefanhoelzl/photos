@@ -24,6 +24,9 @@ import net.stho.photos.app.MergedCatalogSource
 import net.stho.photos.app.PackFetcher
 import net.stho.photos.app.Session
 import net.stho.photos.app.PreviewDecoder
+import net.stho.photos.app.ForegroundUploader
+import net.stho.photos.app.UploadModel
+import net.stho.photos.app.Uploads
 
 /**
  * The composition root, as a value.
@@ -43,6 +46,8 @@ public class PhotosApp(
     decodeLibrary: String?,
     /** Overridden by the suite, which substitutes a surface that opens no player. */
     private val videoSurface: VideoSurface = VlcVideoSurface(),
+    /** A directory standing in for the phone's photo library (§8). Without one, no upload. */
+    galleryRoot: String? = null,
 ) : Session {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -83,6 +88,15 @@ public class PhotosApp(
         scope = scope,
     )
 
+    private val gallery = galleryRoot?.let { FolderGallery(java.io.File(it), imaging) }
+
+    /** §8's upload. The phone's background session becomes a foreground PUT here, one at a time. */
+    private val upload = gallery?.let {
+        Uploads(it, ForegroundUploader(http, scope), sync, drivers, cacheRoot, scope, onLanded = { model.refresh() })
+    }
+
+    override val uploads: UploadModel? = if (gallery != null && upload != null) UploadModel(gallery, upload, scope) else null
+
     init {
         // The nav bar counts packs down as they land. The queue knows what is held; only this
         // root knows which of those ids are packs, so the counting happens here.
@@ -103,6 +117,7 @@ public class PhotosApp(
 
     override fun start() {
         model.start()
+        upload?.resume()
     }
 
     override fun close() {

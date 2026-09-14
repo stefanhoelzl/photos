@@ -1,7 +1,7 @@
 package net.stho.photos.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
@@ -21,6 +21,7 @@ import net.stho.photos.app.AppUi
 import net.stho.photos.app.Screen
 import net.stho.photos.app.SyncStatus
 import net.stho.photos.app.Thumbnails
+import net.stho.photos.app.UploadModel
 import net.stho.photos.storage.StorageUrl
 
 /**
@@ -40,6 +41,8 @@ public fun App(
     /** Shown, masked, on Settings › Account — §1 says that screen is read-only. */
     storageUrl: StorageUrl,
     onLogOut: () -> Unit,
+    /** §8's upload, when the root has a gallery to upload from. Without one there is no upload icon. */
+    uploads: UploadModel? = null,
 ) {
     val ui by model.state.collectAsState()
     val arrivals by thumbnails.arrivals.collectAsState()
@@ -53,6 +56,12 @@ public fun App(
         onDispose { orientation.allowLandscape(false) }
     }
 
+    // The list on screen becomes the new album's parent, which is why only the two album lists
+    // carry the icon: an album of photos cannot hold a sub-album (§2).
+    val startUpload: (() -> Unit)? = uploads?.let { upload ->
+        { model.openUpload()?.let { upload.open(it.parent, it.parentName) } }
+    }
+
     // The ground runs under the status bar and home indicator; the content does not. On a
     // phone those insets are the notch and the bottom bar, and without this the nav bar's
     // gear sat under the clock (measured on an SE2). On the desktop they are zero.
@@ -62,6 +71,8 @@ public fun App(
             when (val screen = ui.screen) {
                 is Screen.Albums -> {
                     NavBar("Albums", ui.subtitle, onBack = null) {
+                        // Leftmost, beyond the sort (§6's table reads from the right edge).
+                        startUpload?.let { BarButton(Icons.upload, "Upload", it) }
                         ListToggle(ui, model)
                         BarButton(Icons.gear, "Settings", model::openSettings)
                     }
@@ -86,6 +97,7 @@ public fun App(
 
                 is Screen.Container -> {
                     NavBar(screen.name, ui.subtitle, onBack = model::back) {
+                        startUpload?.let { BarButton(Icons.upload, "Upload", it) }
                         ListToggle(ui, model)
                         BarButton(Icons.gear, "Settings", model::openSettings)
                     }
@@ -109,7 +121,7 @@ public fun App(
                 is Screen.Grid -> {
                     // No sort here: an album's photos have one order, oldest first (§3). The
                     // icon on this screen used to cycle the *album* sort, which changed nothing
-                    // visible and read as broken.
+                    // visible and read as broken. No upload either: see [startUpload].
                     NavBar(screen.name, ui.photosSubtitle, onBack = model::back) {
                         if (ui.showingMap) BarButton(Icons.grid, "Grid", model::toggleMap)
                         else BarButton(Icons.map, "Map", model::toggleMap)
@@ -150,12 +162,24 @@ public fun App(
                     NavBar("Settings", null, onBack = model::back) {}
                     SettingsScreen(ui.sync, ui.totals, ui.storage, storageUrl, onLogOut)
                 }
+
+                is Screen.Upload -> {
+                    if (uploads != null) {
+                        UploadScreen(uploads, onClose = model::back)
+                    } else {
+                        NavBar("Upload", null, onBack = model::back) {}
+                        EmptyState("There is no photo library to upload from here.")
+                    }
+                }
             }
         }
-        ui.notice?.let { notice ->
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+        // Along the bottom edge, the toast above the upload pill: both are transient, and neither
+        // may cover the nav bar a person needs to get away from them.
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
+            ui.notice?.let { notice ->
                 Toast(notice, onSettings = model::openSettings, onDismiss = model::dismissNotice)
             }
+            if (uploads != null && !viewing) UploadProgress(uploads)
         }
     }
 }

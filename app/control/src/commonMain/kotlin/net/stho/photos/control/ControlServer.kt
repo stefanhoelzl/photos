@@ -21,6 +21,7 @@ import net.stho.photos.app.MapCamera
 import net.stho.photos.app.MapPin
 import net.stho.photos.app.SaveOutcome
 import net.stho.photos.app.Screen
+import net.stho.photos.app.UploadModel
 
 /**
  * How the app is driven and reviewed without a person at the keyboard (§6).
@@ -31,7 +32,8 @@ import net.stho.photos.app.Screen
  * drives is real behaviour rather than a stand-in.
  *
  *   GET  /state           the current screen, sort, query, albums with their cache state, sync
- *                         status, notice, and what the viewer holds (videoPath, livePair)
+ *                         status, notice, what the viewer holds (videoPath, livePair), and the
+ *                         upload picker and uploads when the root has a gallery
  *   POST /nav?to=albums   push a screen: albums | settings | album/<uuid> |
  *                         photo/<uuid>/<index> | back
  *   POST /sort            cycle the sort, exactly as the icon does
@@ -48,6 +50,16 @@ import net.stho.photos.app.Screen
  *                         a row of the list of albums sharing one spot, or closing it
  *   POST /cache?album=<uuid>&action=download|pause|clear
  *                         the album row's cache controls, which are a swipe or a tap on the strip
+ *   POST /upload/open     the upload icon, on the album list or a container (§8)
+ *   POST /upload/album?id=<gallery album id>
+ *                         pick a whole gallery album; the name dialog opens prefilled
+ *   POST /upload/select?ids=<asset>,<asset>
+ *                         pick loose photos; the name dialog opens empty
+ *   POST /upload/name?name=…&delete=true|false
+ *                         the name dialog's field and checkbox
+ *   POST /upload/confirm  the dialog's Upload; answers 422 while there is no name
+ *   POST /upload/cancel?album=<uuid>, POST /upload/retry?album=<uuid>
+ *                         the sheet's two buttons
  *   POST /setup?url=…&password=…
  *                         §1's setup screen's only action, through `Launcher.save` — so the real
  *                         credential store, the Keychain on a phone, is what a scenario exercises.
@@ -84,6 +96,10 @@ public class ControlServer(
     /** The running session's model, or null while the setup screen is up. */
     private val model: AppModel?
         get() = (launcher.state.value as? Launch.Running)?.session?.model
+
+    /** The running session's upload, or null when there is no session or no gallery. */
+    private val uploads: UploadModel?
+        get() = (launcher.state.value as? Launch.Running)?.session?.uploads
 
     public fun start() {
         server = embeddedServer(CIO, port = port, host = "127.0.0.1") {
@@ -194,6 +210,63 @@ public class ControlServer(
                     call.json(state())
                 }
 
+                post("/upload/open") {
+                    val model = model ?: return@post call.fail(HttpStatusCode.Conflict, "not set up")
+                    val uploads = uploads ?: return@post call.fail(HttpStatusCode.NotFound, "this root has no gallery")
+                    val upload = model.openUpload()
+                        ?: return@post call.fail(HttpStatusCode.Conflict, "upload starts from the album list or a container")
+                    uploads.open(upload.parent, upload.parentName)
+                    call.json(state())
+                }
+
+                post("/upload/album") {
+                    val uploads = uploads ?: return@post call.fail(HttpStatusCode.NotFound, "this root has no gallery")
+                    val id = call.request.queryParameters["id"].orEmpty()
+                    val album = uploads.picker.value.albums.firstOrNull { it.id == id }
+                        ?: return@post call.fail(HttpStatusCode.NotFound, "no such gallery album")
+                    uploads.chooseAlbum(album)
+                    call.json(state())
+                }
+
+                post("/upload/select") {
+                    val uploads = uploads ?: return@post call.fail(HttpStatusCode.NotFound, "this root has no gallery")
+                    val ids = call.request.queryParameters["ids"].orEmpty().split(',').filter(String::isNotBlank)
+                    uploads.select(ids)
+                    uploads.chooseSelected()
+                    call.json(state())
+                }
+
+                post("/upload/name") {
+                    val uploads = uploads ?: return@post call.fail(HttpStatusCode.NotFound, "this root has no gallery")
+                    call.request.queryParameters["name"]?.let(uploads::rename)
+                    call.request.queryParameters["delete"]?.let { uploads.deleteAfterUpload(it == "true") }
+                    call.json(state())
+                }
+
+                post("/upload/confirm") {
+                    val model = model ?: return@post call.fail(HttpStatusCode.Conflict, "not set up")
+                    val uploads = uploads ?: return@post call.fail(HttpStatusCode.NotFound, "this root has no gallery")
+                    uploads.confirm() ?: return@post call.fail(HttpStatusCode.UnprocessableEntity, "choose photos and name the album first")
+                    if (model.state.value.screen is Screen.Upload) model.back()
+                    call.json(state())
+                }
+
+                post("/upload/cancel") {
+                    val uploads = uploads ?: return@post call.fail(HttpStatusCode.NotFound, "this root has no gallery")
+                    val id = runCatching { Uuid.parse(call.request.queryParameters["album"].orEmpty()) }.getOrNull()
+                        ?: return@post call.fail(HttpStatusCode.BadRequest, "bad album id")
+                    uploads.cancel(id)
+                    call.json(state())
+                }
+
+                post("/upload/retry") {
+                    val uploads = uploads ?: return@post call.fail(HttpStatusCode.NotFound, "this root has no gallery")
+                    val id = runCatching { Uuid.parse(call.request.queryParameters["album"].orEmpty()) }.getOrNull()
+                        ?: return@post call.fail(HttpStatusCode.BadRequest, "bad album id")
+                    uploads.retry(id)
+                    call.json(state())
+                }
+
                 post("/setup") {
                     val url = call.request.queryParameters["url"].orEmpty()
                     val password = call.request.queryParameters["password"].orEmpty()
@@ -247,19 +320,20 @@ public class ControlServer(
                 is Launch.Blocked -> body(listOf("\"screen\":\"blocked\"", "\"reason\":${launch.reason.json()}"))
                 else -> body(listOf("\"screen\":\"setup\""))
             }
-        return render(ui)
+        return render(ui, uploads)
     }
 
     private fun body(fields: List<String>): String =
         "{" + (fields + extras().map { (name, value) -> "${name.json()}:${value.json()}" }).joinToString(",") + "}"
 
-    private fun render(ui: AppUi): String {
+    private fun render(ui: AppUi, uploads: UploadModel?): String {
         val screen = when (val s = ui.screen) {
             is Screen.Albums -> "albums"
             is Screen.Container -> "container/${s.albumId}"
             is Screen.Grid -> "grid/${s.albumId}"
             is Screen.Photo -> "photo/${s.albumId}/${s.index}"
             is Screen.Settings -> "settings"
+            is Screen.Upload -> "upload"
         }
         val albums = ui.albums.joinToString(",") {
             val cache = ui.cacheOf(it)
@@ -275,6 +349,25 @@ public class ControlServer(
             """{"kind":"${it.kind}","title":${it.title.json()},"detail":${it.detail.json()}}"""
         } ?: "null"
         val livePair = ui.livePair?.let { """{"still":${it.still.json()},"video":${it.video.json()}}""" } ?: "null"
+        val upload = uploads?.let { model ->
+            val picker = model.picker.value
+            val galleryAlbums = picker.albums.joinToString(",") {
+                """{"id":${it.id.json()},"name":${it.name.json()},"count":${it.count}}"""
+            }
+            val naming = picker.naming?.let {
+                """{"name":${it.name.json()},"count":${it.count},"delete":${it.deleteFromGallery}}"""
+            } ?: "null"
+            val statuses = model.statuses.value.joinToString(",") {
+                """{"album":"${it.albumId}","name":${it.name.json()},"stage":"${it.stage}",""" +
+                    """"files":${it.files},"filesDone":${it.filesDone},"bytes":${it.bytes},"bytesDone":${it.bytesDone},""" +
+                    """"failure":${it.failure?.json() ?: "null"}}"""
+            }
+            listOf(
+                """"picker":{"access":${picker.access?.name?.json() ?: "null"},"albums":[$galleryAlbums],""" +
+                    """"assets":${picker.assets.size},"selected":${picker.selected.size},"naming":$naming}""",
+                "\"uploads\":[$statuses]",
+            )
+        }.orEmpty()
         return body(listOf(
             "\"map\":${mapState(ui)}",
             "\"screen\":\"$screen\"",
@@ -290,7 +383,7 @@ public class ControlServer(
             "\"photos\":[$photos]",
             "\"videoPath\":${ui.videoPath?.json() ?: "null"}",
             "\"livePair\":$livePair",
-        ))
+        ) + upload)
     }
 
     /**

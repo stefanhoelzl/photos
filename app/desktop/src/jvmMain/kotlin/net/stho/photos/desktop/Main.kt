@@ -54,6 +54,7 @@ public fun main(args: Array<String>) {
             password = password,
             cacheRoot = options.cacheRoot,
             decodeLibrary = options.decodeLibrary,
+            galleryRoot = options.gallery,
         )
     }
     val content: @Composable () -> Unit = {
@@ -94,12 +95,14 @@ public fun main(args: Array<String>) {
     }
 }
 
-/** `--cache-root` and `--control-port`, and nothing else yet. */
+/** `--cache-root`, `--control-port`, `--decode-library` and `--gallery`. */
 internal data class Options(
     val cacheRoot: Path,
     val controlPort: Int?,
     /** `libphotosdecode.so`, which the Gradle run task points at. */
     val decodeLibrary: String,
+    /** A directory of albums standing in for the phone's library; upload is off without one (§8). */
+    val gallery: String? = null,
 ) {
     companion object {
         fun parse(args: Array<String>): Options {
@@ -119,7 +122,8 @@ internal data class Options(
             val decode = flag("--decode-library")
                 ?: System.getProperty("photos.decode.library")
                 ?: error("--decode-library or -Dphotos.decode.library must point at libphotosdecode.so")
-            return Options(Path(cache), flag("--control-port")?.toIntOrNull(), decode)
+            val gallery = flag("--gallery") ?: System.getProperty("photos.gallery")
+            return Options(Path(cache), flag("--control-port")?.toIntOrNull(), decode, gallery)
         }
     }
 }
