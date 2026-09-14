@@ -8,6 +8,7 @@ import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.CValue
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.readValue
 import kotlinx.cinterop.useContents
 import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -27,6 +28,7 @@ import platform.Foundation.NSFileManager
 import platform.Foundation.NSSortDescriptor
 import platform.Foundation.NSURL
 import platform.Foundation.NSUUID
+import platform.Foundation.timeIntervalSince1970
 import platform.Foundation.writeToFile
 import platform.Photos.PHAccessLevelReadWrite
 import platform.Photos.PHAsset
@@ -199,7 +201,7 @@ internal class PhotoKitGallery : Gallery {
         }
         if (data != null && extension != null) return save(data, directory, extension)
         // A RAW, or anything the pull cannot use: rendered, exactly as Photos draws it.
-        val rendered = requireNotNull(image(asset, PHImageManagerMaximumSize, PHImageContentModeDefault)) {
+        val rendered = requireNotNull(image(asset, PHImageManagerMaximumSize.readValue(), PHImageContentModeDefault)) {
             "the photo library could not render this photo"
         }
         return save(requireNotNull(UIImageJPEGRepresentation(rendered, 0.92)), directory, "jpg")
