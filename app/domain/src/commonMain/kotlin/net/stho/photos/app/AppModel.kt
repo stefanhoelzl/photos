@@ -47,6 +47,13 @@ public data class AppUi(
     val columns: Int = 4,
     /** The decoded preview for the open photo, once it has been fetched (§6's browse-to-cache). */
     val preview: Preview? = null,
+    /**
+     * The decoded previews of the photos either side of the open one, keyed by `PhotoRow.id`.
+     *
+     * What a swipe drags into view before it settles. Without them the neighbour was a placeholder
+     * until the pager came to rest, then a second wait while the model decoded it.
+     */
+    val nearby: Map<Uuid, Preview> = emptyMap(),
     /** The open photo's transcode, once fetched — null for a still, or while it downloads. */
     val videoPath: String? = null,
     /** The open Live Photo's still and MOV, once both are on disk — null otherwise. */
@@ -68,6 +75,8 @@ public data class AppUi(
     val cache: Map<Uuid, AlbumCache> = emptyMap(),
     /** Albums explicitly asked for, so a row knows to offer pause rather than download. */
     val wanted: Set<Uuid> = emptySet(),
+    /** Each album's sub-album and photo counts and latest date, summed up the tree. */
+    val summaries: Map<Uuid, AlbumSummary> = emptyMap(),
     /** What the device holds, for the one screen that talks about the device (§6). */
     val storage: StorageTotals = StorageTotals.none,
     /**
@@ -85,15 +94,22 @@ public data class AppUi(
     public fun actionsOf(album: Album): List<CacheAction> =
         actionsFor(cacheOf(album), wanted = album.id in wanted)
 
+    /** What this album's row says it holds — a container's counted over its descendants. */
+    public fun contentsOf(album: Album): String =
+        (summaries[album.id] ?: AlbumSummary(0, album.photoCount, album.dateMax)).contents()
+
     val screen: Screen get() = stack.current
 
     /** The nav bar's second line: a count, then the sort state, so no menu has to name it (§6). */
     public val subtitle: String
         get() = when {
             query.isNotEmpty() -> "${albums.size} matching"
-            // While packs are still arriving the line says so, exactly as the mockup does:
-            // the covers filling in one by one otherwise look like something going wrong.
-            packsOutstanding > 0 -> "${albums.size} albums · fetching thumbnails $packsDone/${packsDone + packsOutstanding}"
+            // While packs are still arriving the line says so, exactly as the mockup does: the
+            // covers filling in one by one otherwise look like something going wrong. *After*
+            // the sort, never instead of it -- a first sync drains 288 packs, and a line that
+            // dropped the sort for that long left the sort icon changing nothing anyone could see.
+            packsOutstanding > 0 ->
+                "${albums.size} albums · ${sort.label} · thumbnails $packsDone/${packsDone + packsOutstanding}"
             else -> "${albums.size} albums · ${sort.label}"
         }
 
@@ -208,6 +224,9 @@ public class AppModel(
     private fun refreshCatalogView() {
         blobs = catalog.blobs()
         albumTree = allAlbums()
+        // Before any reload reads them: the list sorts containers by these dates.
+        val summaries = summariesByAlbum(albumTree)
+        _state.update { it.copy(summaries = summaries) }
         refreshCache()
     }
 
@@ -380,7 +399,7 @@ public class AppModel(
         val arrived = _state.value.screen.albumOf()
         if (arrived != leaving.albumOf()) {
             previews.cancelPrefetch()
-            _state.update { it.copy(thumbnails = emptyMap()) }
+            _state.update { it.copy(thumbnails = emptyMap(), nearby = emptyMap()) }
             // Leaving an album stops its pending downloads, keeping whatever landed (§6). What
             // is still missing is derived from disk when you come back, so nothing is remembered.
             queue.leaveAlbum()
@@ -467,7 +486,7 @@ public class AppModel(
                         else -> catalog.albums(under = screen.parentAlbum())
                     }
                     current.copy(
-                        albums = current.sort.sorted(albums),
+                        albums = current.sort.sorted(albums) { current.summaries[it.id]?.latest ?: it.dateMax },
                         photos = emptyList(),
                         thumbnails = emptyMap(),
                         packReady = true,
@@ -500,8 +519,12 @@ public class AppModel(
         val photo = photos.getOrNull(index) ?: return
         previews.cached(photo)?.let { cached ->
             loadMotion(photo)
-            _state.update { it.copy(preview = cached) }
+            // Launched, not set in place: [reloaded] calls this from inside a state update, and an
+            // update made in there is overwritten by that update's own result -- so reopening a
+            // photo already decoded left the viewer on its placeholder.
+            scope.launch { _state.update { it.copy(preview = cached) } }
             previews.prefetch(photos, index)
+            decodeNeighbours(index, photos)
             return
         }
         loadMotion(photo)
@@ -516,6 +539,31 @@ public class AppModel(
                 }
             }
             previews.prefetch(photos, index)
+            decodeNeighbours(index, photos)
+        }
+    }
+
+    private var decodingNeighbours: kotlinx.coroutines.Job? = null
+
+    /**
+     * Decode the photo either side of [index] into [AppUi.nearby], once the open one is showing.
+     *
+     * One each way rather than §6's ±3: a swipe drags in exactly one neighbour, and a decoded
+     * 3200px frame is tens of megabytes. The ±3 *blobs* are still queued at tier 1 (see
+     * [viewing]), so this mostly decodes what is already on disk. A newer swipe cancels it.
+     */
+    private fun decodeNeighbours(index: Int, photos: List<PhotoRow>) {
+        val keep = ((index - 1)..(index + 1)).mapNotNull { photos.getOrNull(it)?.id }.toSet()
+        decodingNeighbours?.cancel()
+        decodingNeighbours = scope.launch {
+            for (i in listOf(index + 1, index - 1)) {
+                val photo = photos.getOrNull(i) ?: continue
+                val decoded = previews.cached(photo) ?: previews.load(photo) ?: continue
+                _state.update { current ->
+                    if (current.screen !is Screen.Photo) current
+                    else current.copy(nearby = current.nearby.filterKeys { it in keep } + (photo.id to decoded))
+                }
+            }
         }
     }
 

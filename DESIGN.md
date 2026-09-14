@@ -630,8 +630,16 @@ nothing has to serialise a database in or out of memory.
   ```
   `filename` compares under BINARY collation — a UTF-8 byte compare — so the ordering is
   identical on iOS and Linux without depending on either platform's collation tables.
-- **Album list default sort: date, newest first**, ascending/descending toggleable, or by name.
-  Albums with no dated photos at all collect at one end.
+- **Album list default sort: date, newest first**, toggled with oldest first — two states, no sort
+  by name.
+  Albums with no dated photos at all collect at one end. Both date orders key on the album's
+  **latest** date, so oldest first is exactly newest first reversed: keying ascending on the
+  earliest date put an album spanning the whole library at the top of both orders, and the sort
+  icon looked broken. Inside an album there is no sort to choose — photos are oldest first.
+  A **container** owns no photos, so its date, like its pin and its cover, comes from its
+  descendants: it sorts by the latest photo anywhere beneath it, and its row reads
+  "2 albums · 132 photos". Read from its own empty shard it said "0 photos" and sorted as undated.
+  Its cover's thumbnail is in the pack of the descendant that holds that photo.
 - **Search:** album names, substring, case- and diacritic-insensitive via `name_folded`.
   No fuzzy matching (too noisy on short names), no filename search.
 - **Cover photo:** first photo in sort order — the album's earliest — overridable per album.
@@ -786,7 +794,7 @@ inserting a preview would have put one rung 2.9× below another.
 
 **Thumbnails are a square centre crop, not a fitted image.** Every consumer in §6 is a square
 `object-fit: cover` box — the grid, the 54pt album-list cover, the 38pt map pin and search row,
-the 30pt filmstrip, the 26pt set-cover dialog. The only surface that uses `contain` is the
+the 48pt filmstrip, the 26pt set-cover dialog. The only surface that uses `contain` is the
 fullscreen viewer, and it reads the viewing image. So an aspect-preserved thumbnail stores pixels
 nothing ever displays, *and* starves the one thing that does: fitting a 3:2 photo into 256×256
 leaves it 256×171, and a 4-column grid tile on a 3× iPhone is 287 device pixels — a 1.68×
@@ -927,8 +935,11 @@ Everything else is drawn, including the three hardest screens. `LazyVerticalGrid
 `layoutInfo`, so the grid's prefetch is driven from visible-item state rather than from a
 callback that fires once a cell is already on screen — far too late for the 424 KiB fetch the
 2-column pinch density needs (§5).
-Drag-to-select is a `pointerInput` gesture. The fullscreen viewer's zoom + page +
-drag-to-dismiss is an ordinary composition of `HorizontalPager` and `transformable`.
+Drag-to-select is a `pointerInput` gesture. The fullscreen viewer's zoom + page is a
+`HorizontalPager` with a hand-rolled pinch/pan beneath it rather than `transformable`, which
+claims every drag: at 1× a one-finger drag pages, zoomed in it pans and the pager stands still.
+Zoom is for stills — a video and a Live Photo play in native views a Compose layer cannot scale.
+Drag-to-dismiss is not built.
 
 Two consequences are accepted rather than solved. **Pinch-to-density needs a custom animated
 layout**, because no interactive layout transition is provided; and it **cannot be exercised on
@@ -959,7 +970,7 @@ Every list/grid screen carries the same four trailing icons — **gear · the ot
 | Albums (list) | gear, **map**, sort, upload |
 | Albums (map) | gear, **list**, sort, upload |
 | Container list | gear, **map**, sort, upload |
-| Album grid | gear, **map**, sort, upload |
+| Album grid | gear, **map**, upload — no sort: an album's photos have one order (§3) |
 | Album map | gear, **grid**, sort, upload |
 | Fullscreen viewer | gear, share, set-cover |
 | Settings | — |
@@ -1056,6 +1067,17 @@ worth knowing — `simctl` forwards an environment variable only when it is name
 One screen, two states. Chrome is identical in both — back, then gear/share/set-cover, a
 filmstrip, and a bottom line carrying the date. A **LIVE badge appears once**, top-left, and is
 the only thing that differs.
+
+**Swiping pages through the album**, and the filmstrip follows: 48pt tiles, the open photo
+outlined and kept in view. Once the open photo is showing, the model decodes the photo either
+side — one each way, since a decoded frame is tens of megabytes and a swipe drags in exactly one —
+so a swipe draws a photograph rather than a placeholder. The ±3 blobs are still queued at tier 1.
+
+**The viewer is the only screen that rotates.** Everywhere else is a phone column, so the app
+is portrait until a photo opens and turns back when it closes. Sideways, the photograph has the
+whole screen: no nav bar, no filmstrip, no date — only a back button and the LIVE badge. iOS asks
+the *app delegate* which orientations are allowed, not the Compose view controller inside
+SwiftUI's hosting controller, so that is the one line of Swift the rule costs.
 
 **Motion plays in the platform's own views.** A video opens on its poster and hands over to
 `AVPlayerViewController` once the transcode is on disk, playing as it appears and pausing when
@@ -1225,8 +1247,10 @@ bytes rather than by count, because an album whose one video is missing is not n
 > waiting album shows a still bar, which is what keeps a pulsing row worth looking at in a list
 > of 288.
 
-**Swipe-left reveals icon-only actions, and tapping the strip does the same.** Which actions
-appear is a function of state, so each row offers exactly what applies:
+**Swipe-left reveals icon-only actions, and tapping the strip does the same.** One row at a time,
+and while one is open **a tap anywhere in the list closes it** rather than opening an album — the
+tap that dismisses a menu is almost always on the row it belongs to. Which actions appear is a
+function of state, so each row offers exactly what applies:
 
 | album state | revealed |
 |---|---|

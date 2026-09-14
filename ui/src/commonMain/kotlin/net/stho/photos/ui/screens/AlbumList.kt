@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -45,6 +47,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.uuid.Uuid
 import net.stho.photos.catalog.Album
 import net.stho.photos.app.AlbumCache
 import net.stho.photos.app.CacheAction
@@ -75,6 +78,14 @@ public fun AlbumList(
     cache: (Album) -> AlbumCache,
     /** Which controls the album's state affords, revealed by a swipe or by tapping the strip. */
     actions: (Album) -> List<CacheAction>,
+    /** The row's second line: "132 photos", or "2 albums · 132 photos" for a container. */
+    contents: (Album) -> String,
+    /**
+     * Whatever decides the order — the sort and the query. When it changes the list starts again
+     * at the top: a keyed lazy list otherwise keeps the row that *was* first on screen, so after a
+     * re-sort that row stayed put and everything now ahead of it sat scrolled away above.
+     */
+    order: Any?,
     onSearch: (String) -> Unit,
     onOpen: (Album) -> Unit,
     onAction: (Album, CacheAction) -> Unit,
@@ -91,10 +102,21 @@ public fun AlbumList(
         } else {
             // No side padding on the list itself: the strip is a screen-edge mark and has to
             // reach the edge. The row's content carries the inset instead.
-            LazyColumn(Modifier.fillMaxSize()) {
+            val list = rememberLazyListState()
+            LaunchedEffect(order) { list.scrollToItem(0) }
+            // The one row whose actions are showing, held here rather than per row: while any row
+            // is open, a tap anywhere in the list closes it instead of opening an album. Per row,
+            // tapping the open row itself opened the album the person was about to act on.
+            var revealed by remember { mutableStateOf<Uuid?>(null) }
+            LazyColumn(Modifier.fillMaxSize(), state = list) {
                 items(albums, key = { it.id.toString() }) { album ->
                     AlbumRow(
                         album = album,
+                        revealed = revealed == album.id,
+                        anyRevealed = revealed != null,
+                        onReveal = { revealed = album.id },
+                        onDismiss = { revealed = null },
+                        contents = contents(album),
                         thumbnails = thumbnails,
                         arrivals = arrivals,
                         cache = cache(album),
@@ -120,6 +142,13 @@ public fun AlbumList(
 @Composable
 private fun AlbumRow(
     album: Album,
+    /** This row's actions are showing. */
+    revealed: Boolean,
+    /** Some row's actions are showing, so a tap here dismisses them rather than opening. */
+    anyRevealed: Boolean,
+    onReveal: () -> Unit,
+    onDismiss: () -> Unit,
+    contents: String,
     thumbnails: Thumbnails,
     arrivals: Int,
     cache: AlbumCache,
@@ -130,7 +159,6 @@ private fun AlbumRow(
     // Read lazily, per visible row: resolving a cover opens that album's pack, and doing it for
     // all 288 up front would be 288 file reads for the six rows anyone can actually see.
     val cover = remember(album.id, arrivals) { thumbnails.cover(album) }
-    var revealed by remember(album.id) { mutableStateOf(false) }
 
     Row(
         Modifier.fillMaxWidth().height(IntrinsicSize.Min),
@@ -138,14 +166,14 @@ private fun AlbumRow(
     ) {
         Row(
             Modifier.weight(1f)
-                .clickable(onClick = onOpen)
+                .clickable { if (anyRevealed) onDismiss() else onOpen() }
                 .padding(start = 16.dp, top = 7.dp, bottom = 7.dp)
                 // Swipe-left reveals the actions. Swipe-RIGHT is deliberately unused: it
                 // collides with the interactive back gesture, which matters at every level of
                 // this list rather than only at the root.
                 .pointerInput(album.id, actions) {
                     detectHorizontalDragGestures { _, delta ->
-                        if (delta < -4f && actions.isNotEmpty()) revealed = true
+                        if (delta < -4f && actions.isNotEmpty()) onReveal()
                     }
                 },
             verticalAlignment = Alignment.CenterVertically,
@@ -160,7 +188,7 @@ private fun AlbumRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    album.contents(),
+                    contents,
                     fontSize = 11.5.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -173,7 +201,7 @@ private fun AlbumRow(
             actions.forEach { action ->
                 RevealedAction(action) {
                     onAction(action)
-                    revealed = false
+                    onDismiss()
                 }
             }
         } else {
@@ -182,7 +210,7 @@ private fun AlbumRow(
                 // The strip is also the tap route to the actions, so its hit area is grown to
                 // the 44dp minimum without growing the 4dp mark. Being visible is what makes
                 // this discoverable where the bare gesture is not: people tap what they see.
-                Modifier.clickable(enabled = actions.isNotEmpty()) { revealed = true },
+                Modifier.clickable(enabled = actions.isNotEmpty()) { onReveal() },
             )
         }
     }
@@ -303,15 +331,6 @@ internal fun pulseAlpha(moving: Boolean): Float {
 
 private const val PULSE_MS = 620
 private const val PULSE_FLOOR = 0.42f
-
-/**
- * What the album *contains*, and nothing else.
- *
- * No size, no cache state, no year: everything about the cache is in the strip, which is what
- * let this line go back to naming contents. The mockup also shows a video count; the merged DB
- * has no per-album video column, so adding one is a schema change and this says photos only.
- */
-private fun Album.contents(): String = "$photoCount photos"
 
 @Composable
 private fun SearchField(query: String, onSearch: (String) -> Unit) {

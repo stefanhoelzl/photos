@@ -2,19 +2,19 @@ package net.stho.photos.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.sp
 import net.stho.photos.app.AppModel
 import net.stho.photos.app.Screen
 import net.stho.photos.app.SyncStatus
@@ -41,83 +41,104 @@ public fun App(
 ) {
     val ui by model.state.collectAsState()
     val arrivals by thumbnails.arrivals.collectAsState()
-    run {
-        // The ground runs under the status bar and home indicator; the content does not. On a
-        // phone those insets are the notch and the bottom bar, and without this the nav bar's
-        // gear sat under the clock (measured on an SE2). On the desktop they are zero.
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing)) {
-            Column(Modifier.fillMaxSize()) {
-                when (val screen = ui.screen) {
-                    is Screen.Albums -> {
-                        NavBar("Albums", ui.subtitle, onBack = null) {
-                            BarButton(Icons.gear, "Settings", model::openSettings)
-                            BarButton(Icons.sort, "Sort", model::cycleSort)
-                        }
-                        AlbumList(
-                            ui.albums, ui.query, true, thumbnails, arrivals,
-                            loading = (ui.sync as? SyncStatus.Running)
-                                ?.takeIf { ui.albums.isEmpty() }
-                                ?.let { it.fetched to it.total },
-                            cache = ui::cacheOf,
-                            actions = ui::actionsOf,
-                            onSearch = model::search,
-                            onOpen = model::open,
-                            onAction = model::act,
-                        )
-                    }
 
-                    is Screen.Container -> {
-                        NavBar(screen.name, ui.subtitle, onBack = model::back) {
-                            BarButton(Icons.gear, "Settings", model::openSettings)
-                            BarButton(Icons.sort, "Sort", model::cycleSort)
-                        }
-                        AlbumList(
-                            ui.albums, ui.query, false, thumbnails, arrivals,
-                            loading = null,
-                            cache = ui::cacheOf,
-                            actions = ui::actionsOf,
-                            onSearch = model::search,
-                            onOpen = model::open,
-                            onAction = model::act,
-                        )
-                    }
+    // §6: only a photograph may be turned sideways. Every other screen is a phone column, and
+    // leaving the viewer while rotated turns the device back.
+    val orientation = LocalOrientationPolicy.current
+    val viewing = ui.screen is Screen.Photo
+    DisposableEffect(viewing) {
+        orientation.allowLandscape(viewing)
+        onDispose { orientation.allowLandscape(false) }
+    }
 
-                    is Screen.Grid -> {
-                        NavBar(screen.name, "${ui.photos.size} photos", onBack = model::back) {
-                            BarButton(Icons.gear, "Settings", model::openSettings)
-                            BarButton(Icons.sort, "Sort", model::cycleSort)
-                        }
-                        PhotoGrid(ui.photos, ui.thumbnails, ui.columns, model::density, model::openPhoto)
+    // The ground runs under the status bar and home indicator; the content does not. On a
+    // phone those insets are the notch and the bottom bar, and without this the nav bar's
+    // gear sat under the clock (measured on an SE2). On the desktop they are zero.
+    BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing)) {
+        val landscape = maxWidth > maxHeight
+        Column(Modifier.fillMaxSize()) {
+            when (val screen = ui.screen) {
+                is Screen.Albums -> {
+                    NavBar("Albums", ui.subtitle, onBack = null) {
+                        BarButton(Icons.gear, "Settings", model::openSettings)
+                        BarButton(Icons.sort, "Sort", model::cycleSort)
                     }
+                    AlbumList(
+                        ui.albums, ui.query, true, thumbnails, arrivals,
+                        loading = (ui.sync as? SyncStatus.Running)
+                            ?.takeIf { ui.albums.isEmpty() }
+                            ?.let { it.fetched to it.total },
+                        cache = ui::cacheOf,
+                        actions = ui::actionsOf,
+                        contents = ui::contentsOf,
+                        order = ui.sort to ui.query,
+                        onSearch = model::search,
+                        onOpen = model::open,
+                        onAction = model::act,
+                    )
+                }
 
-                    is Screen.Photo -> {
-                        // Chrome over a photograph: back and gear only in E.1. Share is E.3's
-                        // and set-as-cover is G's, so neither is drawn here yet.
+                is Screen.Container -> {
+                    NavBar(screen.name, ui.subtitle, onBack = model::back) {
+                        BarButton(Icons.gear, "Settings", model::openSettings)
+                        BarButton(Icons.sort, "Sort", model::cycleSort)
+                    }
+                    AlbumList(
+                        ui.albums, ui.query, false, thumbnails, arrivals,
+                        loading = null,
+                        cache = ui::cacheOf,
+                        actions = ui::actionsOf,
+                        contents = ui::contentsOf,
+                        order = ui.sort to ui.query,
+                        onSearch = model::search,
+                        onOpen = model::open,
+                        onAction = model::act,
+                    )
+                }
+
+                is Screen.Grid -> {
+                    // No sort here: an album's photos have one order, oldest first (§3). The
+                    // icon on this screen used to cycle the *album* sort, which changed nothing
+                    // visible and read as broken.
+                    NavBar(screen.name, "${ui.photos.size} photos", onBack = model::back) {
+                        BarButton(Icons.gear, "Settings", model::openSettings)
+                    }
+                    PhotoGrid(ui.photos, ui.thumbnails, ui.columns, model::density, model::openPhoto)
+                }
+
+                is Screen.Photo -> {
+                    // Chrome over a photograph: back and gear only in E.1. Share is E.3's
+                    // and set-as-cover is G's, so neither is drawn here yet. In landscape the
+                    // photograph has the whole screen and the viewer draws its own back button.
+                    if (!landscape) {
                         NavBar(screen.name, null, onBack = model::back) {
                             BarButton(Icons.gear, "Settings", model::openSettings)
                         }
-                        Viewer(
-                            photos = ui.photos,
-                            index = screen.index,
-                            preview = ui.preview,
-                            videoPath = ui.videoPath,
-                            livePair = ui.livePair,
-                            moving = ui.openPhotoMoving,
-                            thumbnails = ui.thumbnails,
-                            onSelect = model::showPhoto,
-                        )
                     }
+                    Viewer(
+                        photos = ui.photos,
+                        index = screen.index,
+                        preview = ui.preview,
+                        videoPath = ui.videoPath,
+                        livePair = ui.livePair,
+                        moving = ui.openPhotoMoving,
+                        nearby = ui.nearby,
+                        thumbnails = ui.thumbnails,
+                        landscape = landscape,
+                        onBack = model::back,
+                        onSelect = model::showPhoto,
+                    )
+                }
 
-                    is Screen.Settings -> {
-                        NavBar("Settings", null, onBack = model::back) {}
-                        SettingsScreen(ui.sync, ui.totals, ui.storage, storageUrl, onLogOut)
-                    }
+                is Screen.Settings -> {
+                    NavBar("Settings", null, onBack = model::back) {}
+                    SettingsScreen(ui.sync, ui.totals, ui.storage, storageUrl, onLogOut)
                 }
             }
-            ui.notice?.let { notice ->
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-                    Toast(notice, onSettings = model::openSettings, onDismiss = model::dismissNotice)
-                }
+        }
+        ui.notice?.let { notice ->
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+                Toast(notice, onSettings = model::openSettings, onDismiss = model::dismissNotice)
             }
         }
     }
