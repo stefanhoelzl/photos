@@ -77,28 +77,28 @@ Verified live: the zone name works as both the path segment and the `Credential=
 > Bunny.net-specific. Where the access key ID is unrelated to the bucket name, the URL no longer
 > determines it and a separate field returns.
 
-**Key handling.** The password lives in the Keychain under **biometric access control**
-(`kSecAccessControlBiometryCurrentSet`); the storage URL lives beside it with no such gate,
-because §1 is explicit that it is not a secret and two prompts to answer one question buys
-nothing. It is unlocked with Face ID **once per app launch**,
-held in memory for that session, and wiped on termination. Background uploads are unaffected:
-they run against **pre-signed URLs** (bunny.net presigned URLs are valid 1 s–7 days) generated
-at upload time, so a force-quit and relaunch resumes without needing the key again.
+**Key handling.** The password and the storage URL live in the Keychain as
+`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`: readable whenever the phone is unlocked, never
+in a backup or iCloud Keychain, and **behind no prompt**. The password is read once per app
+launch, held in memory for that session, and wiped on termination. Background uploads are
+unaffected: they run against **pre-signed URLs** (bunny.net presigned URLs are valid 1 s–7 days)
+generated at upload time, so a force-quit and relaunch resumes without needing the key again.
+
+> **Why no biometric gate.** An earlier draft put the password under
+> `kSecAccessControlBiometryCurrentSet`, so the library was unreadable without a face or finger.
+> On a real phone that gate refuses to *store* anything unless a passcode is set and a
+> fingerprint or face is enrolled — `errSecAuthFailed` (-25293), measured on an SE2 — so a phone
+> without one could not be set up at all, and every launch cost a prompt. It was dropped. The
+> accepted cost is stated plainly: **anyone holding the unlocked phone can browse the whole
+> library.** The phone's own lock is the protection, as it is for the Photos app beside it.
 
 > **Why one key and not a read-only/write pair.** The two-key split limited the blast radius of
-> an extracted key — read-only could not destroy anything. But it required the read-only key to
-> be stored *always available* in order to browse without a prompt, which meant anyone with the
-> unlocked device could read the whole library. A single biometric-gated key inverts that: the
-> library is unreadable without your face, at the cost of a larger blast radius if the key is
-> ever extracted while unlocked. Given the laptop holds the master copy, and the app **never
-> issues a DELETE** (§7), that trade was judged worthwhile — and it removes a concept,
-> a Settings row and a password-manager entry.
+> an extracted key — read-only could not destroy anything. It was dropped when the one key was
+> biometric-gated, and without that gate the argument for one key is narrower: the laptop holds
+> the master copy and the app **never issues a DELETE** (§7), so an unlocked phone can add to
+> the library but not destroy it. One key removes a concept, a Settings row and a
+> password-manager entry.
 
-> **The gate is a device claim.** A simulator stores and reads both items exactly as a phone
-> does, biometric access control included — but with no passcode and no enrolled face there is
-> nothing to prompt for, so the read succeeds silently. The storage round-trip is therefore
-> checked in the harness loop and the *protection* is not.
->
 > Every Keychain call also needs the app to carry an `application-identifier`, which it gets
 > from being signed with an entitlements file. Unsigned, all of them fail with -34018 while the
 > rest of the app runs perfectly, which is a failure worth recognising by name.
@@ -118,8 +118,7 @@ to forget things one at a time.
 **Credentials are entered exactly once, at setup.** Changing either the URL or the password
 means logging out and setting up again. There is therefore no edit sheet, no in-place
 replacement, and no second path to a configured state — the app is either set up or it is not.
-The password row shows a masked value with its protection (Face ID) as secondary text, never a
-storage location.
+The password row shows a masked value, never a storage location.
 
 **Credentials are not validated with a test request when saved.** Accepted cost: a mistyped
 password is stored happily and only surfaces on the next request. **Compensating requirement:
@@ -902,7 +901,7 @@ to remember to run — which is what makes a quality decision reversible rather 
 
 ## 6. iOS app
 
-> See **`mockups/placeholder.html`** for all 26 screens rendered at device size — album list,
+> See **`mockups/placeholder.html`** for all 25 screens rendered at device size — album list,
 > container, grid, pinch density, the album row's swipe actions, an album downloading, both
 > viewer states, both map representations, set-cover dialog, settings, log out, first-run setup,
 > and the five upload steps. They fix layout and
@@ -1640,7 +1639,7 @@ upload icon
   → background upload
 ```
 
-**No prompt appears during the upload flow.** The password was unlocked with Face ID when the
+**No prompt appears during the upload flow.** The password was read from the Keychain when the
 app launched (§1) and is already in memory; tapping Upload uses it to pre-sign every PUT for
 this album, and the background session then runs against those URLs alone.
 
@@ -1818,9 +1817,8 @@ means offering it no cache controls, since it has nothing to fetch and nothing t
 >
 > **E.3 is the phone.** The app builds for iOS, plays videos and Live Photos in the platform's
 > own views, keeps the key in the Keychain, and runs the desktop harness's scenarios on a
-> simulator on every pull request. Still owed: share from the viewer, and anything only a device
-> answers — §10's grid unknown, and the Keychain's biometric gate, which a simulator stores but
-> does not enforce.
+> simulator on every pull request. It has been installed and set up on a real phone. Still owed:
+> share from the viewer, and §10's grid unknown, which only a device answers.
 
 **F · Map** = B — parallel with E.
 

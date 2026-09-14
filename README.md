@@ -127,7 +127,7 @@ The script signs ad-hoc. That is not a formality: unsigned, the app carries no e
 every Keychain call fails with -34018 while the rest of it runs perfectly.
 
 On the phone the app asks for the storage URL and password once, on first launch, and keeps them
-in the Keychain — the password behind Face ID. On the desktop the same screen appears only when
+in the Keychain, on that phone only and behind no prompt. On the desktop the same screen appears only when
 neither `PHOTOS_ENDPOINT`/`PHOTOS_PASSWORD` nor a `photos-cli login` has answered first.
 
 `./gradlew :tests:ios:e2e` runs the app scenarios on a simulator — the same zones as

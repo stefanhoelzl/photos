@@ -3,7 +3,6 @@
 package net.stho.photos.adapter.ios
 
 import kotlinx.cinterop.BetaInteropApi
-import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
@@ -20,18 +19,14 @@ import platform.Foundation.NSData
 import platform.Foundation.NSString
 import platform.Foundation.NSUTF8StringEncoding
 import platform.Foundation.dataUsingEncoding
-import platform.Security.SecAccessControlCreateWithFlags
 import platform.Security.SecItemAdd
 import platform.Security.SecItemCopyMatching
 import platform.Security.SecItemDelete
-import platform.Security.errSecAuthFailed
 import platform.Security.errSecInteractionNotAllowed
 import platform.Security.errSecItemNotFound
 import platform.Security.errSecSuccess
-import platform.Security.errSecUserCanceled
-import platform.Security.kSecAccessControlBiometryCurrentSet
-import platform.Security.kSecAttrAccessControl
-import platform.Security.kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly
+import platform.Security.kSecAttrAccessible
+import platform.Security.kSecAttrAccessibleWhenUnlockedThisDeviceOnly
 import platform.Security.kSecAttrAccount
 import platform.Security.kSecAttrService
 import platform.Security.kSecClass
@@ -39,7 +34,6 @@ import platform.Security.kSecClassGenericPassword
 import platform.Security.kSecMatchLimit
 import platform.Security.kSecMatchLimitOne
 import platform.Security.kSecReturnData
-import platform.Security.kSecUseOperationPrompt
 import platform.Security.kSecValueData
 
 /**
@@ -49,23 +43,14 @@ import platform.Security.kSecValueData
  * account — so the concept is one concept across both devices even though nothing is shared
  * between them.
  *
- * **Only the password is behind Face ID.** §1 puts the secret under
- * `kSecAccessControlBiometryCurrentSet`, and is equally explicit that the endpoint "is not a
- * secret — it is a URL". Gating the URL too would buy nothing and would mean two biometric
- * prompts to answer one question.
- *
- * `…BiometryCurrentSet` rather than `…BiometryAny` is the stricter of the two on purpose: it
- * invalidates the item when a face or fingerprint is added to the device, so someone who can
- * enrol their own biometrics cannot thereby read the library.
+ * **Both items are readable whenever the phone is unlocked, and only on this phone.**
+ * `…WhenUnlockedThisDeviceOnly` keeps them out of backups and iCloud Keychain, and asks for no
+ * passcode, fingerprint or face — §1 dropped the biometric gate, because it made a phone without
+ * an enrolled finger unable to store the password at all (`errSecAuthFailed`, measured on an SE2).
  *
  * The three outcomes are the same three §1 turns the CLI's exit codes on, translated: a value,
  * *absent* when the Keychain answers and holds nothing, and *unavailable* when it will not
- * answer — a declined or unavailable Face ID, which is *not now* rather than a broken install.
- *
- * **What a simulator can and cannot show.** Storing and reading both items round-trips there,
- * biometric access control included — measured. What it does *not* do is enforce the gate: with
- * no passcode and no enrolled face there is nothing to prompt for, so a read succeeds silently.
- * The protection itself is therefore a device-only claim, unlike the storage.
+ * answer — the phone is locked, which is *not now* rather than a broken install.
  *
  * Every call needs the app to have an `application-identifier`, which comes from being signed
  * with an entitlements file. Unsigned, all three fail with -34018 while the rest of the app runs
@@ -84,10 +69,6 @@ public class KeychainKeyring(
             query.putString(kSecAttrAccount, field)
             query.put(kSecReturnData, kCFBooleanTrue)
             query.put(kSecMatchLimit, kSecMatchLimitOne)
-            if (field == biometric) {
-                // Shown on the Face ID sheet, so the reason a prompt appeared is legible.
-                query.putString(kSecUseOperationPrompt, "Unlock your photo library")
-            }
             when (val status = SecItemCopyMatching(query.ref, found.ptr)) {
                 errSecSuccess -> {
                     val data = CFBridgingRelease(found.value) as? NSData
@@ -97,10 +78,10 @@ public class KeychainKeyring(
 
                 errSecItemNotFound -> KeyringRead.Absent
 
-                // Face ID declined or unavailable, or the device is locked. Nothing about the
-                // install is wrong and nothing needs retyping -- ask again later.
-                errSecInteractionNotAllowed, errSecUserCanceled, errSecAuthFailed ->
-                    KeyringRead.Unavailable("Face ID is needed to unlock your photo library")
+                // The phone is locked. Nothing about the install is wrong and nothing needs
+                // retyping -- ask again later.
+                errSecInteractionNotAllowed ->
+                    KeyringRead.Unavailable("unlock your phone to open your photo library")
 
                 else -> KeyringRead.Unavailable("the Keychain refused the request (status $status)")
             }
@@ -109,7 +90,8 @@ public class KeychainKeyring(
 
     override fun write(field: String, secret: String) {
         // Replace rather than add: the attributes are the item's identity, and SecItemAdd on an
-        // existing pair fails with errSecDuplicateItem rather than updating.
+        // existing pair fails with errSecDuplicateItem rather than updating. It also replaces an
+        // item an earlier build stored behind the biometric gate.
         remove(field)
         val bytes = (secret as NSString).dataUsingEncoding(NSUTF8StringEncoding)
             ?: throw CredentialFailure.KeyringProtocol("the secret is not valid UTF-8")
@@ -118,7 +100,7 @@ public class KeychainKeyring(
             query.putString(kSecAttrService, service)
             query.putString(kSecAttrAccount, field)
             query.putData(kSecValueData, bytes)
-            if (field == biometric) query.put(kSecAttrAccessControl, query.own(accessControl()))
+            query.put(kSecAttrAccessible, kSecAttrAccessibleWhenUnlockedThisDeviceOnly)
             val status = SecItemAdd(query.ref, null)
             if (status != errSecSuccess) {
                 throw CredentialFailure.KeyringUnavailable(
@@ -142,16 +124,4 @@ public class KeychainKeyring(
             }
         }
     }
-
-    /** §1's access control: this device only, and invalidated if the enrolled set changes. */
-    private fun accessControl(): COpaquePointer = SecAccessControlCreateWithFlags(
-        allocator = null,
-        protection = kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
-        flags = kSecAccessControlBiometryCurrentSet,
-        error = null,
-    ) ?: throw CredentialFailure.KeyringUnavailable(
-        "this device cannot protect a password with Face ID; set a passcode and enrol a face",
-    )
-
-    private val biometric: String get() = Credentials.Field.PASSWORD.attribute
 }

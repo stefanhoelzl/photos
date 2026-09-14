@@ -312,7 +312,7 @@ const MS={
   'First run \u2014 connecting':'E.1','Settings \u2014 E.1, no storage yet':'E.1','Log out':'E.1',
   'Settings \u2014 account, storage, sync':'E.2',
   'Album row \u2014 swipe actions':'E.2','Album grid \u2014 images arriving':'E.2',
-  'Fullscreen viewer \u2014 Live state':'E.3','Face ID \u2014 once per app launch':'E.3',
+  'Fullscreen viewer \u2014 Live state':'E.3',
   'Albums \u2014 map representation':'F','Album \u2014 map representation':'F',
   'Set as album cover \u2014 parent choice':'G',
   'Upload 1 \u2014 pick from the gallery':'G','Upload 2 \u2014 name and options':'G',
@@ -509,7 +509,7 @@ phone(`${st}<div class="body"><div class="fs"><img src="${D.hero}" style="opacit
 const settingsBody=`
   <div class="sec">Account</div>
   <div class="cell"><span>Storage URL</span><span class="v" style="text-align:right;max-width:150px">de-s3.storage.bunnycdn.com<br>/my-photos</span></div>
-  <div class="cell"><span>Password<div style="font-size:11px;color:var(--dim);font-weight:400">unlocked with Face ID each launch</div></span><span class="v">••••••••••••</span></div>
+  <div class="cell"><span>Password<div style="font-size:11px;color:var(--dim);font-weight:400">stored in the Keychain on this phone</div></span><span class="v">••••••••••••</span></div>
   <div style="padding:2px 16px 10px;font-size:11px;color:var(--dim)">To change either, log out and set up again.</div>
   <div class="cell"><span style="color:var(--error)">Log out</span><span class="v"></span></div>
   <div class="sec">Storage</div>
@@ -556,13 +556,13 @@ phone(`${st}${hdr('Set up','connect to your storage zone',null,false)}
   <div class="alert" style="position:static;transform:none;width:auto;margin:0 16px;background:var(--fill)">
    <div class="field" style="margin:10px 12px;display:flex;justify-content:space-between;align-items:center">
     <span>••••••••••••</span><span style="opacity:.8">${I.lock}</span></div></div>
-  <div style="padding:2px 16px 0;font-size:11px;color:var(--dim)">Stored in the Keychain and unlocked with Face ID each time the app opens.</div>
+  <div style="padding:2px 16px 0;font-size:11px;color:var(--dim)">Stored in the Keychain on this phone, and never backed up.</div>
   <div style="margin:14px 16px;padding:9px 11px;border-radius:9px;background:color-mix(in srgb, var(--accent) 14%, transparent);font-size:11.5px;color:var(--card-ink);display:flex;gap:8px">
    ${I.key}<span><b>photos.example.com</b> — Proton Pass fills this from the QuickType bar, via Associated Domains.</span></div>
   <div class="cell" style="justify-content:center;color:var(--accent)">Connect</div>
  </div></div>`,
  'First run — setup',
-   'One storage URL and one password \u2014 the URL carries endpoint, signing region and zone name, which on bunny.net is also the access key ID. <b>Stored through the same Keyring port the CLI uses</b>: the Secret Service on Linux, so <code>photos-cli login</code> configures the app too, and the Keychain under Face ID on iOS. No edit path \u2014 the app is either set up or it is not.');
+   'One storage URL and one password \u2014 the URL carries endpoint, signing region and zone name, which on bunny.net is also the access key ID. <b>Stored through the same Keyring port the CLI uses</b>: the Secret Service on Linux, so <code>photos-cli login</code> configures the app too, and the Keychain on iOS. No edit path \u2014 the app is either set up or it is not.');
 
 /* 10b first run — connecting */
 phone(`${st}${hdr('Set up','connect to your storage zone',null,false)}
@@ -580,21 +580,6 @@ phone(`${st}${hdr('Set up','connect to your storage zone',null,false)}
  </div></div>`,
  'First run \u2014 connecting',
  'Connect disables itself and carries the progress rather than pushing a separate loading screen \u2014 the wait sits on the action that caused it. It blocks only on the shards (~12 MB) and the 0.39 s rebuild; the album list appears after that, and the thumbnail packs stream in behind it.');
-
-/* write key — Face ID */
-phone(`${st}<div class="body"><div class="scroll"><div class="alist">${D.albums.slice(0,4).map((a,i)=>arow(a,cache(i))).join('')}</div></div>
- <div class="dimmer"></div>
- <div class="alert">
-  <div class="ah" style="padding-top:20px">
-   <div style="font-size:34px;line-height:1;margin-bottom:8px">${I.face}</div>
-   <div class="at">Unlock photo library</div>
-   <div class="as">one password, used for syncing,<br>browsing and uploading</div></div>
-  <div class="chk" style="border-top:none;padding-top:2px">
-   <div class="warn" style="color:var(--dim)">Held in memory for this session only and wiped when the app closes. Uploads pre-sign their URLs, so background transfers continue without it.</div></div>
-  <div class="cancel">Cancel</div>
- </div></div>`,
- 'Face ID — once per app launch',
- 'A single credential, unlocked once when the app opens and held in memory for that session. Uploads pre-sign every PUT (valid up to 7 days), so background transfers survive a force-quit without needing it again.');
 
 /* log out */
 phone(`${st}${hdr('Settings','',null,true)}
