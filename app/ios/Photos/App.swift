@@ -9,6 +9,8 @@ import PhotosKit
 // harness renders.
 @main
 struct PhotosApp: App {
+    @UIApplicationDelegateAdaptor(OrientationDelegate.self) var delegate
+
     var body: some Scene {
         WindowGroup {
             ComposeView().ignoresSafeArea()
@@ -29,4 +31,18 @@ struct ComposeView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: UIViewController, context: Context) {}
+}
+
+// The one question iOS asks the app delegate rather than a view controller: which orientations
+// are allowed right now. A SwiftUI app's root is its own hosting controller, so the Compose view
+// controller is never asked; the delegate is, and the answer is Kotlin's (§6: landscape only while
+// a photo is open).
+final class OrientationDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        #if DEBUG
+        UIInterfaceOrientationMask(rawValue: UInt(PhotosDebugEntry.shared.supportedOrientations()))
+        #else
+        UIInterfaceOrientationMask(rawValue: UInt(PhotosEntry.shared.supportedOrientations()))
+        #endif
+    }
 }

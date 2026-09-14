@@ -6,6 +6,7 @@ import kotlin.concurrent.AtomicReference
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
 import net.stho.photos.control.ControlServer
+import net.stho.photos.ios.IosOrientation
 import net.stho.photos.ios.PhotosRoot
 import platform.UIKit.UIViewController
 import platform.posix.getenv
@@ -45,4 +46,7 @@ public object PhotosDebugEntry {
         }
         return controller
     }
+
+    /** The same answer the release entry gives the app delegate. */
+    public fun supportedOrientations(): ULong = IosOrientation.supported
 }

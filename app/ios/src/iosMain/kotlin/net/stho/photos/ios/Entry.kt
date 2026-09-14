@@ -6,6 +6,7 @@ import net.stho.photos.adapter.ios.KeychainKeyring
 import net.stho.photos.app.Account
 import net.stho.photos.app.Launcher
 import net.stho.photos.ui.screens.LocalLivePhotoSurface
+import net.stho.photos.ui.screens.LocalOrientationPolicy
 import net.stho.photos.ui.screens.LocalVideoSurface
 import net.stho.photos.ui.screens.Photos
 import net.stho.photos.ui.screens.PhotosTheme
@@ -25,6 +26,9 @@ import platform.UIKit.UIViewController
  */
 public object PhotosEntry {
     public fun viewController(): UIViewController = PhotosRoot().viewController()
+
+    /** The app delegate's answer to "which orientations now" — a `UIInterfaceOrientationMask`. */
+    public fun supportedOrientations(): ULong = IosOrientation.supported
 }
 
 /**
@@ -60,6 +64,7 @@ public class PhotosRoot(
                 CompositionLocalProvider(
                     LocalVideoSurface provides AvVideoSurface(),
                     LocalLivePhotoSurface provides PhLivePhotoSurface(onLivePhoto),
+                    LocalOrientationPolicy provides IosOrientation,
                 ) {
                     Photos(launcher)
                 }
