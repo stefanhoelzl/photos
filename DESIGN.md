@@ -638,11 +638,13 @@ nothing has to serialise a database in or out of memory.
   earliest date put an album spanning the whole library at the top of both orders, and the sort
   icon looked broken. Inside an album there is no sort to choose — photos are oldest first.
   A **container** owns no photos, so its date, like its pin and its cover, comes from its
-  descendants: it sorts by the latest photo anywhere beneath it, and its row reads
+  descendants: it sorts by the latest photo anywhere beneath it, and its header reads
   "2 albums · 132 photos". Read from its own empty shard it said "0 photos" and sorted as undated.
+  Its sub-albums sort the same way among themselves, beneath it (§6).
   Its cover's thumbnail is in the pack of the descendant that holds that photo.
 - **Search:** album names, substring, case- and diacritic-insensitive via `name_folded`.
-  No fuzzy matching (too noisy on short names), no filename search.
+  No fuzzy matching (too noisy on short names), no filename search. The list keeps each match
+  under its containers' headers (§6); a matching container keeps everything beneath it.
 - **Cover photo:** first photo in sort order — the album's earliest — overridable per album.
   A container's cover is resolved by descending into children until a photo is found, *unless*
   one has been set explicitly, so `cover_photo_id` is storable on containers too.
@@ -992,6 +994,29 @@ from inside an album of photos there is nowhere legal for one to go.
 
 **There is no hidden "…" menu anywhere.** Every icon performs one visible action.
 
+**The album list shows every level.** A container is not a row that hides what it holds: it is
+the **header** of its own group — its name in capitals, what it holds and its strip, no cover —
+and its sub-albums follow as ordinary rows, **one indent (22pt) in per level**. A nested
+container is a header one indent in, named on its own; the indent already says where it sits. A
+**heavier line closes each group**, so the rows after it plainly belong to the level above.
+
+- **Siblings keep one date order** (§3), albums and containers alike. Putting a level's own albums
+  first would have kept a header from seeming to claim the rows after its group, but it pulls a
+  recent album away from its date; the indent and the closing line do that job instead.
+- **Headers are sticky, stacked by depth.** While a group is on screen its header stays pinned,
+  beneath the headers of the containers it sits in, each keeping its indent. A pinned header is
+  the header itself, not a picture of one: a tap opens its container, and its strip reveals its
+  actions.
+- **Tapping a header opens the container**, as tapping its row used to. That screen lists
+  everything beneath it in the same layout, starting at the left edge — the large title names the
+  container, so no header repeats it — and it keeps what a level carries: its own map, framed on
+  its albums, and uploading into it. Upload from the root still makes a top-level album.
+- **A search keeps each match under its containers' headers** and hides everything else; a
+  matching container keeps its whole group. A header that only *holds* a match describes what the
+  search kept, all three ways: its line reads "1 of 3 albums · 40 photos", its strip is those
+  albums' bytes, and its actions act on them alone — a download from a search never fetches an
+  album the search is hiding.
+
 **The map is a representation of the album list, not a destination** — same title, subtitle and
 icons, toggled rather than pushed. The same holds one level down: an album's grid and its map
 are two views of one album.
@@ -1277,7 +1302,8 @@ download survives the app being killed.
 out — it has no album list. One list means nothing has to keep two renderings of the same 288
 albums consistent, the hierarchy comes free, and asking for an album happens where you are
 already looking at it. **A container's control applies to every descendant**, which is how a
-person thinks about a trip.
+person thinks about a trip — on its header, which heads them all on the list. Under a search it
+applies to the matches the header kept (see *Navigation and chrome*).
 
 Each row carries **one strip on its trailing edge, and the strip *is* the progress bar**:
 

@@ -97,6 +97,12 @@ h1{font-size:26px;font-weight:650;letter-spacing:-.02em;margin-bottom:6px}
 .arow .m{font-size:11.5px;color:var(--dim);margin-top:1px;display:flex;gap:6px;align-items:center}
 .chev{color:var(--dim);font-size:15px}
 .folder{color:var(--dim);display:inline-flex;vertical-align:-.15em}
+/* A container heads its group: caps, no cover, one indent in per level, a heavier closing line. */
+.arow.ahdr{padding:12px 0 6px;gap:8px;align-items:baseline}
+.arow.ahdr .n{flex:0 1 auto;font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.arow.ahdr .m{margin:0;font-size:11px}
+.indent{padding-left:22px}
+.aclose{border-top:2.5px solid var(--fill-line)}
 .sechdr{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;padding:12px 16px 4px}
 .grid{display:grid;gap:2px;padding:0 2px}
 .g4{grid-template-columns:repeat(4,1fr)}.g2{grid-template-columns:repeat(2,1fr)}
@@ -352,10 +358,18 @@ const CACHE=[
 ];
 const cache=i=>CACHE[i%CACHE.length];
 
+/* Every level is on the list: a container is the header of its group, its sub-albums follow one
+   indent in, and a heavier line closes the group. Iceland's sub-albums are the container screen's. */
+const ahdr=(a,c)=>`<div class="arow ahdr">${c?`<span class="edge ${c.done?'done':''}${c.moving?' moving':''}">${!c.done&&c.pct?`<i style="height:${c.pct}%"></i>`:''}</span>`:''}
+ <div class="n">${esc(a.name)}</div><div class="m">${a.children} albums · ${a.count.toLocaleString()} photos</div></div>`;
+const tree=albums=>albums.map((a,i)=>a.children
+  ?ahdr(a,cache(i))+`<div class="indent">${D.kalifornien.map((k,j)=>arow(k,cache(i+j+1))).join('')}</div><div class="aclose"></div>`
+  :arow(a,cache(i))).join('');
+
 /* 1 album list */
 phone(`${st}${hdr('Albums','239 albums · newest first',gb(I.gear)+gb(I.sort),false)}
  <div class="search">${I.search} Search albums</div>
- <div class="body"><div class="scroll"><div class="alist">${D.albums.map((a,i)=>arow(a,cache(i))).join('')}</div></div></div>`,
+ <div class="body"><div class="scroll"><div class="alist">${tree(D.albums)}</div></div></div>`,
  'Album list — no tab bar',
   'E.1 carries gear and sort only \u2014 F adds the map icon, G adds upload, so nothing on screen is ever dead. <b>Sort is one icon that cycles</b> date\u2193 \u2192 date\u2191 \u2192 name, and the subtitle names the current state, so no menu is needed. Pull down to sync; there is no refresh icon.');
 
@@ -411,7 +425,7 @@ phone(`${st}${hdr('Albums','239 albums · newest first',gb(I.gear)+gb(I.sort),fa
 phone(`${st}${hdr('Iceland','8 sub-albums · 412 photos',gb(I.gear)+gb(I.sort),true)}
  <div class="body"><div class="scroll"><div class="alist">${D.kalifornien.map((a,i)=>arow(a,cache(i+2))).join('')}</div></div></div>`,
  'Container album — identical list',
- 'Same row layout as the top level \u2014 \u00a72\u2019s album-has-sub-albums-XOR-photos rule is what lets one list serve both. Gear is on every screen; sort is the only screen-specific action. <b>A container carries the same strip as any other album</b>, aggregating its children: the folder glyph is what says it is a container, so nothing else has to. Its action applies to all of them.');
+ 'Tapping a container\u2019s header opens this: everything beneath it, in the same layout as the top level, starting at the left edge \u2014 the title names the container, so no header repeats it. A nested container would head its own group here, one indent in. <b>On the album list the same sub-albums are already visible</b>, under Iceland\u2019s header, whose strip aggregates them and whose action applies to all of them.');
 
 /* 3 grid */
 const g=D.grid.photos.filter(Boolean);

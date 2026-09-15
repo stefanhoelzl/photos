@@ -17,6 +17,7 @@ import net.stho.photos.app.AppUi
 import net.stho.photos.app.CacheAction
 import net.stho.photos.app.Launch
 import net.stho.photos.app.Launcher
+import net.stho.photos.app.ListEntry
 import net.stho.photos.app.MapCamera
 import net.stho.photos.app.MapPin
 import net.stho.photos.app.SaveOutcome
@@ -143,7 +144,8 @@ public class ControlServer(
                     val model = model ?: return@post call.fail(HttpStatusCode.Conflict, "not set up")
                     val id = runCatching { Uuid.parse(call.request.queryParameters["album"].orEmpty()) }.getOrNull()
                         ?: return@post call.fail(HttpStatusCode.BadRequest, "bad album id")
-                    val album = model.state.value.albums.firstOrNull { it.id == id }
+                    // The row, not the bare album: under a search a header acts on its matches alone.
+                    val row = model.state.value.rows.firstOrNull { it is ListEntry.Row && it.album.id == id } as ListEntry.Row?
                         ?: return@post call.fail(HttpStatusCode.NotFound, "no such album")
                     val action = when (call.request.queryParameters["action"]) {
                         "download" -> CacheAction.Download
@@ -151,7 +153,7 @@ public class ControlServer(
                         "clear" -> CacheAction.Clear
                         else -> return@post call.fail(HttpStatusCode.BadRequest, "unknown action")
                     }
-                    model.act(album, action)
+                    model.act(row, action)
                     call.json(state())
                 }
 
@@ -335,10 +337,12 @@ public class ControlServer(
             is Screen.Settings -> "settings"
             is Screen.Upload -> "upload"
         }
-        val albums = ui.albums.joinToString(",") {
-            val cache = ui.cacheOf(it)
-            val actions = ui.actionsOf(it).joinToString(",") { action -> "\"$action\"" }
+        val albums = ui.rows.filterIsInstance<ListEntry.Row>().joinToString(",") { row ->
+            val it = row.album
+            val cache = ui.cacheOf(row)
+            val actions = ui.actionsOf(row).joinToString(",") { action -> "\"$action\"" }
             """{"id":"${it.id}","name":${it.name.json()},"photos":${it.photoCount},""" +
+                """"depth":${row.depth},"header":${row.header},"contents":${row.contents.json()},""" +
                 """"cache":{"held":${cache.heldBytes},"total":${cache.totalBytes},""" +
                 """"moving":${cache.moving},"complete":${cache.complete},"empty":${cache.empty}},"actions":[$actions]}"""
         }

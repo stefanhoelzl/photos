@@ -68,6 +68,8 @@ class RenderTest {
                 )
             }
             render(out, "empty-$scheme", dark) { model(this@runTest, albums = emptyList()) }
+            render(out, "container-$scheme", dark) { model(this@runTest).also { it.open(norway) } }
+            render(out, "search-$scheme", dark) { model(this@runTest).also { it.search("rei") } }
             render(out, "grid-$scheme", dark) { gridModel(this@runTest, packed = true) }
             render(out, "grid-pending-$scheme", dark) { gridModel(this@runTest, packed = false) }
             render(out, "loading-$scheme", dark) { loadingModel(this@runTest) }
@@ -217,6 +219,10 @@ class RenderTest {
         override fun blobs(): Map<Uuid, List<net.stho.photos.app.BlobRef>> = emptyMap()
     }
 
+    /** A container holding a nested one, so the list draws headers, indents and closing lines. */
+    private val norway = album("Norway", 0, null)
+    private val lofoten = album("Lofoten", 0, null).copy(parent = norway.id)
+
     private val sampleAlbums = listOf(
         album("Iceland", 412, 2024),
         album("Alps Traverse", 870, 2023),
@@ -225,6 +231,11 @@ class RenderTest {
         album("Lake District", 338, 2021),
         album("City Break", 96, 2020),
         album("Ahnenfotos", 8, null),
+        norway,
+        lofoten,
+        album("Reine", 180, 2025).copy(parent = lofoten.id),
+        album("Henningsvær", 64, 2025).copy(parent = lofoten.id),
+        album("Oslo", 121, 2022).copy(parent = norway.id),
     )
 
     private fun album(name: String, photos: Int, year: Int?) = Album(
@@ -242,7 +253,7 @@ class RenderTest {
     )
 
     private class FakeCatalog(private val albums: List<Album>) : Catalog {
-        override fun albums(under: Uuid?): List<Album> = if (under == null) albums else emptyList()
+        override fun albums(under: Uuid?): List<Album> = albums.filter { it.parent == under }
         override fun search(text: String): List<Album> =
             albums.filter { it.nameFolded.contains(text.lowercase()) }
         override fun photos(inAlbum: Uuid): List<PhotoRow> = emptyList()

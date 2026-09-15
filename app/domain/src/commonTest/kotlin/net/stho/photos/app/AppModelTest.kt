@@ -74,9 +74,9 @@ class AppModelTest {
         val model = model(this, albums = listOf(album("Garden", 2019), trips, iceland, rome))
         model.start()
 
-        assertEquals(listOf("Trips", "Garden"), model.names(), "Trips holds 2024")
+        assertEquals(listOf("Trips", "Iceland", "Rome", "Garden"), model.names(), "Trips holds 2024, and heads its albums")
         model.cycleSort()
-        assertEquals(listOf("Garden", "Trips"), model.names(), "and is last when oldest comes first")
+        assertEquals(listOf("Garden", "Trips", "Rome", "Iceland"), model.names(), "last when oldest comes first, its albums turned too")
         assertEquals("2 albums · 2 photos", model.state.value.contentsOf(trips))
         assertEquals("1 photos", model.state.value.contentsOf(iceland))
     }
@@ -181,6 +181,125 @@ class AppModelTest {
 
         assertEquals(listOf("Iceland"), model.names())
         assertEquals("1 matching", model.state.value.subtitle)
+    }
+
+    // ---------------------------------------------------------------------- containers on the list
+
+    /**
+     * Every level is on the list (§6): a container heads its sub-albums, indented one step per
+     * level, and a line closes each group. Siblings keep one date order, album or container.
+     */
+    @Test
+    fun everySubAlbumIsListedIndentedUnderItsContainer() = runTest {
+        val norway = container("Norway")
+        val lofoten = container("Lofoten", norway)
+        val reine = album("Reine", 2023).copy(parent = lofoten.id)
+        val oslo = album("Oslo", 2021).copy(parent = norway.id)
+        val model = model(this, albums = listOf(album("Paris", 2022), norway, lofoten, reine, oslo))
+        model.start()
+
+        assertEquals(
+            listOf("Norway ▾", "  Lofoten ▾", "    Reine", "  — Lofoten", "  Oslo", "— Norway", "Paris"),
+            model.state.value.lines(),
+        )
+        assertEquals(listOf(norway.id, lofoten.id), model.state.value.rowOf(reine).ancestors, "what pins above it")
+        assertEquals("2 albums · 2 photos", model.state.value.rowOf(norway).contents)
+    }
+
+    /** A header opens its container, whose screen lists everything beneath it from the left edge. */
+    @Test
+    fun aContainersScreenListsItsWholeSubtree() = runTest {
+        val norway = container("Norway")
+        val lofoten = container("Lofoten", norway)
+        val model = model(
+            this,
+            albums = listOf(norway, lofoten, album("Reine", 2023).copy(parent = lofoten.id), album("Oslo", 2021).copy(parent = norway.id)),
+        )
+        model.start()
+        model.open(norway)
+
+        assertEquals(Screen.Container(norway.id, "Norway"), model.state.value.screen)
+        assertEquals(listOf("Lofoten ▾", "  Reine", "— Lofoten", "Oslo"), model.state.value.lines())
+    }
+
+    /**
+     * A search keeps each match under its containers' headers and hides everything else. A header
+     * that only holds a match counts what the search kept, not the whole container.
+     */
+    @Test
+    fun aSearchKeepsEachMatchUnderItsContainersAndCountsOnlyWhatItKept() = runTest {
+        val library = Library()
+        val model = model(this, albums = library.all)
+        model.start()
+        model.search("re")
+
+        assertEquals(
+            listOf("Iceland ▾", "  Reykjavík", "— Iceland", "Norway ▾", "  Lofoten ▾", "    Reine", "  — Lofoten", "— Norway"),
+            model.state.value.lines(),
+        )
+        assertEquals("1 of 2 albums · 40 photos", model.state.value.rowOf(library.iceland).contents)
+        assertEquals("1 of 2 albums · 80 photos", model.state.value.rowOf(library.norway).contents)
+        assertEquals("1 of 2 albums · 80 photos", model.state.value.rowOf(library.lofoten).contents)
+        assertEquals("2 matching", model.state.value.subtitle)
+    }
+
+    @Test
+    fun aMatchingContainerKeepsEverythingBeneathIt() = runTest {
+        val library = Library()
+        val model = model(this, albums = library.all)
+        model.start()
+        model.search("lof")
+
+        assertEquals(
+            listOf("Norway ▾", "  Lofoten ▾", "    Reine", "    Henningsvær", "  — Lofoten", "— Norway"),
+            model.state.value.lines(),
+        )
+        assertEquals("2 albums · 120 photos", model.state.value.rowOf(library.lofoten).contents)
+        assertEquals("1 of 2 albums · 120 photos", model.state.value.rowOf(library.norway).contents)
+        assertEquals("1 matching", model.state.value.subtitle)
+    }
+
+    /**
+     * Under a search a header's strip and actions describe what is on screen, as its count does:
+     * downloading Iceland from a search for Reykjavík must not fetch Ring Road, which is hidden.
+     */
+    @Test
+    fun aNarrowedHeadersStripAndActionsCoverOnlyItsMatches() = runTest {
+        val library = Library()
+        val blobs = library.all.filter { it.photoCount > 0 }.mapIndexed { i, album ->
+            album.id to listOf(BlobRef(requireNotNull(net.stho.photos.catalog.ObjectId.parse(i.toString(16).padStart(64, '0'))), 1_000, album.id))
+        }.toMap()
+        val own = own(this)
+        // Paused, so a request stays asked-for while the test looks: with nothing ever fetched
+        // the queue would otherwise settle it the moment it was made.
+        val paused = CoroutineScope(StandardTestDispatcher(testScheduler)).also { scopes += it }
+        val catalog = object : Catalog by FakeCatalog(library.all) {
+            override fun blobs(): Map<Uuid, List<BlobRef>> = blobs
+        }
+        val model = AppModel(
+            catalog, FakeSyncer(SyncOutcome.Succeeded(0, 0)), FakeThumbnails(), FakePreviews(), FakeVideos(),
+            idleQueue(paused), own,
+        )
+        model.start()
+        model.search("re")
+
+        val iceland = model.state.value.rowOf(library.iceland)
+        assertEquals(listOf(library.reykjavik.id), iceland.covers)
+        model.act(iceland, CacheAction.Download)
+        assertEquals(setOf(library.reykjavik.id), model.state.value.wanted, "the match alone is asked for")
+        assertEquals(listOf(CacheAction.Pause, CacheAction.Clear), model.state.value.actionsOf(iceland))
+
+        val held = model.state.value.copy(
+            cache = mapOf(
+                library.reykjavik.id to AlbumCache(10, 100, moving = false),
+                library.ringRoad.id to AlbumCache(50, 50, moving = false),
+                library.iceland.id to AlbumCache(60, 150, moving = false),
+            ),
+        )
+        assertEquals(AlbumCache(10, 100, moving = false), held.cacheOf(iceland), "Ring Road's bytes are not on this strip")
+
+        model.search("")
+        assertEquals(listOf(library.iceland.id), model.state.value.rowOf(library.iceland).covers, "without a search, the whole container")
     }
 
 
@@ -539,6 +658,36 @@ class AppModelTest {
     }
 
     private fun AppModel.names(): List<String> = state.value.albums.map { it.name }
+
+    /** The list as it reads: indented by depth, a header marked ▾, a group's closing line as — name. */
+    private fun AppUi.lines(): List<String> {
+        val names = albums.associate { it.id to it.name }
+        return rows.map { entry ->
+            when (entry) {
+                is ListEntry.Row -> "  ".repeat(entry.depth) + entry.album.name + if (entry.header) " ▾" else ""
+                is ListEntry.End -> "  ".repeat(entry.ancestors.size) + "— " + names[entry.container]
+            }
+        }
+    }
+
+    private fun AppUi.rowOf(album: Album): ListEntry.Row =
+        rows.filterIsInstance<ListEntry.Row>().single { it.album.id == album.id }
+
+    private fun container(name: String, parent: Album? = null): Album =
+        album(name, null).copy(photoCount = 0, parent = parent?.id)
+
+    /** Two trips, one of them nested, for the searches. */
+    private inner class Library {
+        val iceland = container("Iceland")
+        val reykjavik = album("Reykjavík", 2024).copy(parent = iceland.id, photoCount = 40, nameFolded = "reykjavik")
+        val ringRoad = album("Ring Road", 2023).copy(parent = iceland.id, photoCount = 212)
+        val norway = container("Norway")
+        val lofoten = container("Lofoten", norway)
+        val reine = album("Reine", 2022).copy(parent = lofoten.id, photoCount = 80)
+        val henningsvaer = album("Henningsvær", 2021).copy(parent = lofoten.id, photoCount = 40, nameFolded = "henningsvaer")
+        val oslo = album("Oslo", 2020).copy(parent = norway.id, photoCount = 70)
+        val all = listOf(iceland, reykjavik, ringRoad, norway, lofoten, reine, henningsvaer, oslo)
+    }
 
     /**
      * A scope of the test's own, unconfined so that everything `start` launches has already run
