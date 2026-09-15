@@ -1,5 +1,6 @@
 package net.stho.photos.desktop
 
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.unit.Density
 import java.io.File
@@ -11,6 +12,7 @@ import kotlin.test.AfterTest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -82,23 +84,38 @@ class RenderTest {
         println("frames in $out")
     }
 
-    private fun renderSetup(directory: File, name: String, dark: Boolean) {
-        val scene = ImageComposeScene(width = 430, height = 890, density = Density(2f)) {
+    private fun TestScope.renderSetup(directory: File, name: String, dark: Boolean) {
+        write(directory, name) {
             PhotosTheme(dark = dark) { SetupScreen { _, _ -> SaveOutcome.Rejected("not reached") } }
-        }
-        try {
-            val png = requireNotNull(scene.render().encodeToData()) { "skia declined to encode" }
-            File(directory, "$name.png").writeBytes(png.bytes)
-        } finally {
-            scene.close()
         }
     }
 
-    private fun render(directory: File, name: String, dark: Boolean, build: () -> AppModel) {
+    private fun TestScope.render(directory: File, name: String, dark: Boolean, build: () -> AppModel) {
         val model = build()
-        val scene = ImageComposeScene(width = 430, height = 890, density = Density(2f)) {
+        write(directory, name) {
             PhotosTheme(dark = dark) { App(model, FakeThumbnails(), SAMPLE_URL, onLogOut = {}) }
         }
+    }
+
+    /**
+     * One frame, from a scene whose effects run on this test's scheduler and on no other thread.
+     *
+     * Left to its default, `ImageComposeScene` runs effects unconfined, and a `delay` inside one —
+     * the album list's `scrollToItem` has one — resumes through Swing's dispatcher on the AWT event
+     * thread and measures the scene there while this thread renders it. That failed about one run
+     * in six, as "Detected multithreaded access to SnapshotStateObserver" or as
+     * "performMeasureAndLayout called during measure layout", and did so before this suite drew
+     * anything new. A frame needs no effect to have run — every screen draws the model's current
+     * state — so here the effects wait on the test scheduler until the scene is closed.
+     */
+    private fun TestScope.write(directory: File, name: String, content: @Composable () -> Unit) {
+        val scene = ImageComposeScene(
+            width = 430,
+            height = 890,
+            density = Density(2f),
+            coroutineContext = StandardTestDispatcher(testScheduler),
+            content = content,
+        )
         try {
             val png = requireNotNull(scene.render().encodeToData()) { "skia declined to encode" }
             File(directory, "$name.png").writeBytes(png.bytes)
