@@ -2,7 +2,7 @@
 # Run `ssh-runner init --update` after changing the config, then commit and push:
 # the workflow that runs is the one on GitHub, not the one in your working tree.
 # ssh-runner-template: 7
-# ssh-runner-config: 81c6352846090cd2
+# ssh-runner-config: 3c400a0a358303f2
 name: ssh-runner macos
 run-name: ssh-runner macos ${{ inputs.session_id }}
 
@@ -50,8 +50,13 @@ jobs:
           distribution: temurin
           java-version: "25"
 
-      # Gradle user home (dependency cache + wrapper dist). Its post-step saves at job end.
+      # Gradle user home (dependency cache + wrapper dist), read but never written. Sessions are
+      # dispatched against `main`, which setup-gradle treats as the default branch and so would
+      # save ~550 MB of session-specific Gradle home to main every time -- crowding the repo's
+      # 10 GB cache and evicting the entries CI actually needs. CI's `main` runs fill it instead.
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
 
       # The Kotlin/Native distribution and its dependencies -- ~2 GB fetched on a cold box, which
       # is the single longest thing between `start` and a first compile.
