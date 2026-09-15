@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.LaunchedEffect
@@ -34,7 +36,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -44,7 +48,9 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,13 +59,15 @@ import kotlin.uuid.Uuid
 import net.stho.photos.catalog.Album
 import net.stho.photos.app.AlbumCache
 import net.stho.photos.app.CacheAction
+import net.stho.photos.app.ListEntry
 import net.stho.photos.app.Thumbnails
 
 /**
  * The album list, and the container one level down — the same list either way.
  *
- * §2's "an album has sub-albums XOR photos" is what lets one screen serve both: a row is a
- * count and a cover, and the thing it opens is decided by the row, not by this screen.
+ * Every level is on it. A container is the header of its own group rather than a row that hides
+ * what it holds: its sub-albums follow one indent in, a heavier line closes the group, and while
+ * the group scrolls its header stays pinned — stacked above any header nested inside it.
  *
  * It is also the *only* list of albums in the app. The cache controls live here rather than on
  * a second list inside Settings, so nothing has to keep two renderings of the same 288 albums
@@ -68,7 +76,7 @@ import net.stho.photos.app.Thumbnails
  */
 @Composable
 public fun AlbumList(
-    albums: List<Album>,
+    rows: List<ListEntry>,
     query: String,
     searchable: Boolean,
     thumbnails: Thumbnails,
@@ -76,12 +84,10 @@ public fun AlbumList(
     arrivals: Int,
     /** A first sync, with nothing to show yet: `fetched to total`, or null when not loading. */
     loading: Pair<Int, Int>?,
-    /** This album's cache state — the whole of what its strip draws. */
-    cache: (Album) -> AlbumCache,
-    /** Which controls the album's state affords, revealed by a swipe or by tapping the strip. */
-    actions: (Album) -> List<CacheAction>,
-    /** The row's second line: "132 photos", or "2 albums · 132 photos" for a container. */
-    contents: (Album) -> String,
+    /** This row's cache state — the whole of what its strip draws. */
+    cache: (ListEntry.Row) -> AlbumCache,
+    /** Which controls the row's state affords, revealed by a swipe or by tapping the strip. */
+    actions: (ListEntry.Row) -> List<CacheAction>,
     /**
      * Whatever decides the order — the sort and the query. When it changes the list starts again
      * at the top: a keyed lazy list otherwise keeps the row that *was* first on screen, so after a
@@ -90,16 +96,16 @@ public fun AlbumList(
     order: Any?,
     onSearch: (String) -> Unit,
     onOpen: (Album) -> Unit,
-    onAction: (Album, CacheAction) -> Unit,
+    onAction: (ListEntry.Row, CacheAction) -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         if (searchable) SearchField(query, onSearch)
-        if (albums.isEmpty() && loading != null) {
+        if (rows.isEmpty() && loading != null) {
             // A first sync fetches every shard in the zone and takes tens of seconds (§4).
             // "No albums yet" during it is simply untrue, and untrue in the worst way: it
             // looks like an empty library rather than like work in progress.
             LoadingState(loading)
-        } else if (albums.isEmpty()) {
+        } else if (rows.isEmpty()) {
             EmptyState(if (query.isBlank()) "No albums yet" else "Nothing matches “$query”")
         } else {
             // No side padding on the list itself: the strip is a screen-edge mark and has to
@@ -110,23 +116,45 @@ public fun AlbumList(
             // is open, a tap anywhere in the list closes it instead of opening an album. Per row,
             // tapping the open row itself opened the album the person was about to act on.
             var revealed by remember { mutableStateOf<Uuid?>(null) }
-            LazyColumn(Modifier.fillMaxSize(), state = list) {
-                items(albums, key = { it.id.toString() }) { album ->
-                    AlbumRow(
-                        album = album,
-                        revealed = revealed == album.id,
-                        anyRevealed = revealed != null,
-                        onReveal = { revealed = album.id },
-                        onDismiss = { revealed = null },
-                        contents = contents(album),
-                        thumbnails = thumbnails,
-                        arrivals = arrivals,
-                        cache = cache(album),
-                        actions = actions(album),
-                        onAction = { onAction(album, it) },
-                        onOpen = { onOpen(album) },
-                    )
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+            val row: @Composable (ListEntry.Row) -> Unit = { entry ->
+                ListRow(
+                    entry = entry,
+                    revealed = revealed == entry.album.id,
+                    anyRevealed = revealed != null,
+                    onReveal = { revealed = entry.album.id },
+                    onDismiss = { revealed = null },
+                    thumbnails = thumbnails,
+                    arrivals = arrivals,
+                    cache = cache(entry),
+                    actions = actions(entry),
+                    onAction = { onAction(entry, it) },
+                    onOpen = { onOpen(entry.album) },
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = ROW_DIVIDER)
+            }
+            val headers = remember(rows) {
+                rows.filterIsInstance<ListEntry.Row>().filter { it.header }.associateBy { it.album.id }
+            }
+            val slot = with(LocalDensity.current) { (HEADER_HEIGHT + ROW_DIVIDER).roundToPx() }
+            val pinned by remember(rows, slot) { derivedStateOf { pinnedHeaders(list.layoutInfo, rows, slot) } }
+
+            Box(Modifier.fillMaxSize()) {
+                LazyColumn(Modifier.fillMaxSize(), state = list) {
+                    items(rows, key = { it.key }) { entry ->
+                        when (entry) {
+                            is ListEntry.Row -> row(entry)
+                            is ListEntry.End -> HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outline,
+                                thickness = GROUP_DIVIDER,
+                            )
+                        }
+                    }
+                }
+                // The same composable as the header in the list, so a pinned header is not a
+                // picture of one: it opens its container and reveals its actions exactly as the
+                // row beneath it would.
+                Column(Modifier.fillMaxWidth()) {
+                    pinned.forEach { id -> headers[id]?.let { header -> key(id) { row(header) } } }
                 }
             }
         }
@@ -134,7 +162,33 @@ public fun AlbumList(
 }
 
 /**
- * One album: a cover, what it contains, and one strip that says everything about its cache.
+ * The headers to pin, outermost first, for the rows now under the top of the list.
+ *
+ * Asked level by level: what sits just below the headers already pinned decides whether one more
+ * goes on the stack. That is what makes a nested header join the stack only once its own group
+ * reaches the top, and leave it once the line closing that group has scrolled beneath.
+ */
+internal fun pinnedHeaders(info: LazyListLayoutInfo, rows: List<ListEntry>, slot: Int): List<Uuid> {
+    val visible = info.visibleItemsInfo
+    if (visible.isEmpty() || slot <= 0) return emptyList()
+    fun at(y: Int): ListEntry? = visible.firstOrNull { y < it.offset + it.size }?.let { rows.getOrNull(it.index) }
+    fun chain(entry: ListEntry): List<Uuid> = when (entry) {
+        is ListEntry.Row -> if (entry.header) entry.ancestors + entry.album.id else entry.ancestors
+        is ListEntry.End -> entry.ancestors + entry.container
+    }
+    var stack = emptyList<Uuid>()
+    while (true) {
+        val beneath = at(stack.size * slot) ?: break
+        val chain = chain(beneath)
+        if (chain.size <= stack.size) break
+        stack = chain.take(stack.size + 1)
+    }
+    return stack
+}
+
+/**
+ * One line of the list: an album with its cover, or a container's header, and in both cases the
+ * one strip that says everything about the cache.
  *
  * The row does not narrate itself. There is no size, no state and no byte count in the text,
  * because the strip carries all four readings — grey nothing held, part blue this much held,
@@ -142,15 +196,14 @@ public fun AlbumList(
  * separate gauge plus a line of prose on every row.
  */
 @Composable
-private fun AlbumRow(
-    album: Album,
+private fun ListRow(
+    entry: ListEntry.Row,
     /** This row's actions are showing. */
     revealed: Boolean,
     /** Some row's actions are showing, so a tap here dismisses them rather than opening. */
     anyRevealed: Boolean,
     onReveal: () -> Unit,
     onDismiss: () -> Unit,
-    contents: String,
     thumbnails: Thumbnails,
     arrivals: Int,
     cache: AlbumCache,
@@ -158,43 +211,31 @@ private fun AlbumRow(
     onAction: (CacheAction) -> Unit,
     onOpen: () -> Unit,
 ) {
-    // Read lazily, per visible row: resolving a cover opens that album's pack, and doing it for
-    // all 288 up front would be 288 file reads for the six rows anyone can actually see.
-    val cover = remember(album.id, arrivals) { thumbnails.cover(album) }
-
+    val indent = 16.dp + INDENT * entry.depth
     Row(
-        Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+        if (entry.header) {
+            Modifier.fillMaxWidth().height(HEADER_HEIGHT).background(MaterialTheme.colorScheme.surfaceContainerLow)
+        } else {
+            Modifier.fillMaxWidth().height(IntrinsicSize.Min).background(MaterialTheme.colorScheme.surface)
+        },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(
             Modifier.weight(1f)
+                .then(if (entry.header) Modifier.fillMaxHeight() else Modifier)
                 .clickable { if (anyRevealed) onDismiss() else onOpen() }
-                .padding(start = 16.dp, top = 7.dp, bottom = 7.dp)
+                .padding(start = indent, top = if (entry.header) 0.dp else 7.dp, bottom = if (entry.header) 0.dp else 7.dp)
                 // Swipe-left reveals the actions. Swipe-RIGHT is deliberately unused: it
                 // collides with the interactive back gesture, which matters at every level of
                 // this list rather than only at the root.
-                .pointerInput(album.id, actions) {
+                .pointerInput(entry.album.id, actions) {
                     detectHorizontalDragGestures { _, delta ->
                         if (delta < -4f && actions.isNotEmpty()) onReveal()
                     }
                 },
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            AlbumCover(cover, moving = cache.moving)
-            Column(Modifier.padding(start = 12.dp).weight(1f)) {
-                Text(
-                    album.name,
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    contents,
-                    fontSize = 11.5.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            if (entry.header) HeaderContent(entry) else AlbumContent(entry, thumbnails, arrivals, cache.moving)
         }
 
         if (revealed) {
@@ -215,6 +256,55 @@ private fun AlbumRow(
                 Modifier.clickable(enabled = actions.isNotEmpty()) { onReveal() },
             )
         }
+    }
+}
+
+/**
+ * A container: no cover, its name set as a section title, and what the group beneath it holds.
+ *
+ * The name is measured first and the count gets what is left. Weighting the name instead let an
+ * unweighted count take the width before it, and on a narrow screen a header drew no name at all.
+ */
+@Composable
+private fun RowScope.HeaderContent(entry: ListEntry.Row) {
+    Text(
+        entry.album.name.uppercase(),
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 0.7.sp,
+        color = MaterialTheme.colorScheme.onSurface,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+    Text(
+        entry.contents,
+        fontSize = 11.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.weight(1f, fill = false).padding(start = 8.dp, end = 8.dp),
+    )
+}
+
+@Composable
+private fun AlbumContent(entry: ListEntry.Row, thumbnails: Thumbnails, arrivals: Int, moving: Boolean) {
+    // Read lazily, per visible row: resolving a cover opens that album's pack, and doing it for
+    // all 288 up front would be 288 file reads for the six rows anyone can actually see.
+    val cover = remember(entry.album.id, arrivals) { thumbnails.cover(entry.album) }
+    AlbumCover(cover, moving = moving)
+    Column(Modifier.padding(start = 12.dp)) {
+        Text(
+            entry.album.name,
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            entry.contents,
+            fontSize = 11.5.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -333,6 +423,17 @@ internal fun pulseAlpha(moving: Boolean): Float {
 
 private const val PULSE_MS = 620
 private const val PULSE_FLOOR = 0.42f
+
+/** A header's fixed height, which is also one slot of the pinned stack. */
+private val HEADER_HEIGHT = 40.dp
+
+/** One level of nesting. */
+private val INDENT = 22.dp
+
+private val ROW_DIVIDER = 0.5.dp
+
+/** Heavier than a row's divider, so the end of a group reads as the end of the group. */
+private val GROUP_DIVIDER = 2.5.dp
 
 /**
  * The field owns its text and cursor, and the model hears each change. Fed back from the model's

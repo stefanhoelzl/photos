@@ -28,7 +28,13 @@ public data class AppUi(
     val stack: BackStack = BackStack(),
     val sort: AlbumSort = AlbumSort.DateNewest,
     val query: String = "",
-    val albums: List<Album> = emptyList(),
+    /**
+     * The album list on screen, every level of it: albums, the containers heading them, and the
+     * lines closing each container's group (§6). Empty on every screen that is not a list.
+     */
+    val rows: List<ListEntry> = emptyList(),
+    /** How many albums a search matched on this list; zero when there is no search. */
+    val matched: Int = 0,
     /** The open album's photos, in §3's order. Empty on every screen that is not a grid. */
     val photos: List<PhotoRow> = emptyList(),
     /**
@@ -91,8 +97,33 @@ public data class AppUi(
     /** The showing map's pins and clusters; null while no map is on screen (§6). */
     val map: MapUi? = null,
 ) {
+    /** Every album on the list, containers included, in the order they are drawn. */
+    val albums: List<Album> get() = rows.mapNotNull { (it as? ListEntry.Row)?.album }
+
     /** What this album's row draws. Unknown albums read as holding nothing, never as complete. */
     public fun cacheOf(album: Album): AlbumCache = cache[album.id] ?: AlbumCache.nothing
+
+    /**
+     * What a list row's strip draws: its album's, or for a header a search has narrowed, the sum
+     * of the matches beneath it — their rollups never overlap, so nothing is counted twice.
+     */
+    public fun cacheOf(row: ListEntry.Row): AlbumCache {
+        row.covers.singleOrNull()?.let { return cache[it] ?: AlbumCache.nothing }
+        var held = 0L
+        var total = 0L
+        var moving = false
+        for (id in row.covers) {
+            val each = cache[id] ?: continue
+            held += each.heldBytes
+            total += each.totalBytes
+            moving = moving || each.moving
+        }
+        return AlbumCache(held, total, moving)
+    }
+
+    /** The actions a list row offers — pause while any album it covers is asked for. */
+    public fun actionsOf(row: ListEntry.Row): List<CacheAction> =
+        actionsFor(cacheOf(row), wanted = row.covers.any { it in wanted })
 
     /** Icon-only actions the row offers, which is a function of state and nothing else. */
     public fun actionsOf(album: Album): List<CacheAction> =
@@ -114,7 +145,7 @@ public data class AppUi(
             // line is the only thing that says so. No sort: a map has no order to name.
             showingMap && map != null ->
                 "${map.pins.size} of ${map.total} ${if (query.isNotEmpty()) "matching" else "albums"} on the map"
-            query.isNotEmpty() -> "${albums.size} matching"
+            query.isNotEmpty() -> "$matched matching"
             // While packs are still arriving the line says so, exactly as the mockup does: the
             // covers filling in one by one otherwise look like something going wrong. *After*
             // the sort, never instead of it -- a first sync drains 288 packs, and a line that
@@ -292,6 +323,15 @@ public class AppModel(
             CacheAction.Pause -> pause(album)
             CacheAction.Clear -> clearCache(album)
         }
+    }
+
+    /**
+     * A list row's controls, applied to every album it covers: the container itself, whose blobs
+     * are all of its descendants' — or, under a search, only the matches its header kept.
+     */
+    public fun act(row: ListEntry.Row, action: CacheAction) {
+        val byId = albumTree.associateBy { it.id }
+        row.covers.mapNotNull { byId[it] }.forEach { act(it, action) }
     }
 
     /**
@@ -711,7 +751,7 @@ public class AppModel(
                         loadThumbnails(album)
                     }
                     if (current.preview == null) loadPreview(screen.index, photos)
-                    current.copy(albums = emptyList(), photos = photos, packReady = true)
+                    current.copy(rows = emptyList(), photos = photos, packReady = true)
                 }
 
                 is Screen.Grid -> {
@@ -719,19 +759,21 @@ public class AppModel(
                     val ready = album != null && this@AppModel.thumbnails.has(album)
                     if (ready && current.thumbnails.isEmpty()) loadThumbnails(album)
                     current.copy(
-                        albums = emptyList(),
+                        rows = emptyList(),
                         photos = catalog.photos(screen.albumId),
                         packReady = ready,
                     )
                 }
 
                 else -> {
-                    val albums = when {
-                        current.query.isNotBlank() -> catalog.search(current.query)
-                        else -> catalog.albums(under = screen.parentAlbum())
-                    }
+                    // Built from the cached tree, not re-queried per level: every level is on the
+                    // list now, and the tree is re-read whenever the catalog changes anyway.
+                    val matches = current.query.takeIf { it.isNotBlank() }
+                        ?.let { query -> catalog.search(query).mapTo(mutableSetOf()) { it.id } }
+                    val rows = albumRows(albumTree, screen.parentAlbum(), current.sort, current.summaries, matches)
                     current.copy(
-                        albums = current.sort.sorted(albums) { current.summaries[it.id]?.latest ?: it.dateMax },
+                        rows = rows,
+                        matched = matches?.let { ids -> rows.count { it is ListEntry.Row && it.album.id in ids } } ?: 0,
                         photos = emptyList(),
                         thumbnails = emptyMap(),
                         packReady = true,

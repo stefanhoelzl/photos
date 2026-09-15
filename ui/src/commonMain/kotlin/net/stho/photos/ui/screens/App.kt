@@ -80,17 +80,16 @@ public fun App(
                         LevelMap(ui, model, thumbnails, arrivals)
                     } else {
                         AlbumList(
-                            ui.albums, ui.query, true, thumbnails, arrivals,
+                            ui.rows, ui.query, true, thumbnails, arrivals,
                             loading = (ui.sync as? SyncStatus.Running)
-                                ?.takeIf { ui.albums.isEmpty() }
+                                ?.takeIf { ui.rows.isEmpty() }
                                 ?.let { it.fetched to it.total },
-                            cache = ui::cacheOf,
-                            actions = ui::actionsOf,
-                            contents = ui::contentsOf,
+                            cache = { ui.cacheOf(it) },
+                            actions = { ui.actionsOf(it) },
                             order = ui.sort to ui.query,
                             onSearch = model::search,
                             onOpen = model::open,
-                            onAction = model::act,
+                            onAction = { row, action -> model.act(row, action) },
                         )
                     }
                 }
@@ -104,16 +103,17 @@ public fun App(
                     if (ui.showingMap) {
                         LevelMap(ui, model, thumbnails, arrivals)
                     } else {
+                        // Its whole subtree, from the left edge: the title already names the
+                        // container, so no header repeats it.
                         AlbumList(
-                            ui.albums, ui.query, false, thumbnails, arrivals,
+                            ui.rows, ui.query, false, thumbnails, arrivals,
                             loading = null,
-                            cache = ui::cacheOf,
-                            actions = ui::actionsOf,
-                            contents = ui::contentsOf,
+                            cache = { ui.cacheOf(it) },
+                            actions = { ui.actionsOf(it) },
                             order = ui.sort to ui.query,
                             onSearch = model::search,
                             onOpen = model::open,
-                            onAction = model::act,
+                            onAction = { row, action -> model.act(row, action) },
                         )
                     }
                 }
