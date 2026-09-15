@@ -46,6 +46,8 @@ public data class UploadRequest(
     /** The list the upload was started from — the root, or a container. */
     val parent: Uuid?,
     val assetIds: List<String>,
+    /** The gallery album chosen whole, null for loose photos: deleting takes it too once it is empty. */
+    val galleryAlbum: String?,
     val deleteFromGallery: Boolean,
 )
 
@@ -80,7 +82,8 @@ public data class UploadStatus(
  * write      the shard at `uploading`, naming every object
  * transfer   the objects, through BackgroundUploader, each read back by HEAD
  * land       the shard again at `uploaded`, If-Match
- * delete     the gallery's copies, when that was asked for
+ * delete     the gallery's copies, when that was asked for — and the gallery album, when it was
+ *            chosen whole and holds nothing else
  * ```
  *
  * Each album keeps its state under `uploads/<album-id>/` — the request, the shard as written, and
@@ -136,6 +139,7 @@ public class Uploads(
             parent = request.parent,
             addedAt = Instant.fromEpochSeconds(clock.now().epochSeconds),
             deleteFromGallery = request.deleteFromGallery,
+            galleryAlbum = request.galleryAlbum,
             assetIds = request.assetIds,
             stage = Manifest.Stage.REQUESTED,
         )
@@ -222,7 +226,7 @@ public class Uploads(
         }
 
         if (manifest.stage == Manifest.Stage.LANDED) {
-            if (manifest.deleteFromGallery) gallery.delete(manifest.assetIds)
+            if (manifest.deleteFromGallery) gallery.delete(manifest.assetIds, manifest.galleryAlbum)
             directory.deleteRecursively()
             update(id) { it.copy(stage = UploadStage.Done, filesDone = it.files, bytesDone = it.bytes) }
         }
@@ -465,6 +469,8 @@ private data class Manifest(
     val parent: Uuid?,
     val addedAt: Instant,
     val deleteFromGallery: Boolean,
+    /** Absent from a manifest written before albums were deleted too: that upload deletes its assets only. */
+    val galleryAlbum: String?,
     val assetIds: List<String>,
     val stage: Stage,
 ) {
@@ -477,6 +483,7 @@ private data class Manifest(
             appendLine("parent=${parent ?: ""}")
             appendLine("added=${addedAt.epochSeconds}")
             appendLine("delete=$deleteFromGallery")
+            galleryAlbum?.let { appendLine("album=$it") }
             for (asset in assetIds) appendLine("asset=$asset")
         }
         val scratch = Path(directory, "manifest.part")
@@ -496,6 +503,7 @@ private data class Manifest(
                     parent = value("parent")?.ifEmpty { null }?.let(Uuid::parse),
                     addedAt = Instant.fromEpochSeconds(requireNotNull(value("added")).toLong()),
                     deleteFromGallery = value("delete") == "true",
+                    galleryAlbum = value("album")?.ifEmpty { null },
                     assetIds = lines.filter { it.startsWith("asset=") }.map { it.substringAfter('=') },
                     stage = Stage.valueOf(requireNotNull(value("stage"))),
                 )

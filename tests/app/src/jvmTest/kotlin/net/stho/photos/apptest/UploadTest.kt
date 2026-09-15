@@ -89,7 +89,24 @@ class UploadTest {
 
             uploadWholeGalleryAlbum(expectedParent = null) { uploads.deleteAfterUpload(true) }
 
-            assertEquals(emptyList(), folder.list().orEmpty().toList(), "the still, the video and both halves of the pair")
+            // The still, the video and both halves of the pair — and then the album they left empty.
+            assertFalse(folder.exists(), "a gallery album chosen whole goes with its photos")
+        }
+    }
+
+    /** Deleting never takes what did not go up: a photo added after the album was chosen keeps its album. */
+    @Test
+    fun aGalleryAlbumThatGainedAPhotoSinceItWasChosenIsKept() = runBlocking {
+        scenario("upload-delete-grown") {
+            val folder = zone.galleryAlbum(gallery, "Weekend")
+            launch(withGallery = true)
+
+            uploadWholeGalleryAlbum(expectedParent = null) {
+                uploads.deleteAfterUpload(true)
+                File(folder, "IMG_0001.heic").copyTo(File(folder, "IMG_0004.heic"))
+            }
+
+            assertEquals(listOf("IMG_0004.heic"), folder.list().orEmpty().toList(), "the uploaded photos went, the album stayed")
         }
     }
 

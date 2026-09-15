@@ -11,6 +11,7 @@
 		A1000102 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000002 /* Assets.xcassets */; };
 		A1001101 /* SystemAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1001001 /* SystemAlerts.swift */; };
 		A1001102 /* LivePhotoSeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1001002 /* LivePhotoSeed.swift */; };
+		A1001103 /* AlbumSeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1001003 /* AlbumSeed.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -30,6 +31,7 @@
 		A1000004 /* Photos.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Photos.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1001001 /* SystemAlerts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAlerts.swift; sourceTree = "<group>"; };
 		A1001002 /* LivePhotoSeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePhotoSeed.swift; sourceTree = "<group>"; };
+		A1001003 /* AlbumSeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumSeed.swift; sourceTree = "<group>"; };
 		A1001004 /* PhotosUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PhotosUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -75,6 +77,7 @@
 			children = (
 				A1001001 /* SystemAlerts.swift */,
 				A1001002 /* LivePhotoSeed.swift */,
+				A1001003 /* AlbumSeed.swift */,
 			);
 			path = PhotosUITests;
 			sourceTree = "<group>";
@@ -111,7 +114,7 @@
 			productType = "com.apple.product-type.application";
 		};
 		/* The iOS suite's hands (tests/ios): what a JVM scenario driving the app over HTTP cannot
-		   do itself — tap a system alert, and put an edited Live Photo into the library. Never run
+		   do itself — tap a system alert, put an edited Live Photo or an album into the library. Never run
 		   on its own; each test is started by a scenario with `xcodebuild test-without-building`. */
 		A1001400 /* PhotosUITests */ = {
 			isa = PBXNativeTarget;
@@ -228,6 +231,7 @@
 			files = (
 				A1001101 /* SystemAlerts.swift in Sources */,
 				A1001102 /* LivePhotoSeed.swift in Sources */,
+				A1001103 /* AlbumSeed.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

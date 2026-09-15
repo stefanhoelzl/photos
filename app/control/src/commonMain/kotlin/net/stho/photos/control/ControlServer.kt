@@ -396,7 +396,8 @@ public class ControlServer(
                 """{"id":${it.id.json()},"type":"${it.mediaType}"}"""
             }
             val naming = picker.naming?.let {
-                """{"name":${it.name.json()},"count":${it.count},"delete":${it.deleteFromGallery}}"""
+                """{"name":${it.name.json()},"count":${it.count},"album":${it.galleryAlbum?.json() ?: "null"},""" +
+                    """"delete":${it.deleteFromGallery}}"""
             } ?: "null"
             val statuses = model.statuses.value.joinToString(",") {
                 """{"album":"${it.albumId}","name":${it.name.json()},"stage":"${it.stage}",""" +
