@@ -117,6 +117,28 @@ class CatalogSyncTest {
         assertEquals(listOf("Keep"), fixture.reader().allAlbums().map(Album::name))
     }
 
+    /**
+     * A deletion recorded without a rebuild — a rebuild that failed after the diff was applied.
+     * No later diff sees anything, so only a sync that rebuilds regardless takes the album away.
+     */
+    @Test
+    fun aSyncThatAlwaysRebuildsRepairsADeletionTheCatalogMissed() = runTest {
+        val fixture = fixture("missed")
+        fixture.upload(album("Keep", photos = listOf(photo("k.jpg"))), "k1")
+        val drop = album("Drop", photos = listOf(photo("d.jpg")))
+        fixture.upload(drop, "d1")
+
+        fixture.sync.sync()
+        fixture.zone.remove(drop.info.id.shardKey)
+        fixture.sync.refresh()
+
+        assertFalse(fixture.sync.sync().rebuilt)
+        assertEquals(listOf("Drop", "Keep"), fixture.reader().allAlbums().map(Album::name).sorted())
+
+        assertTrue(fixture.sync.sync(alwaysRebuild = true).rebuilt)
+        assertEquals(listOf("Keep"), fixture.reader().allAlbums().map(Album::name))
+    }
+
     // ------------------------------------------------------- what LIST returns that is not a shard
 
     /**

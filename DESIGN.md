@@ -701,9 +701,15 @@ object and therefore no shared mutable state to conflict on.
 2. diff returned ETags against sync_state.db
      changed / new ETag  → download that shard
      key absent          → album deleted → drop its rows
-3. if anything changed: rebuild the merged DB by replaying all shards (~1–3 s)
+3. rebuild the merged DB by replaying all shards (~1–3 s) — the CLI only if anything changed,
+   the app on every sync
 4. store the new ETags
 ```
+
+The app rebuilds even when the LIST moved nothing, because step 2 records a deletion before
+step 3 runs: a rebuild that fails after it leaves a merged DB that no later diff would ever
+touch again. That was measured — an album deleted from the zone stayed on a phone's list across
+relaunches. The app syncs at launch and on a pull of the album list, so either repairs it.
 
 **One LIST covers thumbnails too**, because a thumbnail pack is an ordinary blob referenced by
 `album_info.thumbs_id` (§3): if the pack changed, the shard that points at it changed, and step
@@ -712,7 +718,7 @@ without some shard's ETag moving.
 
 The merged DB is **rebuilt wholesale** rather than spliced incrementally. There is no partial
 update path, so stale rows are impossible by construction — which is also why there is no
-"rebuild index" button in the UI: nothing could ever need repairing by hand.
+"rebuild index" button in the UI: pulling the album list down syncs, and every app sync rebuilds.
 
 The rebuild happens **in place, inside one transaction** — `BEGIN IMMEDIATE`, delete, replay,
 `COMMIT` — rather than building a temp file and renaming over it. There is only ever one

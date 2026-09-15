@@ -141,8 +141,15 @@ public class CatalogSync(
      * [AlbumInfo.thumbsId], so nothing in the zone can change without some shard's ETag moving
      * (§4).
      */
-    public suspend fun sync(onProgress: ShardProgress = ShardProgress { _, _ -> }): SyncReport =
-        mutex.withLock { syncing(onProgress) }
+    public suspend fun sync(
+        /**
+         * Rebuild even when the LIST moved nothing. Deletions are recorded before the rebuild runs,
+         * so a rebuild that failed left a catalog no later diff would ever touch again. The app
+         * passes this on every sync; the hourly CLI does not need a merged DB at all.
+         */
+        alwaysRebuild: Boolean = false,
+        onProgress: ShardProgress = ShardProgress { _, _ -> },
+    ): SyncReport = mutex.withLock { syncing(alwaysRebuild, onProgress) }
 
     /**
      * Everything [sync] does except the rebuild: LIST, diff, fetch, record ETags, and hand back
@@ -159,9 +166,9 @@ public class CatalogSync(
     /** The single LIST, diffed against what is on disk. The whole sync plan (§4). */
     public suspend fun plan(): ShardDiff = mutex.withLock { planning() }
 
-    private suspend fun syncing(onProgress: ShardProgress): SyncReport {
+    private suspend fun syncing(alwaysRebuild: Boolean, onProgress: ShardProgress): SyncReport {
         val refreshed = refreshing(onProgress)
-        if (!refreshed.changed) return refreshed.report
+        if (!refreshed.changed && !alwaysRebuild) return refreshed.report
 
         val summary = ensureWriter().rebuild(refreshed.shards)
         return refreshed.report.copy(

@@ -91,6 +91,13 @@ internal class ConsoleReporter(private val console: Console) {
                 "is schema ${probe.schemaVersion}, newer than this build reads — left untouched",
             )
         }
+        for (claim in report.doublyClaimed) {
+            unresolved(
+                claim.sourcePath,
+                "is claimed by ${claim.albumIds.size} albums (${claim.albumIds.joinToString()}) — " +
+                    "left untouched until all but one are removed",
+            )
+        }
         for (path in report.contendedAlbums) {
             unresolved(path, "was written by another device — skipped, retried next run")
         }
