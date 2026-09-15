@@ -616,7 +616,8 @@ nothing has to serialise a database in or out of memory.
   photos; a **container's is the centroid of all its descendants'**, since a container owns no
   photos of its own. Both are computed during the rebuild, so nothing about location is stored
   in a shard and no stored pin can drift from the photos beneath it. `lat IS NULL` is the whole
-  "not on the map" test.
+  "not on the map" test. The map itself places only albums that own photos (§6): a container's
+  centroid lands between its albums, so it is kept but never drawn as a pin.
   > Albums whose photos carry no GPS are placed by a **one-time throwaway script that writes
   > coordinates into the photo files themselves**, before ingest ever sees them. The ingest
   > tool therefore has no location logic, no geocoder and no `album-locations.tsv` — and the
@@ -963,15 +964,22 @@ chrome: a drawn approximation of a system material is worse than a coherent draw
 the whole point of one UI is that it looks the same in the harness as on the device.
 
 Every list/grid screen carries the same four trailing icons — **gear · the other representation
-· sort · upload** — and the toggle always shows the view you switch *to*:
+· sort · upload** — and the toggle always shows the view you switch *to*. A map drops the sort:
+it has no order, and an icon that changes nothing visible reads as broken.
+
+The table reads **from the right edge**: gear outermost on every screen, then the toggle, then
+sort. So no icon ever changes place — dropping sort on a map moves nothing, and the toggle stays
+under the thumb that just tapped it. An earlier order put the toggle between gear and sort, and
+it jumped a slot each time the map came and went.
 
 | screen | trailing icons |
 |---|---|
 | Albums (list) | gear, **map**, sort, upload |
-| Albums (map) | gear, **list**, sort, upload |
+| Albums (map) | gear, **list**, upload |
 | Container list | gear, **map**, sort, upload |
+| Container map | gear, **list**, upload |
 | Album grid | gear, **map**, upload — no sort: an album's photos have one order (§3) |
-| Album map | gear, **grid**, sort, upload |
+| Album map | gear, **grid**, upload |
 | Fullscreen viewer | gear, share, set-cover |
 | Settings | — |
 
@@ -981,23 +989,57 @@ Every list/grid screen carries the same four trailing icons — **gear · the ot
 icons, toggled rather than pushed. The same holds one level down: an album's grid and its map
 are two views of one album.
 
-**The map is drawn, not embedded.** A raster tile layer on a Compose canvas, with pan, zoom and
-pins over it — the same code on the phone and in the harness. MapKit would give a better
-basemap, but it would only be giving the basemap: clustering is our own algorithm either way,
-and §5's pin is a 38pt square thumbnail, which is a custom annotation view in MapKit too. An
-embedded native map would also make the one screen that cannot be developed or reviewed without
-a device.
+**The basemap is embedded; everything on it is drawn.** MapLibre Native, through MapLibre
+Compose, draws VersaTiles' vector tiles — the public server serves no raster tiles, which an
+earlier draft of this section assumed when it planned a raster layer on a Compose canvas. It
+draws the tiles and nothing else. The pins and clusters are a Compose overlay placed by the
+shared tier's own Web Mercator projection from the camera the basemap reports, so what can be
+wrong about them is unit-tested and a headless frame still shows them. MapKit would have given
+the same split with a second map stack to keep apart; MapLibre is one library on both targets.
+
+> **The price is the harness.** MapLibre presents into a native surface that needs a window, so
+> `ImageComposeScene` — `/screenshot` and `:tests:app` — cannot host it. The basemap is therefore
+> a UI-interop port (`BaseMap`), exactly like the video surface: the desktop window and the phone
+> install MapLibre from `:app:map`, and everything else draws `:ui`'s plain stand-in, which still
+> pans and zooms. The iOS suite is the one automated run that shows tiles. Also accepted:
+> MapLibre Compose is pre-1.0 and alpha on the desktop, and the overlay can trail the native map
+> by a frame while panning — only a device says whether that shows. On the phone MapLibre arrives
+> as a static archive inside its klib; the app target links the system libraries it needs.
+
+**What is placed.** The album list's map is **flat**: every album that owns photos and has a
+location, whatever level it is opened from. A container's centroid (§3) lands between its
+albums, somewhere nobody went, so containers get no pin. A search narrows the pins as it narrows
+the list. An album's map places its photos. Both use one pin, §5's 38pt square thumbnail from a
+pack already on disk; a cluster is a count in a blue circle. The subtitle counts what is placed
+against what could be — "212 of 239 albums on the map", "88 of 132 photos on the map" — and is
+the only thing that says some have no location.
 
 **Clustering, the album→pin projection and pin selection live in the shared tier**, not in the
-renderer, so the part that can be wrong is the part that is unit-tested.
+renderer, so the part that can be wrong is the part that is unit-tested. Supercluster's greedy
+radius merge — the rule MapLibre GL uses, 44dp — is worked out once for every whole zoom level,
+off the main thread, when the points change. Each level merges the one below it, so zooming in
+only ever splits clusters. Panning never reclusters: the map draws the level for `floor(zoom)`.
 
-**Tiles come from the public VersaTiles server.** Three consequences are accepted rather than
-mitigated: the map is **the one surface that is not available offline**, where §6 otherwise
-promises the catalog and every thumbnail always are; it depends on a third party this project
-does not control; and tile requests disclose roughly where the library's photographs were
-taken. If any of those bite, the alternative is already available and needs no new mechanism —
-a regional `.versatiles` extract stored in the zone as an ordinary blob, read with the range
-GETs §2 already relies on, cached like everything else.
+**Taps.** An album's pin opens that album **on its own map** — its photos where they were taken,
+one level down, with the grid a toggle away — and Back returns to the album list's map as it was
+left. A photo's pin opens the viewer at it. A cluster zooms until it splits. One that never
+splits — several trips to one town — lists its albums in a sheet instead, each row opening its
+album on its map as a pin would; or, for photos, opens the viewer at the earliest, since paging
+walks through the rest.
+
+**The camera** first frames the level's own albums: the library at the root, and a container's
+albums on its map, with every other pin still around them. It is remembered per level, on that
+level's entry in the back stack, in memory only — it survives opening an album and toggling to
+the list, and is framed afresh once the level is left or the app relaunched. Zoom runs from the
+whole world to street level; rotation and tilt are off.
+
+**Tiles come from the public VersaTiles server**, cached by MapLibre Native's own ambient cache
+at its default size, with no Settings entry. Offline, an area looked at before still draws and
+the rest is a plain ground; the pins, clusters and thumbnails always work, being local. Two
+consequences are accepted rather than mitigated: it depends on a third party this project does
+not control, and tile requests disclose roughly where the library's photographs were taken. If
+either bites, the alternative needs no new mechanism — a regional `.versatiles` extract stored in
+the zone as an ordinary blob, read with the range GETs §2 already relies on.
 
 **Colour carries meaning; it is never decoration.** Standard bar buttons are **monochrome** —
 the glyph takes the on-surface colour. Blue-for-tappable is not used: if every affordance is
@@ -1844,7 +1886,10 @@ means offering it no cache controls, since it has nothing to fetch and nothing t
 > simulator on every pull request. It has been installed and set up on a real phone. Still owed:
 > share from the viewer, and §10's grid unknown, which only a device answers.
 
-**F · Map** = B — parallel with E.
+**F · Map** = B — parallel with E. Both maps, the shared tier's projection and clustering, the
+remembered camera and the control routes, with MapLibre in the desktop window and on the phone
+and the stand-in everywhere headless. Still owed: the map on a real device, the only place that
+shows whether the overlay keeps up with the native map while panning.
 
 **G · iOS upload** = A+B.
 

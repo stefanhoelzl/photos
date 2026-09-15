@@ -18,6 +18,8 @@ dbus-java = "5.1.0"
 # needs it at compile *and* run time. Kotlin 2.4 targets 25, so the whole project moves rather
 # than one module emitting bytecode the rest cannot load.
 jdk = "25"
+# The map's basemap (DESIGN §6): MapLibre Native, drawn beneath the app's own pins.
+maplibre-compose = "0.16.0"
 
 [libraries]
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -49,6 +51,9 @@ kotlincrypto-sha2 = { module = "org.kotlincrypto.hash:sha2", version.ref = "kotl
 kotlincrypto-hmac-sha2 = { module = "org.kotlincrypto.macs:hmac-sha2", version.ref = "kotlincrypto" }
 xmlutil-core = { module = "io.github.pdvrieze.xmlutil:core", version.ref = "xmlutil" }
 clikt = { module = "com.github.ajalt.clikt:clikt-core", version.ref = "clikt" }
+maplibre-compose = { module = "org.maplibre.compose:maplibre-compose", version.ref = "maplibre-compose" }
+# The desktop's native renderer. One per OS, not a classifier; Vulkan is the documented Linux choice.
+maplibre-compose-runtime-linux = { module = "org.maplibre.compose:maplibre-compose-runtime-vulkan-linux-x64", version.ref = "maplibre-compose" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

@@ -32,6 +32,9 @@ kotlin {
     sourceSets {
         iosMain.dependencies {
             api(project(":ui"))
+            // MapLibre Native arrives as a static archive inside the runtime klib -- no CocoaPods and
+            // no SPM. The system libraries it needs are the Xcode target's OTHER_LDFLAGS.
+            implementation(project(":app:map"))
             implementation(project(":app:domain"))
             implementation(project(":domain"))
             implementation(project(":adapter:ios"))

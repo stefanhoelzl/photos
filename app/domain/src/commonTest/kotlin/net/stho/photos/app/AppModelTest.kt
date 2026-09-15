@@ -329,6 +329,215 @@ class AppModelTest {
         assertEquals(listOf(pack, image), fetched, "the pack first, then the album's image -- with no pack on disk yet")
     }
 
+    // ------------------------------------------------------------------------------ the map
+
+    /**
+     * §6: the album list's map is flat. A container's centroid lands between its albums, so it
+     * gets no pin; an album with no location is counted, and the subtitle says how many are missing.
+     */
+    @Test
+    fun theListsMapPlacesEveryLocatedAlbumThatOwnsPhotosWhateverTheLevel() = runTest {
+        val trips = album("Trips", null).copy(photoCount = 0, latitude = 53.0, longitude = -4.7)
+        val iceland = located("Iceland", 64.14, -21.94).copy(parent = trips.id)
+        val rome = located("Rome", 41.9, 12.5).copy(parent = trips.id)
+        val model = model(this, albums = listOf(trips, iceland, rome, album("Garden", 2019)))
+        model.start()
+        model.toggleMap()
+
+        val ui = model.state.value
+        assertTrue(ui.showingMap)
+        assertEquals(setOf("Iceland", "Rome"), ui.pinNames())
+        assertEquals("2 of 3 albums on the map", ui.subtitle, "Garden has no location; Trips owns no photos")
+    }
+
+    @Test
+    fun aSearchNarrowsTheMapAsItNarrowsTheList() = runTest {
+        val model = model(
+            this,
+            albums = listOf(located("Iceland", 64.14, -21.94), located("Alps", 46.5, 10.0), album("Ice Cave", 2020)),
+        )
+        model.start()
+        model.search("ice")
+        model.toggleMap()
+
+        assertEquals(setOf("Iceland"), model.state.value.pinNames())
+        assertEquals("1 of 2 matching on the map", model.state.value.subtitle)
+    }
+
+    /** A container's map opens on its own albums; the root's on the whole library. */
+    @Test
+    fun aMapFirstFramesItsOwnLevelsAlbums() = runTest {
+        val trips = album("Trips", null).copy(photoCount = 0)
+        val iceland = located("Iceland", 64.14, -21.94).copy(parent = trips.id)
+        val rome = located("Rome", 41.9, 12.5).copy(parent = trips.id)
+        val sydney = located("Sydney", -33.86, 151.21)
+        val model = model(this, albums = listOf(trips, iceland, rome, sydney))
+        model.start()
+        model.mapViewport(390.0, 640.0)
+
+        model.toggleMap()
+        val library = requireNotNull(model.state.value.stack.map?.camera)
+        assertTrue(listOf(iceland, rome, sydney).all { library.shows(it) }, "the root frames every album")
+
+        model.toggleMap()
+        model.open(trips)
+        model.toggleMap()
+        val container = requireNotNull(model.state.value.stack.map?.camera)
+        assertTrue(container.shows(iceland) && container.shows(rome), "Trips frames its own albums")
+        assertFalse(container.shows(sydney), "and not the rest of the library")
+        assertEquals(setOf("Iceland", "Rome", "Sydney"), model.state.value.pinNames(), "though every pin is still there")
+    }
+
+    @Test
+    fun theCameraSurvivesOpeningAnAlbumAndTogglingButNotLeavingItsLevel() = runTest {
+        val trips = album("Trips", null).copy(photoCount = 0)
+        val iceland = located("Iceland", 64.14, -21.94).copy(parent = trips.id)
+        val model = model(this, albums = listOf(trips, iceland))
+        model.start()
+
+        model.toggleMap()
+        val looking = MapCamera(60.0, -10.0, 4.0)
+        model.moveCamera(looking)
+        model.tapMap(model.state.value.clusterOf("Iceland"))
+        assertTrue(model.state.value.screen is Screen.Grid, "a pin opens its album")
+        assertTrue(model.state.value.showingMap, "on its own map")
+        assertTrue(model.state.value.map?.pins.orEmpty().all { it is MapPin.OfPhoto }, "which places its photos")
+        model.back()
+        assertTrue(model.state.value.showingMap, "Back returns to the map")
+        assertEquals(looking, model.state.value.stack.map?.camera, "where it was left")
+
+        model.toggleMap()
+        model.toggleMap()
+        assertEquals(looking, model.state.value.stack.map?.camera, "toggling away and back keeps it")
+
+        model.toggleMap()
+        model.open(trips)
+        model.toggleMap()
+        model.moveCamera(looking)
+        model.back()
+        model.open(trips)
+        assertFalse(model.state.value.showingMap, "a level left is a level forgotten")
+        model.toggleMap()
+        assertTrue(model.state.value.stack.map?.camera != looking, "so its map is framed afresh")
+    }
+
+    @Test
+    fun tappingAClusterZoomsUntilItSplits() = runTest {
+        // About 400 m apart: one circle over the country, two pins over the street.
+        val model = model(this, albums = listOf(located("Marienplatz", 48.137, 11.575), located("Isartor", 48.139, 11.580)))
+        model.start()
+        model.toggleMap()
+        model.moveCamera(MapCamera(48.138, 11.577, 5.0))
+        val before = requireNotNull(model.state.value.stack.map)
+
+        model.tapMap(model.state.value.clusterAt())
+
+        val after = requireNotNull(model.state.value.stack.map)
+        assertEquals(before.moves + 1, after.moves, "the renderer is told to follow")
+        val zoom = requireNotNull(after.camera).zoom
+        assertEquals(2, requireNotNull(model.state.value.map).clusters.at(zoom).size, "and at the new zoom they are two pins")
+    }
+
+    /** Several trips to one town: no zoom separates them, so they are listed instead (§6). */
+    @Test
+    fun albumsInOneSpotAreListedRatherThanZoomedInto() = runTest {
+        val first = located("Reykjavík 2019", 64.14, -21.94)
+        val second = located("Reykjavík 2023", 64.14, -21.94)
+        val model = model(this, albums = listOf(first, second))
+        model.start()
+        model.toggleMap()
+
+        model.tapMap(model.state.value.clusterAt())
+        assertEquals(setOf(first, second), model.state.value.map?.sheet?.toSet())
+
+        model.openFromSheet(second)
+        assertEquals(Screen.Grid(second.id, second.name), model.state.value.screen)
+        assertTrue(model.state.value.showingMap, "opened on its map, as its pin would be")
+        model.back()
+        assertNull(model.state.value.map?.sheet, "the list does not reopen on the way back")
+    }
+
+    @Test
+    fun anAlbumsMapPlacesItsPhotosAndOpensTheViewerAtOne() = runTest {
+        val photos = listOf(
+            PhotoRow(id = Uuid.random(), filename = "IMG_0000.jpg", latitude = 64.14, longitude = -21.94),
+            PhotoRow(id = Uuid.random(), filename = "IMG_0001.jpg"),
+            PhotoRow(id = Uuid.random(), filename = "IMG_0002.jpg", latitude = 64.14, longitude = -21.94),
+            PhotoRow(id = Uuid.random(), filename = "IMG_0003.jpg", latitude = 65.68, longitude = -18.09),
+        )
+        val iceland = album("Iceland", 2024)
+        val own = own(this)
+        val model = AppModel(
+            FakeCatalog(listOf(iceland), photos = photos), FakeSyncer(SyncOutcome.Succeeded(1, 4)),
+            FakeThumbnails(), FakePreviews(), FakeVideos(), idleQueue(own), own,
+        )
+        model.start()
+        model.open(iceland)
+        model.toggleMap()
+        assertEquals("3 of 4 photos on the map", model.state.value.photosSubtitle)
+
+        // The two in one spot never split, so the viewer opens at the earlier of them.
+        model.moveCamera(MapCamera(64.14, -21.94, MapLimits.MAX_ZOOM.toDouble()))
+        val together = requireNotNull(model.state.value.map).clusters.at(MapLimits.MAX_ZOOM.toDouble()).single { !it.isPin }
+        model.tapMap(together)
+        assertEquals(0, (model.state.value.screen as Screen.Photo).index)
+
+        model.back()
+        assertTrue(model.state.value.showingMap, "Back from the viewer is the album's map")
+        val akureyri = requireNotNull(model.state.value.map).clusters.at(MapLimits.MAX_ZOOM.toDouble()).single { it.members == listOf(2) }
+        model.tapMap(akureyri)
+        assertEquals(3, (model.state.value.screen as Screen.Photo).index, "a pin opens the viewer at its own photo")
+    }
+
+    /**
+     * The first frame is made before the screen says how big it is. A map narrower than the phone
+     * the model assumed opened with both pins past its edges — which is what the desktop
+     * scenario's first frame of this map showed.
+     */
+    @Test
+    fun theFirstFrameIsRefittedToTheRealViewportUntilTheCameraIsTakenOver() = runTest {
+        val iceland = located("Iceland", 64.14, -21.94)
+        val rome = located("Rome", 41.9, 12.5)
+        val model = model(this, albums = listOf(iceland, rome))
+        model.start()
+        model.toggleMap()
+        val assumed = requireNotNull(model.state.value.stack.map)
+        assertFalse(requireNotNull(assumed.camera).shows(iceland, 215.0, 387.0), "framed for a phone, Iceland is past the edge")
+
+        model.mapViewport(215.0, 387.0)
+        val refit = requireNotNull(model.state.value.stack.map)
+        val camera = requireNotNull(refit.camera)
+        assertTrue(camera.shows(iceland, 215.0, 387.0) && camera.shows(rome, 215.0, 387.0), "both fit the map that is really there")
+        assertEquals(assumed.moves + 1, refit.moves, "and the renderer is told to follow")
+
+        val chosen = MapCamera(50.0, 0.0, 3.0)
+        model.moveCamera(chosen)
+        model.mapViewport(390.0, 640.0)
+        assertEquals(chosen, model.state.value.stack.map?.camera, "once someone has moved it, a resize leaves it alone")
+    }
+
+    private fun located(name: String, latitude: Double, longitude: Double): Album =
+        album(name, 2024).copy(latitude = latitude, longitude = longitude)
+
+    private fun AppUi.pinNames(): Set<String> =
+        map?.pins.orEmpty().map { (it as MapPin.OfAlbum).album.name }.toSet()
+
+    /** The cluster holding [name]'s pin at the camera's zoom. */
+    private fun AppUi.clusterOf(name: String): Cluster {
+        val map = requireNotNull(map)
+        return map.clusters.at(requireNotNull(stack.map?.camera).zoom)
+            .single { cluster -> cluster.members.any { (map.pins[it] as MapPin.OfAlbum).album.name == name } }
+    }
+
+    /** The one thing drawn at the camera's zoom. */
+    private fun AppUi.clusterAt(): Cluster =
+        requireNotNull(map).clusters.at(requireNotNull(stack.map?.camera).zoom).single()
+
+    private fun MapCamera.shows(album: Album, width: Double = 390.0, height: Double = 640.0): Boolean {
+        val at = toScreen(Mercator.project(album.latitude!!, album.longitude!!), width, height)
+        return at.x in 0.0..width && at.y in 0.0..height
+    }
+
     private fun AppModel.names(): List<String> = state.value.albums.map { it.name }
 
     /**

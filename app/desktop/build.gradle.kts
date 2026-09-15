@@ -19,6 +19,13 @@ kotlin {
         }
         jvmMain.dependencies {
             implementation(project(":ui"))
+            // The window's basemap (§6). Only the window installs it; offscreen frames keep `:ui`'s
+            // stand-in, since MapLibre's surface needs a window to present into.
+            implementation(project(":app:map"))
+            // Directly as well: the window glue -- the presentation host MapLibre draws through --
+            // is this root's to install, not something `:app:map` should re-export.
+            implementation(libs.maplibre.compose)
+            runtimeOnly(libs.maplibre.compose.runtime.linux)
             implementation(project(":app:domain"))
             // The control server, always: the desktop is a development surface (decision 7).
             implementation(project(":app:control"))

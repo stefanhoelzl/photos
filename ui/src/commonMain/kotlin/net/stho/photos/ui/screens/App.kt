@@ -13,9 +13,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import net.stho.photos.app.AppModel
+import net.stho.photos.app.AppUi
 import net.stho.photos.app.Screen
 import net.stho.photos.app.SyncStatus
 import net.stho.photos.app.Thumbnails
@@ -60,50 +62,64 @@ public fun App(
             when (val screen = ui.screen) {
                 is Screen.Albums -> {
                     NavBar("Albums", ui.subtitle, onBack = null) {
+                        ListToggle(ui, model)
                         BarButton(Icons.gear, "Settings", model::openSettings)
-                        BarButton(Icons.sort, "Sort", model::cycleSort)
                     }
-                    AlbumList(
-                        ui.albums, ui.query, true, thumbnails, arrivals,
-                        loading = (ui.sync as? SyncStatus.Running)
-                            ?.takeIf { ui.albums.isEmpty() }
-                            ?.let { it.fetched to it.total },
-                        cache = ui::cacheOf,
-                        actions = ui::actionsOf,
-                        contents = ui::contentsOf,
-                        order = ui.sort to ui.query,
-                        onSearch = model::search,
-                        onOpen = model::open,
-                        onAction = model::act,
-                    )
+                    if (ui.showingMap) {
+                        LevelMap(ui, model, thumbnails, arrivals)
+                    } else {
+                        AlbumList(
+                            ui.albums, ui.query, true, thumbnails, arrivals,
+                            loading = (ui.sync as? SyncStatus.Running)
+                                ?.takeIf { ui.albums.isEmpty() }
+                                ?.let { it.fetched to it.total },
+                            cache = ui::cacheOf,
+                            actions = ui::actionsOf,
+                            contents = ui::contentsOf,
+                            order = ui.sort to ui.query,
+                            onSearch = model::search,
+                            onOpen = model::open,
+                            onAction = model::act,
+                        )
+                    }
                 }
 
                 is Screen.Container -> {
                     NavBar(screen.name, ui.subtitle, onBack = model::back) {
+                        ListToggle(ui, model)
                         BarButton(Icons.gear, "Settings", model::openSettings)
-                        BarButton(Icons.sort, "Sort", model::cycleSort)
                     }
-                    AlbumList(
-                        ui.albums, ui.query, false, thumbnails, arrivals,
-                        loading = null,
-                        cache = ui::cacheOf,
-                        actions = ui::actionsOf,
-                        contents = ui::contentsOf,
-                        order = ui.sort to ui.query,
-                        onSearch = model::search,
-                        onOpen = model::open,
-                        onAction = model::act,
-                    )
+                    if (ui.showingMap) {
+                        LevelMap(ui, model, thumbnails, arrivals)
+                    } else {
+                        AlbumList(
+                            ui.albums, ui.query, false, thumbnails, arrivals,
+                            loading = null,
+                            cache = ui::cacheOf,
+                            actions = ui::actionsOf,
+                            contents = ui::contentsOf,
+                            order = ui.sort to ui.query,
+                            onSearch = model::search,
+                            onOpen = model::open,
+                            onAction = model::act,
+                        )
+                    }
                 }
 
                 is Screen.Grid -> {
                     // No sort here: an album's photos have one order, oldest first (§3). The
                     // icon on this screen used to cycle the *album* sort, which changed nothing
                     // visible and read as broken.
-                    NavBar(screen.name, "${ui.photos.size} photos", onBack = model::back) {
+                    NavBar(screen.name, ui.photosSubtitle, onBack = model::back) {
+                        if (ui.showingMap) BarButton(Icons.grid, "Grid", model::toggleMap)
+                        else BarButton(Icons.map, "Map", model::toggleMap)
                         BarButton(Icons.gear, "Settings", model::openSettings)
                     }
-                    PhotoGrid(ui.photos, ui.thumbnails, ui.columns, model::density, model::openPhoto)
+                    if (ui.showingMap) {
+                        LevelMap(ui, model, thumbnails, arrivals)
+                    } else {
+                        PhotoGrid(ui.photos, ui.thumbnails, ui.columns, model::density, model::openPhoto)
+                    }
                 }
 
                 is Screen.Photo -> {
@@ -141,5 +157,41 @@ public fun App(
                 Toast(notice, onSettings = model::openSettings, onDismiss = model::dismissNotice)
             }
         }
+    }
+}
+
+/**
+ * A list's sort, then its representation toggle — drawn left of the gear.
+ *
+ * The bar is right-aligned, so reading from the edge it is gear, toggle, sort (§6). The sort goes
+ * while the map is showing — a map has no order, and an icon that changes nothing visible reads as
+ * broken — and being leftmost, its going moves nothing else: the toggle stays under the thumb
+ * that just tapped it. The toggle shows the view you switch *to*.
+ */
+@Composable
+private fun ListToggle(ui: AppUi, model: AppModel) {
+    if (ui.showingMap) {
+        BarButton(Icons.list, "List", model::toggleMap)
+    } else {
+        BarButton(Icons.sort, "Sort", model::cycleSort)
+        BarButton(Icons.map, "Map", model::toggleMap)
+    }
+}
+
+/** The current level as its map. Keyed by the level, so a camera never carries from one to the next. */
+@Composable
+private fun LevelMap(ui: AppUi, model: AppModel, thumbnails: Thumbnails, arrivals: Int) {
+    key(ui.stack.screens.size, ui.screen) {
+        MapScreen(
+            ui = ui,
+            thumbnails = thumbnails,
+            arrivals = arrivals,
+            contents = ui::contentsOf,
+            onViewport = model::mapViewport,
+            onCameraMoved = model::cameraMoved,
+            onTap = model::tapMap,
+            onOpenFromSheet = model::openFromSheet,
+            onDismissSheet = model::dismissSheet,
+        )
     }
 }

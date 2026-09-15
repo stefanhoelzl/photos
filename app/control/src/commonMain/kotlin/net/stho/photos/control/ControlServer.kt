@@ -17,6 +17,8 @@ import net.stho.photos.app.AppUi
 import net.stho.photos.app.CacheAction
 import net.stho.photos.app.Launch
 import net.stho.photos.app.Launcher
+import net.stho.photos.app.MapCamera
+import net.stho.photos.app.MapPin
 import net.stho.photos.app.SaveOutcome
 import net.stho.photos.app.Screen
 
@@ -35,6 +37,15 @@ import net.stho.photos.app.Screen
  *   POST /sort            cycle the sort, exactly as the icon does
  *   POST /search?q=text   type into the search field
  *   POST /refresh         pull-to-refresh
+ *   POST /map             the representation toggle: list ↔ map, or grid ↔ map (§6)
+ *   POST /map/camera?latitude=…&longitude=…&zoom=…
+ *                         move the showing map's camera, as a cluster tap does
+ *   POST /map/viewport?w=…&h=…
+ *                         the map's size in dp, which a frame fits; a phone's until set
+ *   POST /map/tap?cluster=<i>
+ *                         tap the i-th entry of `/state`'s `map.clusters` -- a pin or a cluster
+ *   POST /map/sheet?album=<uuid> | ?dismiss
+ *                         a row of the list of albums sharing one spot, or closing it
  *   POST /cache?album=<uuid>&action=download|pause|clear
  *                         the album row's cache controls, which are a swipe or a tap on the strip
  *   POST /setup?url=…&password=…
@@ -132,6 +143,57 @@ public class ControlServer(
                 post("/search") { model?.search(call.request.queryParameters["q"].orEmpty()); call.json(state()) }
                 post("/refresh") { model?.refresh(); call.json(state()) }
 
+                post("/map") { model?.toggleMap(); call.json(state()) }
+
+                post("/map/camera") {
+                    val model = model ?: return@post call.fail(HttpStatusCode.Conflict, "not set up")
+                    val parameters = call.request.queryParameters
+                    val latitude = parameters["latitude"]?.toDoubleOrNull()
+                    val longitude = parameters["longitude"]?.toDoubleOrNull()
+                    val zoom = parameters["zoom"]?.toDoubleOrNull()
+                    if (latitude == null || longitude == null || zoom == null) {
+                        return@post call.fail(HttpStatusCode.BadRequest, "expected latitude, longitude and zoom")
+                    }
+                    model.moveCamera(MapCamera(latitude, longitude, zoom))
+                    call.json(state())
+                }
+
+                post("/map/viewport") {
+                    val model = model ?: return@post call.fail(HttpStatusCode.Conflict, "not set up")
+                    val width = call.request.queryParameters["w"]?.toDoubleOrNull()
+                    val height = call.request.queryParameters["h"]?.toDoubleOrNull()
+                    if (width == null || height == null) return@post call.fail(HttpStatusCode.BadRequest, "expected w and h")
+                    model.mapViewport(width, height)
+                    call.json(state())
+                }
+
+                post("/map/tap") {
+                    val model = model ?: return@post call.fail(HttpStatusCode.Conflict, "not set up")
+                    val ui = model.state.value
+                    val map = ui.map ?: return@post call.fail(HttpStatusCode.Conflict, "no map is showing")
+                    val camera = ui.stack.map?.camera ?: return@post call.fail(HttpStatusCode.Conflict, "the map is not framed yet")
+                    val at = call.request.queryParameters["cluster"]?.toIntOrNull()
+                        ?: return@post call.fail(HttpStatusCode.BadRequest, "expected cluster=<index>")
+                    val cluster = map.clusters.at(camera.zoom).getOrNull(at)
+                        ?: return@post call.fail(HttpStatusCode.NotFound, "no cluster $at at this zoom")
+                    model.tapMap(cluster)
+                    call.json(state())
+                }
+
+                post("/map/sheet") {
+                    val model = model ?: return@post call.fail(HttpStatusCode.Conflict, "not set up")
+                    if (call.request.queryParameters.contains("dismiss")) {
+                        model.dismissSheet()
+                        return@post call.json(state())
+                    }
+                    val id = runCatching { Uuid.parse(call.request.queryParameters["album"].orEmpty()) }.getOrNull()
+                        ?: return@post call.fail(HttpStatusCode.BadRequest, "bad album id")
+                    val album = model.state.value.map?.sheet?.firstOrNull { it.id == id }
+                        ?: return@post call.fail(HttpStatusCode.NotFound, "no such album in the sheet")
+                    model.openFromSheet(album)
+                    call.json(state())
+                }
+
                 post("/setup") {
                     val url = call.request.queryParameters["url"].orEmpty()
                     val password = call.request.queryParameters["password"].orEmpty()
@@ -214,10 +276,13 @@ public class ControlServer(
         } ?: "null"
         val livePair = ui.livePair?.let { """{"still":${it.still.json()},"video":${it.video.json()}}""" } ?: "null"
         return body(listOf(
+            "\"map\":${mapState(ui)}",
             "\"screen\":\"$screen\"",
             "\"sort\":\"${ui.sort}\"",
             "\"query\":${ui.query.json()}",
-            "\"subtitle\":${ui.subtitle.json()}",
+            // The line the nav bar shows: an album's own on its grid or its map, the list's elsewhere.
+            // Always the list's used to read "2 of 3 albums on the map" over an album's photos.
+            "\"subtitle\":${(if (ui.screen is Screen.Grid) ui.photosSubtitle else ui.subtitle).json()}",
             "\"sync\":${ui.sync.toString().json()}",
             "\"notice\":$notice",
             "\"storage\":{\"media\":${ui.storage.media},\"packs\":${ui.storage.packs},\"albumsHeld\":${ui.storage.albumsHeld}}",
@@ -226,6 +291,30 @@ public class ControlServer(
             "\"videoPath\":${ui.videoPath?.json() ?: "null"}",
             "\"livePair\":$livePair",
         ))
+    }
+
+    /**
+     * The level's map: null when it has never been shown, and otherwise whether it is, where the
+     * camera is, and what it draws at that camera's zoom -- in the order `/map/tap` indexes.
+     */
+    private fun mapState(ui: AppUi): String {
+        val view = ui.stack.map ?: return "null"
+        val looking = view.camera
+        val camera = looking?.let {
+            """{"latitude":${it.latitude},"longitude":${it.longitude},"zoom":${it.zoom}}"""
+        } ?: "null"
+        val map = ui.map
+        val clusters = if (map != null && looking != null) {
+            map.clusters.at(looking.zoom).joinToString(",") { cluster ->
+                val members = cluster.members.map { map.pins[it] }
+                val albums = members.filterIsInstance<MapPin.OfAlbum>().joinToString(",") { "\"${it.album.id}\"" }
+                val photos = members.filterIsInstance<MapPin.OfPhoto>().joinToString(",") { it.index.toString() }
+                """{"count":${cluster.members.size},"albums":[$albums],"photos":[$photos]}"""
+            }
+        } else ""
+        val sheet = map?.sheet?.joinToString(",", "[", "]") { "\"${it.id}\"" } ?: "null"
+        return """{"showing":${view.showing},"camera":$camera,"moves":${view.moves},""" +
+            """"pins":${map?.pins?.size ?: 0},"total":${map?.total ?: 0},"clusters":[$clusters],"sheet":$sheet}"""
     }
 
     private fun String.json(): String =
