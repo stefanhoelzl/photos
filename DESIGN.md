@@ -916,6 +916,9 @@ to remember to run — which is what makes a quality decision reversible rather 
 > and the five upload steps. They fix layout and
 > content, not chrome: they were drawn before this section settled on Compose, so a button in
 > them is an iOS button and in the build it is Material 3.
+>
+> One exception in content: the mockup's album map draws each photo as a dot, and the build
+> draws it as the same 38pt thumbnail pin the album list's map uses (see *What is placed*).
 
 **Minimum iOS 18. Compose Multiplatform**, entered through `ComposeUIViewController` — one UI
 in `commonMain` that renders identically on the phone and on a Linux desktop harness. That
