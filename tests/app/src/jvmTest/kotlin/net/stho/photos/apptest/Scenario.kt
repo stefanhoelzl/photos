@@ -11,8 +11,7 @@ import net.stho.photos.ui.screens.VideoSurface
 import net.stho.photos.app.AppUi
 import net.stho.photos.app.UploadModel
 import net.stho.photos.zone.Zone
-import androidx.compose.ui.ImageComposeScene
-import androidx.compose.ui.unit.Density
+import net.stho.photos.desktop.renderFrame
 import net.stho.photos.ui.screens.App
 import net.stho.photos.ui.screens.PhotosTheme
 
@@ -152,17 +151,14 @@ internal class Scenario(
      */
     fun screenshot(name: String) {
         val running = requireNotNull(app) { "launch() first" }
-        val scene = ImageComposeScene(width = 430, height = 890, density = Density(2f)) {
+        // Through the root's own offscreen path, so a frame here is drawn exactly as `/screenshot`
+        // draws one — on the one thread that keeps the scene's effects from measuring it mid-render.
+        val png = renderFrame(width = 430, height = 890) {
             PhotosTheme {
                 App(running.model, running.thumbnails, endpoint.asStorageUrl(), onLogOut = {}, uploads = running.uploads)
             }
         }
-        try {
-            val png = requireNotNull(scene.render().encodeToData()) { "skia declined to encode" }.bytes
-            java.io.File(cacheRoot.toString()).parentFile.resolve("$name.png").writeBytes(png)
-        } finally {
-            scene.close()
-        }
+        java.io.File(cacheRoot.toString()).parentFile.resolve("$name.png").writeBytes(png)
     }
 
     override fun close() {
