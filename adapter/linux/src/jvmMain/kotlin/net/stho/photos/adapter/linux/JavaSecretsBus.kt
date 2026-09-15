@@ -4,6 +4,7 @@ import net.stho.photos.ingest.Credentials
 import net.stho.photos.ports.Keyring
 import org.freedesktop.dbus.DBusPath
 import org.freedesktop.dbus.Struct
+import org.freedesktop.dbus.Tuple
 import org.freedesktop.dbus.annotations.DBusInterfaceName
 import org.freedesktop.dbus.annotations.Position
 import org.freedesktop.dbus.connections.BusAddress
@@ -142,17 +143,28 @@ internal class Secret(
     @field:Position(3) val contentType: String,
 ) : Struct()
 
+/*
+ * The three replies below are two OUT arguments each, not one struct: `vo`, `aoao` and `oo` on
+ * the wire. A `Tuple` is how dbus-java spells several return values. They were `Struct`s, which
+ * expect a single `(vo)` — the private-bus tests passed, because the stub replied with the same
+ * classes, and gnome-keyring's real reply failed to decode as "number of parameters didn't match
+ * receiving signature", which the desktop reported as a keyring it could not reach.
+ */
+
+/** `OpenSession`'s `vo`: the algorithm's output, and the session. */
 internal class OpenSessionResult(
     @field:Position(0) val output: Variant<*>,
     @field:Position(1) val result: DBusPath,
-) : Struct()
+) : Tuple()
 
+/** `SearchItems`' `aoao`: unlocked items, then locked ones. */
 internal class SearchResult(
     @field:Position(0) val unlocked: List<DBusPath>,
     @field:Position(1) val locked: List<DBusPath>,
-) : Struct()
+) : Tuple()
 
+/** `CreateItem`'s `oo`: the item, and a prompt that is `/` when none is needed. */
 internal class CreateResult(
     @field:Position(0) val item: DBusPath,
     @field:Position(1) val prompt: DBusPath,
-) : Struct()
+) : Tuple()
