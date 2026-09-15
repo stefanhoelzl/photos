@@ -44,6 +44,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -332,11 +334,21 @@ internal fun pulseAlpha(moving: Boolean): Float {
 private const val PULSE_MS = 620
 private const val PULSE_FLOOR = 0.42f
 
+/**
+ * The field owns its text and cursor, and the model hears each change. Fed back from the model's
+ * state instead, a keystroke's value arrived a recomposition late and on iOS put the cursor back
+ * before the character just typed. Nothing but typing changes the query while the field exists:
+ * the model clears it only on navigation, which rebuilds the field.
+ */
 @Composable
 private fun SearchField(query: String, onSearch: (String) -> Unit) {
+    var field by remember { mutableStateOf(TextFieldValue(query, TextRange(query.length))) }
     TextField(
-        value = query,
-        onValueChange = onSearch,
+        value = field,
+        onValueChange = {
+            field = it
+            onSearch(it.text)
+        },
         singleLine = true,
         placeholder = { Text("Search albums", fontSize = 13.sp) },
         leadingIcon = { Icon(Icons.search, contentDescription = null, Modifier.size(16.dp)) },

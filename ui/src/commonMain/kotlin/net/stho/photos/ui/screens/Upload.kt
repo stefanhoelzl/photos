@@ -47,7 +47,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -351,9 +353,17 @@ private fun NameDialog(
         text = {
             Column {
                 Text("${naming.count} items · in $parentName", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // The field owns its text and cursor; the model only hears about each change. Fed
+                // back from the model instead, the first keystroke's value arrived a recomposition
+                // late, and on iOS the cursor went back before that character — so a typed name came
+                // out with its first letter last. Opened fresh per dialog, so the prefill starts here.
+                var field by remember { mutableStateOf(TextFieldValue(naming.name, TextRange(naming.name.length))) }
                 TextField(
-                    value = naming.name,
-                    onValueChange = onName,
+                    value = field,
+                    onValueChange = {
+                        field = it
+                        onName(it.text)
+                    },
                     singleLine = true,
                     placeholder = { Text("Album name") },
                     modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
