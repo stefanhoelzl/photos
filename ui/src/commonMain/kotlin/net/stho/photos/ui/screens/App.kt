@@ -92,6 +92,8 @@ public fun App(
                             onClearRange = model::clearRange,
                             onOpen = model::open,
                             onAction = { row, action -> model.act(row, action) },
+                            syncing = ui.sync is SyncStatus.Running,
+                            onRefresh = model::refresh,
                         )
                     }
                 }
@@ -119,6 +121,8 @@ public fun App(
                             onClearRange = {},
                             onOpen = model::open,
                             onAction = { row, action -> model.act(row, action) },
+                            syncing = ui.sync is SyncStatus.Running,
+                            onRefresh = model::refresh,
                         )
                     }
                 }

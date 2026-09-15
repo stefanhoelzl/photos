@@ -32,7 +32,10 @@ public class CatalogSyncer(
 ) : Syncer {
     override suspend fun sync(onProgress: (fetched: Int, total: Int) -> Unit): SyncOutcome =
         try {
-            val report = sync.sync { fetched, total -> onProgress(fetched, total) }
+            // Every sync rebuilds — a launch and a pull alike. It costs 1–3 s off the main thread,
+            // and it is what repairs a catalog whose last rebuild never committed: the diff has
+            // already recorded those deletions, so it would never ask for another.
+            val report = sync.sync(alwaysRebuild = true) { fetched, total -> onProgress(fetched, total) }
             thenFetchPacks()
             SyncOutcome.Succeeded(albums = report.albums, photos = report.photos)
         } catch (failure: StorageUnreachableFailure) {

@@ -94,6 +94,12 @@ public data class PullPlan(
     public val claimed: Boolean = false,
 )
 
+/** A directory more than one encoded album claims — a duplicate left for a person to remove. */
+public data class DoubleClaim(
+    public val sourcePath: String,
+    public val albumIds: List<Uuid>,
+)
+
 /** A file whose size disagrees with the row describing it. */
 public data class ByteMismatch(
     public val albumPath: String,
@@ -116,6 +122,8 @@ public data class IngestPlan(
      * to, not deleted, not counted as new (§3).
      */
     public val blockedByUnreadable: List<ShardProbe> = emptyList(),
+    /** Directories two or more albums claim. Left alone exactly like [blockedByUnreadable]. */
+    public val doublyClaimed: List<DoubleClaim> = emptyList(),
     /**
      * Loose files directly in `$LIBRARY_ROOT`. The library is a directory of albums, so these are
      * reported and never ingested.
@@ -158,15 +166,19 @@ public class Reconciler(
         // Only albums the laptop owns. A shard still `uploading` or `uploaded` may carry a
         // `source_path` — the pull claims before it downloads — but it is not an ordinary album
         // yet, and treating it as one would read its half-filled directory as deletions (§7).
-        val byPath = buildMap {
-            for (shard in shards) {
-                if (shard.info.state != AlbumState.ENCODED) continue
-                val path = shard.info.sourcePath?.normalisedPath()
-                if (path.isNullOrEmpty()) continue
-                put(path, shard)
-            }
-        }
+        val claims = shards
+            .filter { it.info.state == AlbumState.ENCODED }
+            .groupBy { it.info.sourcePath?.normalisedPath().orEmpty() }
+            .filterKeys(String::isNotEmpty)
+        // Two albums claiming one folder is a duplicate this tool made — the zone never mints one
+        // on purpose. Picking either would upload into it and leave the other to linger unseen,
+        // so the folder is left alone, like one a too-new shard claims, until a person removes one.
+        val doublyClaimed = claims.filterValues { it.size > 1 }.entries
+            .sortedBy { it.key }
+            .map { (path, claimants) -> DoubleClaim(path, claimants.map { it.info.id }.sortedBy(Uuid::toString)) }
+        val byPath = claims.filterValues { it.size == 1 }.mapValues { it.value.single() }
         val blockedPaths = unreadable.mapNotNullTo(mutableSetOf()) { it.sourcePath?.normalisedPath() }
+        blockedPaths += doublyClaimed.map(DoubleClaim::sourcePath)
 
         // Directories the walk found media in. The root itself is not an album: a stray file
         // beside the album folders must not re-parent all 240 of them under a new root album, so
@@ -298,6 +310,7 @@ public class Reconciler(
             deletions = deletions,
             pulls = pulls,
             blockedByUnreadable = unreadable,
+            doublyClaimed = doublyClaimed,
             looseRootFiles = looseRootFiles,
             mismatches = mismatches,
         )

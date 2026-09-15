@@ -342,6 +342,43 @@ class ReconcilerTest {
         assertEquals(1, plan.blockedByUnreadable.size)
     }
 
+    /**
+     * Two albums claiming one folder: picking either would upload into it and leave the other
+     * lingering unseen, and neither run would ever say so. The folder is left alone and named.
+     */
+    @Test
+    fun aDirectoryClaimedByTwoAlbumsIsLeftAloneAndNamed() {
+        val library = LibraryFixture()
+        library.file("Uropa/a.jpg")
+        library.file("Uropa/b.jpg")
+        val first = library.shard("Uropa", photos = listOf("a.jpg"))
+        val second = library.shard("Uropa/", photos = listOf("a.jpg"))
+
+        val plan = library.plan(shards = listOf(first, second))
+
+        assertTrue(plan.albums.isEmpty())
+        assertTrue(plan.deletions.isEmpty())
+        assertEquals(
+            listOf(DoubleClaim("Uropa", listOf(first.info.id, second.info.id).sortedBy(Uuid::toString))),
+            plan.doublyClaimed,
+        )
+        assertFalse(plan.hasWork)
+    }
+
+    /** Once one of the two is gone, the folder reconciles against the survivor as usual. */
+    @Test
+    fun aSingleClaimOnTheSameFolderIsNotADoubleClaim() {
+        val library = LibraryFixture()
+        library.file("Uropa/a.jpg")
+        val phone = phoneAlbum(library, "Uropa", state = AlbumState.UPLOADING, sourcePath = "Uropa")
+        val mine = library.shard("Uropa", photos = listOf("a.jpg"))
+
+        val plan = library.plan(shards = listOf(mine, phone))
+
+        assertTrue(plan.doublyClaimed.isEmpty())
+        assertEquals(mine.info.id, plan.albums.single().id)
+    }
+
     // ------------------------------------------------------------------------------------ scope
 
     /** A scoped run that deleted everything outside its scope would be a trap. */

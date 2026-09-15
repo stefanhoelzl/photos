@@ -9,6 +9,7 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import net.stho.photos.catalog.ShardProbe
+import net.stho.photos.ingest.DoubleClaim
 import net.stho.photos.ingest.IngestEvent
 import net.stho.photos.ingest.IngestReport
 import net.stho.photos.library.IgnoreRule
@@ -40,6 +41,7 @@ class ConsoleReporterTest {
                 mixedFolders = listOf(IngestReport.MixedFolder("Reisen", 3)),
                 looseRootFiles = 2,
                 blockedByUnreadable = listOf(ShardProbe(Uuid.NIL, "Neuseeland", 9)),
+                doublyClaimed = listOf(DoubleClaim("Uropa", listOf(Uuid.NIL, orphan))),
                 contendedAlbums = listOf("Alpen"),
                 duplicateNames = listOf("Sommer"),
                 orphanedAlbums = listOf(orphan),
@@ -49,10 +51,10 @@ class ConsoleReporterTest {
 
         // Everything a person has to deal with is marked, and nothing else is.
         val notes = recorder.out.filter { it.startsWith("! ") }
-        assertEquals(9, notes.size, recorder.out.joinToString("\n"))
+        assertEquals(10, notes.size, recorder.out.joinToString("\n"))
         for (subject in listOf(
             "Rauhöd/notes.txt", "Rauhöd/a.cr2", "Reisen", "the library root",
-            "Neuseeland", "Alpen", "Sommer", "$orphan", "*.xmp",
+            "Neuseeland", "Uropa", "Alpen", "Sommer", "$orphan", "*.xmp",
         )) {
             assertTrue(notes.any { subject in it }, "$subject is not in the record: $notes")
         }

@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -36,6 +37,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -77,6 +79,7 @@ import net.stho.photos.app.Thumbnails
  * consistent, the hierarchy comes free, and asking for an album happens where you are already
  * looking at it.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 public fun AlbumList(
     rows: List<ListEntry>,
@@ -106,9 +109,42 @@ public fun AlbumList(
     onClearRange: () -> Unit,
     onOpen: (Album) -> Unit,
     onAction: (ListEntry.Row, CacheAction) -> Unit,
+    /** Whether a sync is running, whoever started it. */
+    syncing: Boolean = false,
+    /** Pull-to-refresh: sync, and rebuild the catalog from what lands. */
+    onRefresh: () -> Unit = {},
 ) {
+    // The spinner answers a pull and nothing else. Every launch syncs too, and a spinner over the
+    // list each time the app opens would read as the list not being ready when it is.
+    var pulled by remember { mutableStateOf(false) }
+    LaunchedEffect(syncing) { if (!syncing) pulled = false }
     Column(Modifier.fillMaxSize()) {
         if (searchable) SearchField(query, range, onSearch, onCalendar, onClearRange)
+        PullToRefreshBox(
+            isRefreshing = pulled,
+            onRefresh = { pulled = true; onRefresh() },
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            ListBody(rows, query, range, thumbnails, arrivals, loading, cache, actions, order, onOpen, onAction)
+        }
+    }
+}
+
+@Composable
+private fun ListBody(
+    rows: List<ListEntry>,
+    query: String,
+    range: DateRange?,
+    thumbnails: Thumbnails,
+    arrivals: Int,
+    loading: Pair<Int, Int>?,
+    cache: (ListEntry.Row) -> AlbumCache,
+    actions: (ListEntry.Row) -> List<CacheAction>,
+    order: Any?,
+    onOpen: (Album) -> Unit,
+    onAction: (ListEntry.Row, CacheAction) -> Unit,
+) {
+    Column(Modifier.fillMaxSize()) {
         if (rows.isEmpty() && loading != null) {
             // A first sync fetches every shard in the zone and takes tens of seconds (§4).
             // "No albums yet" during it is simply untrue, and untrue in the worst way: it

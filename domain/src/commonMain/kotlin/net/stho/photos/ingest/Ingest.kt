@@ -160,6 +160,7 @@ public class Ingest(
         if (plan.mismatches.isNotEmpty()) throw IngestAbort.FileChanged(plan.mismatches)
 
         report.blockedByUnreadable = plan.blockedByUnreadable
+        report.doublyClaimed = plan.doublyClaimed
         report.looseRootFiles = plan.looseRootFiles.size
         for (album in plan.albums) {
             if (album.mixedFileCount > 0) {
@@ -881,6 +882,7 @@ private class ReportBuilder {
 
     var looseRootFiles = 0
     var blockedByUnreadable: List<ShardProbe> = emptyList()
+    var doublyClaimed: List<DoubleClaim> = emptyList()
     var duplicateNames: List<String> = emptyList()
     var orphanedAlbums: List<Uuid> = emptyList()
     var blobsInZone = 0
@@ -905,6 +907,7 @@ private class ReportBuilder {
         mixedFolders = mixedFolders.toList(),
         looseRootFiles = looseRootFiles,
         blockedByUnreadable = blockedByUnreadable,
+        doublyClaimed = doublyClaimed,
         contendedAlbums = contendedAlbums.toList(),
         duplicateNames = duplicateNames,
         orphanedAlbums = orphanedAlbums,
