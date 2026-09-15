@@ -25,6 +25,15 @@ public interface Catalog {
     public fun album(id: Uuid): Album?
 
     /**
+     * How many photos were taken on each day, across the whole library — the calendar's numbers
+     * (§6). An undated photo is on no day.
+     */
+    public fun photosPerDay(): Map<Day, Int>
+
+    /** Each album's photos taken in [range], for the albums with at least one: the range's matches (§3). */
+    public fun photosIn(range: DateRange): Map<Uuid, Int>
+
+    /**
      * What the catalog holds, for §6's Settings row.
      *
      * Read from the merged DB rather than taken from the last sync's report: a run that

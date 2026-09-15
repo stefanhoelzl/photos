@@ -3,7 +3,10 @@ package net.stho.photos.apptest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Instant
 import kotlinx.coroutines.runBlocking
+import net.stho.photos.app.CalendarMonth
+import net.stho.photos.app.DateRange
 import net.stho.photos.app.Screen
 import net.stho.photos.app.SyncStatus
 
@@ -97,6 +100,56 @@ class BrowseTest {
 
             assertEquals(listOf("Iceland"), model.state.value.albums.map { it.name })
             assertEquals("1 matching", model.state.value.subtitle)
+        }
+    }
+
+    // ------------------------------------------------------------------------------ the date filter
+
+    /**
+     * A month's title picks every day of it (§6). A scenario cannot tap, so it applies the range
+     * the tap applies — against dates the sync read from real shards, at both edges of the month.
+     */
+    @Test
+    fun pickingAWholeMonthKeepsTheAlbumsWithPhotosInIt() = runBlocking {
+        scenario("date-month") {
+            zone.album("Reykjavík", photos = 2, taken = Instant.parse("2024-03-31T23:59:59Z"))
+            zone.album("Lofoten", photos = 3, taken = Instant.parse("2024-04-01T00:00:00Z"))
+            zone.album("Alps", photos = 1, taken = Instant.parse("2023-03-15T12:00:00Z"))
+
+            launch()
+            model.openCalendar()
+            val march = CalendarMonth(2024, 3)
+            assertEquals(2, requireNotNull(model.state.value.calendar).photosInMonth(march), "the title's total")
+
+            assertTrue(model.applyRange(march.days))
+            val ui = model.state.value
+            assertEquals(listOf("Reykjavík"), ui.albums.map { it.name }, "March's last second is in it; April's first is not")
+            assertEquals("1 matching", ui.subtitle)
+            assertEquals("1 – 31 Mar 2024", ui.range?.label)
+        }
+    }
+
+    /** A year's heading picks 1 January to 31 December, and coming back from an album keeps it (§6). */
+    @Test
+    fun pickingAWholeYearKeepsItsAlbumsAndSurvivesOpeningOne() = runBlocking {
+        scenario("date-year") {
+            zone.album("New Year", photos = 1, taken = Instant.parse("2024-01-01T00:00:00Z"))
+            zone.album("Silvester", photos = 2, taken = Instant.parse("2024-12-31T23:59:59Z"))
+            zone.album("Before", photos = 1, taken = Instant.parse("2023-12-31T23:59:59Z"))
+
+            launch()
+            model.openCalendar()
+            assertEquals(3, requireNotNull(model.state.value.calendar).photosInYear(2024), "the heading's total")
+
+            assertTrue(model.applyRange(DateRange.year(2024)))
+            assertEquals(setOf("New Year", "Silvester"), model.state.value.albums.map { it.name }.toSet())
+            assertEquals("2 matching", model.state.value.subtitle)
+
+            model.open(model.state.value.albums.single { it.name == "Silvester" })
+            assertTrue(model.state.value.screen is Screen.Grid)
+            model.back()
+            assertEquals(DateRange.year(2024), model.state.value.range, "the range outlives the round trip")
+            assertEquals(setOf("New Year", "Silvester"), model.state.value.albums.map { it.name }.toSet())
         }
     }
 }

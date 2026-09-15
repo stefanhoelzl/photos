@@ -3,6 +3,8 @@ package net.stho.photos.iostest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Instant
+import kotlinx.serialization.json.jsonObject
 
 /** `:tests:app`'s browse scenarios, against the Debug app on a simulator (decision 15). */
 class BrowseTest {
@@ -71,5 +73,42 @@ class BrowseTest {
         val searched = post("/search?q=ice")
         assertEquals(listOf("Iceland"), searched.albums().map { it.string("name") })
         assertEquals("1 matching", searched.string("subtitle"))
+    }
+
+    /** `:tests:app`'s whole-month scenario, through `/calendar` and the range a month title's tap applies. */
+    @Test
+    fun pickingAWholeMonthKeepsTheAlbumsWithPhotosInIt() = iosScenario("date-month") {
+        zone.album("Reykjavík", photos = 2, taken = Instant.parse("2024-03-31T23:59:59Z"))
+        zone.album("Lofoten", photos = 3, taken = Instant.parse("2024-04-01T00:00:00Z"))
+        zone.album("Alps", photos = 1, taken = Instant.parse("2023-03-15T12:00:00Z"))
+        install(); launch(); setUp()
+
+        val days = post("/calendar").getValue("calendar").jsonObject.getValue("days").jsonObject
+        assertEquals("2", days.string("2024-03-31"))
+        assertEquals("3", days.string("2024-04-01"))
+
+        val picked = post("/range?from=2024-03-01&to=2024-03-31")
+        assertEquals(listOf("Reykjavík"), picked.albums().map { it.string("name") }, "March's last second is in it; April's first is not")
+        assertEquals("1 matching", picked.string("subtitle"))
+        assertEquals("1 – 31 Mar 2024", picked.getValue("range").jsonObject.string("label"))
+        screenshot("date-month")
+    }
+
+    /** `:tests:app`'s whole-year scenario: the range a year heading's tap applies, kept across opening an album. */
+    @Test
+    fun pickingAWholeYearKeepsItsAlbumsAndSurvivesOpeningOne() = iosScenario("date-year") {
+        zone.album("New Year", photos = 1, taken = Instant.parse("2024-01-01T00:00:00Z"))
+        val silvester = zone.album("Silvester", photos = 2, taken = Instant.parse("2024-12-31T23:59:59Z"))
+        zone.album("Before", photos = 1, taken = Instant.parse("2023-12-31T23:59:59Z"))
+        install(); launch(); setUp()
+
+        val picked = post("/range?from=2024-01-01&to=2024-12-31")
+        assertEquals(setOf("New Year", "Silvester"), picked.albums().map { it.string("name") }.toSet())
+        assertEquals("2 matching", picked.string("subtitle"))
+
+        post("/nav?to=album/$silvester")
+        val back = post("/nav?to=back")
+        assertEquals("1 Jan – 31 Dec 2024", back.getValue("range").jsonObject.string("label"), "the range outlives the round trip")
+        assertEquals(setOf("New Year", "Silvester"), back.albums().map { it.string("name") }.toSet())
     }
 }

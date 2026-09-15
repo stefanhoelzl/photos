@@ -645,6 +645,15 @@ nothing has to serialise a database in or out of memory.
 - **Search:** album names, substring, case- and diacritic-insensitive via `name_folded`.
   No fuzzy matching (too noisy on short names), no filename search. The list keeps each match
   under its containers' headers (§6); a matching container keeps everything beneath it.
+- **Date filter:** the album list keeps the albums with **at least one photo taken in the range** —
+  days, both ends included, never times. A photo's day is the UTC day of `taken_at`, which is the
+  camera's own day, because EXIF's zoneless local time is stored as if it were UTC; no time zone is
+  applied, so no photo changes day with the device reading it. **One filter at a time:** picking a
+  range replaces the typed text, and typing replaces the range. Matches keep their containers'
+  headers as a search's do, and every count becomes the photos in the range — "12 of 132 photos",
+  a header "1 of 3 albums · 12 of 252 photos" — so the list and the calendar (§6) never disagree.
+  A range with no photos is never applied. Both reads use `ix_photo_taken`: a range's matches, and
+  one `GROUP BY` for the calendar's photos per day across the whole library.
 - **Cover photo:** first photo in sort order — the album's earliest — overridable per album.
   A container's cover is resolved by descending into children until a photo is found, *unless*
   one has been set explicitly, so `cover_photo_id` is storable on containers too.
@@ -1016,6 +1025,26 @@ container is a header one indent in, named on its own; the indent already says w
   search kept, all three ways: its line reads "1 of 3 albums · 40 photos", its strip is those
   albums' bytes, and its actions act on them alone — a download from a search never fetches an
   album the search is hiding.
+- **The date filter is the search field's trailing calendar icon**, not a fifth bar icon: it
+  belongs to the search, and the bar's four are fixed. It opens a **full-screen calendar sheet** —
+  months scrolling vertically from the first dated photo to the last, a strip of years to jump
+  with, and on every day **how many photos were taken on it**, with a tint that grows with the
+  count so a trip stands out while scrolling past. A centred dialog was drawn and dropped: its
+  cells were too small to read a number in. **Tap and drag** picks a range in one gesture; **a tap**
+  sets a start and waits for a second tap as the end, and Apply after one tap filters that single
+  day. A drag is told from a scroll by the upload picker's rule (§8). On a finished range a tap
+  starts again and dragging either end moves it; a range with no photos cannot be applied.
+  **A whole month or year is one tap.** A month's title is drawn as a button with its total, and
+  picks every day of it. Each year has a heading with its total and a *Pick year* mark, and the
+  heading **stays pinned** above the months while any of that year's are on screen — the next
+  year's pushes it away, as a container's header does on the list — so the whole year is one tap
+  from anywhere inside it. Dragging from a title or heading to another picks both whole, and
+  everything between. The year strip only jumps: a year with two targets that did different
+  things would be one too many. Applied,
+  the field shows the range read-only — "12 – 20 Mar 2024" — a tap reopens the sheet on it, and ✕
+  clears it. The map follows a range as it follows a search.
+- **The query and the range survive opening an album**, so coming back finds the list as it was
+  left. A container's screen has no field, and neither of them narrows it.
 
 **The map is a representation of the album list, not a destination** — same title, subtitle and
 icons, toggled rather than pushed. The same holds one level down: an album's grid and its map

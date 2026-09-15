@@ -1,6 +1,7 @@
 package net.stho.photos.catalog
 
 import app.cash.sqldelight.adapter.primitive.IntColumnAdapter
+import kotlin.time.Instant
 import kotlin.uuid.Uuid
 import kotlinx.io.files.Path
 import net.stho.photos.ports.SqlDrivers
@@ -257,6 +258,19 @@ public class CatalogReader(public val path: Path, drivers: SqlDrivers) : AutoClo
     }.executeAsList()
 
     public fun photoCount(): Int = queries.countPhotos().executeAsOne().toInt()
+
+    /**
+     * How many photos were taken on each day, keyed by epoch day; an undated photo is on none.
+     *
+     * The day is `taken_at`'s UTC day, which is the camera's own: EXIF's local time carries no zone
+     * and is stored as if it were UTC (§3). One `GROUP BY` over `ix_photo_taken`, for the calendar.
+     */
+    public fun photosPerDay(): Map<Long, Int> =
+        queries.countPhotosByDay().executeAsList().associate { requireNotNull(it.day) to it.photos.toInt() }
+
+    /** Each album's photos taken from [from] up to [until], for the albums with any: a date filter's matches (§3). */
+    public fun photosTakenBetween(from: Instant, until: Instant): Map<Uuid, Int> =
+        queries.countPhotosTakenBetween(from, until).executeAsList().associate { it.album_id to it.photos.toInt() }
 
     override fun close(): Unit = driver.close()
 }

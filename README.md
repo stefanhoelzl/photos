@@ -23,7 +23,7 @@ download queue and no screen to keep in order.
 | `:adapter:linux` | the imaging backend over `native/CImaging`, the Secret Service — one protocol over two transports, libdbus for the CLI and dbus-java for the app — the flock run lock, XDG paths |
 | `:adapter:ios` | the phone's half of the same ports: the SQL driver over the platform SQLite, and the app container's directories |
 | `:app:cli` | the shipped `photos-cli`: argument parsing, a composition root, exit codes |
-| `:app:control` | the control server both roots start when driven by a test or an agent — `/state`, navigation, cache actions, the map (`/map` and its camera, taps and sheet), `/upload/…`, `/setup`, `/logout`; kept out of the iOS release build |
+| `:app:control` | the control server both roots start when driven by a test or an agent — `/state`, navigation, cache actions, the date filter (`/calendar`, `/range`), the map (`/map` and its camera, taps and sheet), `/upload/…`, `/setup`, `/logout`; kept out of the iOS release build |
 | `:app:desktop` | the app's Linux root: JDBC, OkHttp, libvlc, the FFM decode shim, and the offscreen render behind `/screenshot` |
 | `:app:ios-debug` | the framework Xcode's Debug configuration links: `:app:ios` plus `:app:control`, started when launched with `PHOTOS_CONTROL_PORT` |
 | `:app:ios` | the app's iOS root: SQLiter, NSURLSession, the ImageIO decoder, `AVPlayerViewController` and `PHLivePhotoView` for playback, and the framework `app/ios/Photos.xcodeproj` wraps |

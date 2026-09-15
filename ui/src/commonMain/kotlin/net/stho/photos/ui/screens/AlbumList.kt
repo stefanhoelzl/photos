@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -47,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextRange
@@ -59,6 +61,7 @@ import kotlin.uuid.Uuid
 import net.stho.photos.catalog.Album
 import net.stho.photos.app.AlbumCache
 import net.stho.photos.app.CacheAction
+import net.stho.photos.app.DateRange
 import net.stho.photos.app.ListEntry
 import net.stho.photos.app.Thumbnails
 
@@ -78,6 +81,8 @@ import net.stho.photos.app.Thumbnails
 public fun AlbumList(
     rows: List<ListEntry>,
     query: String,
+    /** The date filter the field shows in place of the text, when one is applied. */
+    range: DateRange?,
     searchable: Boolean,
     thumbnails: Thumbnails,
     /** Bumped when a pack lands, so a row already on screen swaps placeholder for photograph. */
@@ -89,24 +94,34 @@ public fun AlbumList(
     /** Which controls the row's state affords, revealed by a swipe or by tapping the strip. */
     actions: (ListEntry.Row) -> List<CacheAction>,
     /**
-     * Whatever decides the order — the sort and the query. When it changes the list starts again
-     * at the top: a keyed lazy list otherwise keeps the row that *was* first on screen, so after a
-     * re-sort that row stayed put and everything now ahead of it sat scrolled away above.
+     * Whatever decides the order — the sort, the query and the range. When it changes the list starts
+     * again at the top: a keyed lazy list otherwise keeps the row that *was* first on screen, so after
+     * a re-sort that row stayed put and everything now ahead of it sat scrolled away above.
      */
     order: Any?,
     onSearch: (String) -> Unit,
+    /** The field's calendar icon, or a tap on the range it shows. */
+    onCalendar: () -> Unit,
+    /** The ✕ beside a range. */
+    onClearRange: () -> Unit,
     onOpen: (Album) -> Unit,
     onAction: (ListEntry.Row, CacheAction) -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
-        if (searchable) SearchField(query, onSearch)
+        if (searchable) SearchField(query, range, onSearch, onCalendar, onClearRange)
         if (rows.isEmpty() && loading != null) {
             // A first sync fetches every shard in the zone and takes tens of seconds (§4).
             // "No albums yet" during it is simply untrue, and untrue in the worst way: it
             // looks like an empty library rather than like work in progress.
             LoadingState(loading)
         } else if (rows.isEmpty()) {
-            EmptyState(if (query.isBlank()) "No albums yet" else "Nothing matches “$query”")
+            EmptyState(
+                when {
+                    range != null -> "No photos from ${range.label}"
+                    query.isBlank() -> "No albums yet"
+                    else -> "Nothing matches “$query”"
+                },
+            )
         } else {
             // No side padding on the list itself: the strip is a screen-edge mark and has to
             // reach the edge. The row's content carries the inset instead.
@@ -438,28 +453,67 @@ private val GROUP_DIVIDER = 2.5.dp
 /**
  * The field owns its text and cursor, and the model hears each change. Fed back from the model's
  * state instead, a keystroke's value arrived a recomposition late and on iOS put the cursor back
- * before the character just typed. Nothing but typing changes the query while the field exists:
- * the model clears it only on navigation, which rebuilds the field.
+ * before the character just typed. Nothing but typing changes the query while the field exists: a
+ * range applied from the calendar takes the field's place and clears the query, so the field comes
+ * back empty when the range goes.
+ *
+ * The calendar is the field's trailing icon rather than a fifth icon on the bar (§6): it belongs to
+ * the search, and the bar's four are fixed. With a range applied the field shows it, read-only — a
+ * tap reopens the calendar on it, and ✕ clears it.
  */
 @Composable
-private fun SearchField(query: String, onSearch: (String) -> Unit) {
-    var field by remember { mutableStateOf(TextFieldValue(query, TextRange(query.length))) }
-    TextField(
-        value = field,
-        onValueChange = {
-            field = it
-            onSearch(it.text)
-        },
-        singleLine = true,
-        placeholder = { Text("Search albums", fontSize = 13.sp) },
-        leadingIcon = { Icon(Icons.search, contentDescription = null, Modifier.size(16.dp)) },
-        colors = TextFieldDefaults.colors(
-            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-        ),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
-            .height(48.dp).clip(RoundedCornerShape(10.dp)),
-    )
+private fun SearchField(
+    query: String,
+    range: DateRange?,
+    onSearch: (String) -> Unit,
+    onCalendar: () -> Unit,
+    onClearRange: () -> Unit,
+) {
+    val frame = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
+        .height(48.dp).clip(RoundedCornerShape(10.dp))
+    if (range != null) {
+        Row(
+            frame.background(MaterialTheme.colorScheme.surfaceVariant).clickable(onClick = onCalendar).padding(start = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.calendar, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+            Text(
+                range.label,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(start = 12.dp),
+            )
+            FieldIcon(Icons.close, "Clear dates", onClearRange)
+        }
+    } else {
+        var field by remember { mutableStateOf(TextFieldValue(query, TextRange(query.length))) }
+        TextField(
+            value = field,
+            onValueChange = {
+                field = it
+                onSearch(it.text)
+            },
+            singleLine = true,
+            placeholder = { Text("Search albums", fontSize = 13.sp) },
+            leadingIcon = { Icon(Icons.search, contentDescription = null, Modifier.size(16.dp)) },
+            trailingIcon = { FieldIcon(Icons.calendar, "Filter by date", onCalendar) },
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            ),
+            modifier = frame,
+        )
+    }
+}
+
+/** An icon inside the field, with a touch target the 18dp glyph alone would not give it. */
+@Composable
+private fun FieldIcon(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Box(Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+    }
 }
 
 /**

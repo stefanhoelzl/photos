@@ -80,14 +80,16 @@ public fun App(
                         LevelMap(ui, model, thumbnails, arrivals)
                     } else {
                         AlbumList(
-                            ui.rows, ui.query, true, thumbnails, arrivals,
+                            ui.rows, ui.query, ui.range, true, thumbnails, arrivals,
                             loading = (ui.sync as? SyncStatus.Running)
                                 ?.takeIf { ui.rows.isEmpty() }
                                 ?.let { it.fetched to it.total },
                             cache = { ui.cacheOf(it) },
                             actions = { ui.actionsOf(it) },
-                            order = ui.sort to ui.query,
+                            order = Triple(ui.sort, ui.query, ui.range),
                             onSearch = model::search,
+                            onCalendar = model::openCalendar,
+                            onClearRange = model::clearRange,
                             onOpen = model::open,
                             onAction = { row, action -> model.act(row, action) },
                         )
@@ -104,14 +106,17 @@ public fun App(
                         LevelMap(ui, model, thumbnails, arrivals)
                     } else {
                         // Its whole subtree, from the left edge: the title already names the
-                        // container, so no header repeats it.
+                        // container, so no header repeats it. No field, and so no filter: a query or
+                        // a range kept for the album list does not narrow this one unseen.
                         AlbumList(
-                            ui.rows, ui.query, false, thumbnails, arrivals,
+                            ui.rows, "", null, false, thumbnails, arrivals,
                             loading = null,
                             cache = { ui.cacheOf(it) },
                             actions = { ui.actionsOf(it) },
-                            order = ui.sort to ui.query,
+                            order = ui.sort,
                             onSearch = model::search,
+                            onCalendar = {},
+                            onClearRange = {},
                             onOpen = model::open,
                             onAction = { row, action -> model.act(row, action) },
                         )
@@ -172,6 +177,10 @@ public fun App(
                     }
                 }
             }
+        }
+        // The date filter's calendar, over the whole screen and its nav bar: it carries its own ✕.
+        ui.calendar?.let { calendar ->
+            CalendarSheet(calendar, ui.range, onApply = { model.applyRange(it) }, onClose = model::closeCalendar)
         }
         // Along the bottom edge, the toast above the upload pill: both are transient, and neither
         // may cover the nav bar a person needs to get away from them.

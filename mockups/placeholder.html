@@ -216,6 +216,41 @@ h1{font-size:26px;font-weight:650;letter-spacing:-.02em;margin-bottom:6px}
 .swipeout .keep img,.swipeout .keep .ph{width:54px;height:54px;border-radius:8px;object-fit:cover;flex:0 0 54px}
 .act2{width:52px;flex:0 0 52px;display:flex;align-items:center;justify-content:center;font-size:17px;color:#fff}
 .act2.a-dl{background:var(--go)}.act2.a-pa{background:var(--accent)}.act2.a-cl{background:var(--error)}
+/* ---- date filter. The calendar belongs to the search, so it is the field's trailing icon and
+   not a fifth bar icon (§6). With a range set the field shows it, read-only, and ✕ clears it. ---- */
+.search .sp{flex:1;min-width:0}
+.search .trail{display:inline-flex;font-size:15px;color:var(--ink);opacity:.75}
+.search.range{color:var(--ink)}
+.search.range .sp{font-weight:560}
+.calsheet{position:absolute;inset:0;background:var(--sheet);display:flex;flex-direction:column;z-index:20}
+.calbar{display:flex;align-items:center;justify-content:space-between;padding:2px 16px 4px}
+.calbar .ttl{font-size:15px;font-weight:640}
+.calapply{background:var(--accent);color:#fff;font-size:12.5px;font-weight:620;padding:5px 13px;border-radius:15px}
+.calapply.off{background:var(--fill);color:var(--dim)}
+.calline{padding:2px 16px 8px;font-size:12px;color:var(--dim)}
+.calline b{color:var(--ink);font-weight:620}
+.calyears{display:flex;gap:4px;overflow:hidden;padding:6px 12px;border-top:.5px solid var(--line);border-bottom:.5px solid var(--line)}
+.calyears span{font-size:11.5px;padding:2px 8px;border-radius:11px;color:var(--dim);white-space:nowrap}
+.calyears span.cur{background:var(--fill);color:var(--ink);font-weight:640}
+.calwd{display:grid;grid-template-columns:repeat(7,1fr);padding:4px 10px;font-size:10px;color:var(--dim);text-align:center;border-bottom:.5px solid var(--line)}
+.calmonths{flex:1;overflow:hidden;padding:0 10px}
+/* A month's title is a button: a tap picks the whole month. The year's heading is pinned over the
+   months while they scroll, and picks the whole year. */
+.calmt{display:flex;justify-content:space-between;align-items:center;margin:6px 0 3px;padding:5px 9px;border-radius:9px;
+ background:var(--fill);font-size:13px;font-weight:650;color:var(--title)}
+.calmt .n{font-size:11px;font-weight:500;color:var(--dim)}
+.calyh{display:flex;align-items:center;gap:8px;padding:6px 16px;background:var(--surface-2);border-bottom:.5px solid var(--line)}
+.calyh b{font-size:17px;color:var(--title)}.calyh .n{flex:1;font-size:11px;color:var(--dim)}
+.calyh .pk{font-size:10.5px;font-weight:650;padding:2px 8px;border-radius:10px;background:var(--fill)}
+.calgrid{display:grid;grid-template-columns:repeat(7,1fr);row-gap:3px}
+/* Heat tint by count; a day with no photos is dimmed and carries no number, but can still end a range. */
+.cald{height:38px;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:7px;font-size:12px;line-height:1.15}
+.cald .n{font-size:8.5px;opacity:.85}
+.cald.none{color:var(--dim);opacity:.55}
+.cald.band{box-shadow:inset 0 0 0 1.5px var(--accent);border-radius:0}
+.cald.end{background:var(--accent)!important;color:#fff;font-weight:700}
+.cald.end .n{opacity:1}
+.cald.s{border-radius:9px 0 0 9px}.cald.e{border-radius:0 9px 9px 0}
 </style>
 <script>
 /* Theme resolution for this mockup sheet only. The app itself has no such control: it
@@ -299,6 +334,7 @@ const I={
  image:  svg('<rect x="3" y="5" width="18" height="14" rx="2.6"/><circle cx="8.6" cy="10.2" r="1.7"/><path d="M3.6 17.4l4.6-4.3 3 2.8 4.2-4 5 4.7"/>'),
  list:   svg('<path d="M8 6.5h12M8 12h12M8 17.5h12"/><circle cx="4" cy="6.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="4" cy="17.5" r="1.3" fill="currentColor" stroke="none"/>'),
 };
+I.cal=svg('<rect x="3.5" y="5" width="17" height="15.5" rx="2.4"/><path d="M3.5 9.8h17M8 3.2v3.4M16 3.2v3.4"/>');
 const gb=(ic,cls)=>`<span class="gbtn ${cls||''}">${ic}</span>`;
 const hdr=(title,sub,icons,back)=>`<div class="nav">
   <div class="barrow">
@@ -368,7 +404,7 @@ const tree=albums=>albums.map((a,i)=>a.children
 
 /* 1 album list */
 phone(`${st}${hdr('Albums','239 albums · newest first',gb(I.gear)+gb(I.sort),false)}
- <div class="search">${I.search} Search albums</div>
+ <div class="search">${I.search}<span class="sp">Search albums</span><span class="trail">${I.cal}</span></div>
  <div class="body"><div class="scroll"><div class="alist">${tree(D.albums)}</div></div></div>`,
  'Album list — no tab bar',
   'E.1 carries gear and sort only \u2014 F adds the map icon, G adds upload, so nothing on screen is ever dead. <b>Sort is one icon that cycles</b> date\u2193 \u2192 date\u2191 \u2192 name, and the subtitle names the current state, so no menu is needed. Pull down to sync; there is no refresh icon.');
@@ -381,7 +417,7 @@ const phrow=(a,moving)=>`<div class="arow"><span class="edge"></span><span class
  <div class="m"><span>${contents(a)}</span></div></div></div>`;
 phone(`${st}${hdr('Albums','239 albums · newest first · thumbnails 34/288',gb(I.gear)+gb(I.sort),false)}
  <div class="qbar"><i style="width:12%"></i></div>
- <div class="search">${I.search} Search albums</div>
+ <div class="search">${I.search}<span class="sp">Search albums</span><span class="trail">${I.cal}</span></div>
  <div class="body"><div class="scroll"><div class="alist">${D.albums.slice(0,2).map((a,i)=>arow(a,cache(i))).join('')}${phrow(D.albums[2],true)}${phrow(D.albums[3],true)}${phrow(D.albums[4])}${phrow(D.albums[5])}${phrow(D.albums[6])}</div></div></div>`,
  'Album list \u2014 packs arriving',
  'The full list appears as soon as the shards land (~12 MB, a few seconds). Every album\u2019s thumbnail pack is then fetched behind it \u2014 ~0.3 GB in all \u2014 and a row whose pack has not arrived shows a placeholder cover. <b>Nothing is ever disabled:</b> tapping one opens it and promotes its pack to the head of the queue.');
@@ -392,7 +428,7 @@ const swipe=(a,acts)=>`<div class="swipeout"><div class="keep"><img src="${a.cov
   <div class="m" style="font-size:11.5px;color:var(--dim)">${contents(a)}</div></div></div>
  ${acts.map(x=>`<span class="act2 a-${x[0]}">${x[1]}</span>`).join('')}</div>`;
 phone(`${st}${hdr('Albums','swipe left on any album',gb(I.gear)+gb(I.sort),false)}
- <div class="search">${I.search} Search albums</div>
+ <div class="search">${I.search}<span class="sp">Search albums</span><span class="trail">${I.cal}</span></div>
  <div class="body"><div class="scroll"><div class="alist" style="padding-right:0">
   ${swipe(D.albums[0],[['dl',I.down]])}
   ${swipe(D.albums[1],[['dl',I.down],['cl',I.trash]])}
@@ -404,7 +440,7 @@ phone(`${st}${hdr('Albums','swipe left on any album',gb(I.gear)+gb(I.sort),false
 
 /* 1c album list — sync failed */
 phone(`${st}${hdr('Albums','239 albums · newest first',gb(I.gear)+gb(I.sort),false)}
- <div class="search">${I.search} Search albums</div>
+ <div class="search">${I.search}<span class="sp">Search albums</span><span class="trail">${I.cal}</span></div>
  <div class="body"><div class="scroll"><div class="alist">${D.albums.slice(0,6).map((a,i)=>arow(a,cache(i))).join('')}</div></div>
   <div class="toast stack err"><span class="ico">${I.lock}</span>
    <span class="msg"><b>Sync failed: 403 Forbidden</b><br>Log out and check the password.</span>
@@ -414,12 +450,62 @@ phone(`${st}${hdr('Albums','239 albums · newest first',gb(I.gear)+gb(I.sort),fa
 
 /* 1d album list — transient failure */
 phone(`${st}${hdr('Albums','239 albums · newest first',gb(I.gear)+gb(I.sort),false)}
- <div class="search">${I.search} Search albums</div>
+ <div class="search">${I.search}<span class="sp">Search albums</span><span class="trail">${I.cal}</span></div>
  <div class="body"><div class="scroll"><div class="alist">${D.albums.slice(0,6).map((a,i)=>arow(a,cache(i))).join('')}</div></div>
   <div class="toast"><span class="ico">${I.wifi}</span>
    <span><b>No network</b><br>Showing the catalog as of 2 days ago.</span></div></div>`,
  'Album list \u2014 offline',
  '<b>Duration by kind.</b> Offline, timeout and DNS clear themselves, so their toast auto-dismisses after a few seconds and carries no action \u2014 there is nothing for you to do. Everything on this screen still works: the whole catalog and every thumbnail are on disk. Because a toast is transient, <b>the Settings sync row is the durable record</b>.');
+
+/* 1e album list — filtered by a date range. One filter at a time: the range replaced the text. */
+const IN_RANGE={'Reykjavík':96,'Vík':84,'Höfn':31};
+const inRange=D.kalifornien.filter(k=>k.name in IN_RANGE);
+const ranged=inRange.reduce((n,k)=>n+IN_RANGE[k.name],0);
+const rrow=(a,c)=>`<div class="arow"><span class="edge ${c.done?'done':''}">${!c.done&&c.pct?`<i style="height:${c.pct}%"></i>`:''}</span><img src="${a.cover}">
+ <div class="t"><div class="n">${esc(a.name)}</div>
+ <div class="m"><span>${IN_RANGE[a.name]===a.count?`${a.count} photos`:`${IN_RANGE[a.name]} of ${a.count} photos`}</span></div></div></div>`;
+phone(`${st}${hdr('Albums','3 matching · newest first',gb(I.gear)+gb(I.sort),false)}
+ <div class="search range">${I.cal}<span class="sp">12 – 20 Mar 2024</span><span class="trail">${I.close}</span></div>
+ <div class="body"><div class="scroll"><div class="alist">
+  <div class="arow ahdr"><span class="edge"><i style="height:40%"></i></span><div class="n">${esc(D.albums[0].name)}</div>
+   <div class="m">${inRange.length} of ${D.albums[0].children} albums · ${ranged} of ${D.albums[0].count} photos</div></div>
+  <div class="indent">${inRange.map((k,j)=>rrow(k,cache(j+1))).join('')}</div><div class="aclose"></div>
+ </div></div></div>`,
+ 'Album list — date range',
+ 'The calendar is the search field’s <b>trailing icon</b>, not a fifth bar icon. A picked range <b>replaces</b> the typed text: the field shows it read-only, tapping it reopens the calendar, and ✕ clears it. An album matches if <b>at least one photo</b> was taken in the range; undated photos never match. Matches stay under their container’s header as with a name search, and <b>the counts are in-range photos</b>, the same numbers the calendar shows. Strips and actions still cover whole albums. The map follows the range too. Opening an album shows all of it, and coming back keeps the range, as it now keeps a typed search.');
+
+/* 1f the calendar sheet */
+const RANGE_DAYS=[18,34,29,40,0,22,31,25,12];             /* 12..20 Mar, summing to the list's 211 */
+const dayCount=(m,d)=>m===2&&d>=12&&d<=20?RANGE_DAYS[d-12]
+  :({'1-3':6,'1-9':2,'1-24':41,'1-25':63,'1-26':19,'2-2':3,'2-28':7,'3-2':150,'3-3':1204,'3-4':88,'3-5':14,'3-18':5}[`${m}-${d}`]||0);
+const heat=c=>c?`background:color-mix(in srgb,var(--accent) ${Math.min(62,8+Math.log10(c+1)*22).toFixed(0)}%,transparent)`:'';
+const calMonth=(y,m,sel)=>{
+  const names=['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const first=(new Date(Date.UTC(y,m,1)).getUTCDay()+6)%7, days=new Date(Date.UTC(y,m+1,0)).getUTCDate();
+  let total=0; for(let d=1;d<=days;d++) total+=dayCount(m,d);
+  let h=`<div class="calmt"><span>${names[m]}</span><span class="n">${total?total.toLocaleString():''}</span></div><div class="calgrid">`+'<div></div>'.repeat(first);
+  for(let d=1;d<=days;d++){
+    const c=dayCount(m,d), r=sel&&m===sel[0]&&d>=sel[1]&&d<=sel[2];
+    const cls=['cald',c?'':'none',r?(d===sel[1]?'end s':d===sel[2]?'end e':'band'):''].join(' ');
+    h+=`<div class="${cls}" style="${heat(c)}">${d}${c?`<span class="n">${c>999?(c/1000).toFixed(1)+'k':c}</span>`:''}</div>`;
+  }
+  return h+'</div>';
+};
+const calSheet=(line,apply,sel)=>`${st}<div class="calsheet" style="top:44px">
+ <div class="calbar">${gb(I.close)}<span class="ttl">Dates</span><span class="calapply${apply?'':' off'}">Apply</span></div>
+ <div class="calline">${line}</div>
+ <div class="calyears">${Array.from({length:11},(_,i)=>2014+i).map(y=>`<span class="${y===2024?'cur':''}">${y}</span>`).join('')}</div>
+ <div class="calwd">${['M','T','W','T','F','S','S'].map(w=>`<span>${w}</span>`).join('')}</div>
+ <div class="calyh"><b>2024</b><span class="n">9,412 photos</span><span class="pk">Pick year</span></div>
+ <div class="calmonths">${calMonth(2024,1,sel)}${calMonth(2024,2,sel)}${calMonth(2024,3,sel)}</div></div>`;
+phone(calSheet(`<b>12 – 20 Mar 2024</b> · ${ranged} photos`,true,[2,12,20]),
+ 'Date filter — calendar sheet',
+ 'A <b>full-screen sheet</b> over the list, so every day has room for its count. Each day shows <b>how many photos were taken that day</b>, across the whole library, and is tinted by that number; days with none are dimmed. <b>Months scroll vertically</b> from the first dated photo to the last, and the year strip jumps. <b>A whole month or year is one tap:</b> a month’s title is a button with its total, and the year’s heading stays pinned above its months with <i>Pick year</i>. Dragging from one title or heading to another picks both whole. <b>Tap and drag</b> picks a range in one gesture; <b>a plain tap</b> sets the start and waits for a second tap as the end. Apply after one tap filters that single day. On a phone a drag follows the upload picker’s rule: sideways or press-and-hold selects, vertical scrolls, holding near an edge scrolls months. With a range set, a tap starts a new one and dragging an end day moves that end. Reopened, the sheet shows the current range; ✕ leaves it unchanged.');
+
+/* 1g the calendar sheet — a range with no photos */
+phone(calSheet('<b>6 – 8 Mar 2024</b> · no photos',false,[2,6,8]),
+ 'Date filter — empty range',
+ 'A range can end on dimmed days, but <b>one holding no photos cannot be applied</b>: the line says so and Apply is disabled, so the list is never filtered to nothing.');
 
 /* 2 container — same list view */
 phone(`${st}${hdr('Iceland','8 sub-albums · 412 photos',gb(I.gear)+gb(I.sort),true)}
@@ -665,7 +751,7 @@ phone(`${st}${hdr('Albums','',gb(I.gear)+gb(I.map)+gb(I.sort)+gb(I.up),false)}
 
 /* 12 upload minimized */
 phone(`${st}${hdr('Albums','',gb(I.gear)+gb(I.map)+gb(I.sort)+gb(I.up),false)}
- <div class="search">${I.search} Search albums</div>
+ <div class="search">${I.search}<span class="sp">Search albums</span><span class="trail">${I.cal}</span></div>
  <div class="body"><div class="scroll"><div class="alist">${D.albums.slice(0,5).map((a,i)=>arow(a,cache(i))).join('')}</div></div>
   <div class="sheet">
    <div class="mini"><span class="ring" style="color:var(--ink);opacity:.85">${I.up}</span>

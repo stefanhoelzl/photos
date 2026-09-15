@@ -28,6 +28,8 @@ import net.stho.photos.app.SaveOutcome
 import net.stho.photos.app.LivePair
 import net.stho.photos.storage.asStorageUrl
 import net.stho.photos.app.AppModel
+import net.stho.photos.app.DateRange
+import net.stho.photos.app.Day
 import net.stho.photos.app.Catalog
 import net.stho.photos.app.Notice
 import net.stho.photos.app.SyncOutcome
@@ -70,6 +72,10 @@ class RenderTest {
             render(out, "empty-$scheme", dark) { model(this@runTest, albums = emptyList()) }
             render(out, "container-$scheme", dark) { model(this@runTest).also { it.open(norway) } }
             render(out, "search-$scheme", dark) { model(this@runTest).also { it.search("rei") } }
+            render(out, "calendar-$scheme", dark) { model(this@runTest).also { it.openCalendar() } }
+            render(out, "range-$scheme", dark) {
+                model(this@runTest).also { it.applyRange(DateRange(Day.of(2025, 12, 16), Day.of(2025, 12, 31))) }
+            }
             render(out, "grid-$scheme", dark) { gridModel(this@runTest, packed = true) }
             render(out, "grid-pending-$scheme", dark) { gridModel(this@runTest, packed = false) }
             render(out, "loading-$scheme", dark) { loadingModel(this@runTest) }
@@ -216,6 +222,8 @@ class RenderTest {
         override fun photos(inAlbum: Uuid): List<PhotoRow> = photos
         override fun album(id: Uuid): Album? = album
         override fun totals() = Totals(1, photos.size)
+        override fun photosPerDay(): Map<Day, Int> = emptyMap()
+        override fun photosIn(range: DateRange): Map<Uuid, Int> = emptyMap()
         override fun blobs(): Map<Uuid, List<net.stho.photos.app.BlobRef>> = emptyMap()
     }
 
@@ -260,6 +268,21 @@ class RenderTest {
         override fun album(id: Uuid): Album? = albums.firstOrNull { it.id == id }
         override fun totals() = Totals(albums.size, albums.sumOf { it.photoCount })
         override fun blobs(): Map<Uuid, List<net.stho.photos.app.BlobRef>> = emptyMap()
+
+        /** Each dated album's photos, spread over six days of its last December, so the calendar has days to tint. */
+        private val taken: Map<Uuid, Map<Day, Int>> = albums.filter { it.photoCount > 0 && it.dateMax != null }.associate { album ->
+            val last = Day.of(requireNotNull(album.dateMax))
+            album.id to (0 until 6).associate { step ->
+                last + (-3 * step) to album.photoCount / 6 + if (step == 0) album.photoCount % 6 else 0
+            }
+        }
+
+        override fun photosPerDay(): Map<Day, Int> =
+            taken.values.flatMap { it.entries }.groupBy({ it.key }, { it.value }).mapValues { (_, counts) -> counts.sum() }
+
+        override fun photosIn(range: DateRange): Map<Uuid, Int> =
+            taken.mapValues { (_, days) -> days.entries.sumOf { (day, photos) -> if (day in range) photos else 0 } }
+                .filterValues { it > 0 }
     }
 
     /**

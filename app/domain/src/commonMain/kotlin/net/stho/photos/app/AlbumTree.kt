@@ -55,6 +55,10 @@ public sealed interface ListEntry {
  * container with everything beneath it, and nothing else. A header that only *holds* a match
  * counts what was kept — "1 of 3 albums · 40 photos".
  *
+ * With [counted], the matches are a date range's, and every count is of the photos taken in it: an
+ * album reads "12 of 132 photos" and a header "1 of 3 albums · 12 of 252 photos" — the numbers the
+ * calendar shows for those days. An album whose every photo is in the range reads as it always does.
+ *
  * Depth-first with a visited set, for the reason [summariesByAlbum] has one.
  */
 public fun albumRows(
@@ -63,12 +67,15 @@ public fun albumRows(
     sort: AlbumSort,
     summaries: Map<Uuid, AlbumSummary>,
     matches: Set<Uuid>? = null,
+    counted: Map<Uuid, Int>? = null,
 ): List<ListEntry> {
     val children = tree.groupBy { it.parent }
     val out = mutableListOf<ListEntry>()
     val placed = mutableSetOf<Uuid>()
 
     fun summaryOf(album: Album) = summaries[album.id] ?: AlbumSummary(0, album.photoCount, album.dateMax)
+
+    fun photosLine(inRange: Int, of: Int) = if (inRange == of) "$of photos" else "$inRange of $of photos"
 
     val keeps = mutableMapOf<Uuid, Boolean>()
     val holding = mutableSetOf<Uuid>()
@@ -91,7 +98,9 @@ public fun albumRows(
             if (!placed.add(album.id)) continue
             val kids = children[album.id].orEmpty()
             if (kids.isEmpty()) {
-                out += ListEntry.Row(album, depth, false, ancestors, summaryOf(album).contents(), listOf(album.id))
+                val contents = if (counted == null) summaryOf(album).contents()
+                else photosLine(counted[album.id] ?: 0, summaryOf(album).photos)
+                out += ListEntry.Row(album, depth, false, ancestors, contents, listOf(album.id))
                 continue
             }
             val whole = !narrowed || matches == null || album.id in matches
@@ -99,8 +108,9 @@ public fun albumRows(
                 ListEntry.Row(album, depth, true, ancestors, summaryOf(album).contents(), listOf(album.id))
             } else {
                 val covered = matchedUnder(album)
-                val photos = covered.sumOf { summaryOf(it).photos }
-                val contents = "${kids.count(::kept)} of ${kids.size} albums · $photos photos"
+                val photos = if (counted == null) "${covered.sumOf { summaryOf(it).photos }} photos"
+                else photosLine(covered.sumOf { counted[it.id] ?: 0 }, summaryOf(album).photos)
+                val contents = "${kids.count(::kept)} of ${kids.size} albums · $photos"
                 ListEntry.Row(album, depth, true, ancestors, contents, covered.map { it.id })
             }
             emit(kids, depth + 1, ancestors + album.id, narrowed = !whole)

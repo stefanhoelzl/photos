@@ -54,13 +54,19 @@ public class Zone(private val s3: S3Client, private val staging: Path) {
         places: List<Pair<Double, Double>?>? = null,
         parent: Uuid? = null,
         state: AlbumState = AlbumState.ENCODED,
+        /**
+         * When every photo was taken, as EXIF `DateTimeOriginal` would say — stored as UTC, the way
+         * ingest stores the camera's zoneless local time (§3). One instant, so §3's order stays the
+         * filename's.
+         */
+        taken: Instant = Instant.parse("2024-01-01T00:00:00Z"),
     ): Uuid {
         val rows = (0 until photos).map { index ->
             val place = if (places != null) places.getOrNull(index) else at
             PhotoRow(
                 id = Uuid.random(),
                 filename = "IMG_%04d.jpg".format(index),
-                takenAt = Instant.parse("2024-01-01T00:00:00Z"),
+                takenAt = taken,
                 latitude = place?.first,
                 longitude = place?.second,
                 width = 4032,
