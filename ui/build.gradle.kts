@@ -36,5 +36,10 @@ kotlin {
             implementation(kotlin("test"))
             implementation(libs.coroutines.test)
         }
+        // A gesture is only testable by performing it: the desktop runtime renders a composable
+        // offscreen and takes synthetic touch events, which is how the picker's drag is proven.
+        jvmTest.dependencies {
+            implementation(compose.desktop.currentOs)
+        }
     }
 }

@@ -2,7 +2,9 @@ package net.stho.photos.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -28,27 +31,31 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.LayoutCoordinates
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import net.stho.photos.app.GalleryAccess
 import net.stho.photos.app.GalleryAlbum
@@ -82,7 +89,7 @@ internal fun UploadScreen(uploads: UploadModel, onClose: () -> Unit) {
                 picker,
                 onAlbum = { album -> scope.launch { uploads.chooseAlbum(album) } },
                 onToggle = uploads::toggle,
-                onSelect = uploads::select,
+                onSelection = uploads::setSelection,
                 onUseSelection = uploads::chooseSelected,
                 modifier = Modifier.weight(1f),
             )
@@ -101,47 +108,127 @@ internal fun UploadScreen(uploads: UploadModel, onClose: () -> Unit) {
     }
 }
 
+/**
+ * The library's albums, then its photos to pick loosely (§8).
+ *
+ * **Dragging across the photos selects a range**, the way the Photos app does: a drag that starts
+ * sideways — or a press held still — selects every photo from the one it started on to the one
+ * under the finger, in reading order, and dragging back shrinks the range again. Starting on a
+ * photo already selected takes the range out instead. A drag that starts vertically is the list's
+ * scroll, and a tap is the tile's own toggle; holding near the top or bottom edge scrolls the grid
+ * while selecting.
+ *
+ * The gesture reads events on the *initial* pass, ahead of the list and the tiles, because the
+ * first version did not: it waited for a long press behind the list, which claimed the drag as a
+ * scroll first, and matched tiles by bounds that went stale as rows were recycled. Which photo is
+ * under the finger now comes from the list's own layout.
+ */
 @Composable
-private fun GalleryPicker(
+internal fun GalleryPicker(
     picker: PickerUi,
     onAlbum: (GalleryAlbum) -> Unit,
     onToggle: (String) -> Unit,
-    onSelect: (Collection<String>) -> Unit,
+    onSelection: (Set<String>) -> Unit,
     onUseSelection: () -> Unit,
-    modifier: Modifier,
+    modifier: Modifier = Modifier,
 ) {
-    // Where each tile sits on screen, so a drag across the grid can say which tiles it crossed.
-    val tiles = remember { mutableMapOf<String, Rect>() }
-    var origin by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    fun hit(at: Offset): String? {
-        val point = origin?.localToRoot(at) ?: return null
-        return tiles.entries.firstOrNull { it.value.contains(point) }?.key
+    val list = rememberLazyListState()
+    val rows = remember(picker.assets) { picker.assets.chunked(COLUMNS) }
+    val ids = remember(picker.assets) { picker.assets.map(GalleryAsset::id) }
+    val rowByKey = remember(rows) { rows.withIndex().associate { (index, row) -> "row:${row.first().id}" to index } }
+    // The gesture outlives a composition, so it reads these afresh on every event.
+    val latestIds by rememberUpdatedState(ids)
+    val latestRows by rememberUpdatedState(rowByKey)
+    val latestSelected by rememberUpdatedState(picker.selected)
+    val latestOnSelection by rememberUpdatedState(onSelection)
+    val drag = remember { DragSelection() }
+    val edge = with(LocalDensity.current) { AUTOSCROLL_EDGE.toPx() }
+
+    fun indexAt(at: Offset): Int? {
+        val layout = list.layoutInfo
+        val item = layout.visibleItemsInfo.firstOrNull { at.y >= it.offset && at.y < it.offset + it.size }
+            ?: return null
+        val row = latestRows[item.key] ?: return null
+        val column = (at.x / (layout.viewportSize.width.toFloat() / COLUMNS)).toInt().coerceIn(0, COLUMNS - 1)
+        return (row * COLUMNS + column).takeIf { it < latestIds.size }
+    }
+
+    fun extendTo(index: Int) {
+        val range = latestIds.subList(min(drag.anchor, index), max(drag.anchor, index) + 1).toSet()
+        latestOnSelection(if (drag.selecting) drag.base + range else drag.base - range)
+    }
+
+    // Holding near an edge while selecting scrolls, and the range follows the photo that comes under the finger.
+    LaunchedEffect(drag.point != null) {
+        while (true) {
+            val point = drag.point ?: break
+            val height = list.layoutInfo.viewportSize.height.toFloat()
+            val step = when {
+                point.y < edge -> -(edge - point.y) / 3
+                point.y > height - edge -> (point.y - (height - edge)) / 3
+                else -> 0f
+            }
+            if (step != 0f) {
+                list.scrollBy(step)
+                indexAt(point)?.let(::extendTo)
+            }
+            delay(16)
+        }
     }
 
     Column(modifier) {
         LazyColumn(
-            Modifier.weight(1f).fillMaxWidth()
-                .onGloballyPositioned { origin = it }
-                // Drag across the thumbnails to select a range: press, hold, and sweep (§8).
-                .pointerInput(picker.assets) {
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = { at -> hit(at)?.let { onSelect(listOf(it)) } },
-                        onDrag = { change, _ -> hit(change.position)?.let { onSelect(listOf(it)) } },
-                    )
-                },
+            state = list,
+            modifier = Modifier.weight(1f).fillMaxWidth().pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val anchor = indexAt(down.position) ?: return@awaitEachGesture
+                    // true: a selection. false: not this gesture's — a tap, or a vertical scroll.
+                    // Still undecided when the long-press timeout passes: a press held still, which selects.
+                    var decision: Boolean? = null
+                    withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                        while (decision == null) {
+                            val change = awaitPointerEvent(PointerEventPass.Initial).changes
+                                .firstOrNull { it.id == down.id }
+                            val moved = change?.let { it.position - down.position }
+                            decision = when {
+                                change == null || !change.pressed -> false
+                                moved!!.getDistance() > viewConfiguration.touchSlop -> abs(moved.x) > abs(moved.y)
+                                else -> null
+                            }
+                        }
+                    }
+                    if (decision == false) return@awaitEachGesture
+
+                    drag.anchor = anchor
+                    drag.selecting = latestIds[anchor] !in latestSelected
+                    drag.base = latestSelected
+                    extendTo(anchor)
+                    drag.point = down.position
+                    while (true) {
+                        val change = awaitPointerEvent(PointerEventPass.Initial).changes
+                            .firstOrNull { it.id == down.id } ?: break
+                        // Consumed, so the list does not scroll and the tile does not toggle again on release.
+                        change.consume()
+                        if (!change.pressed) break
+                        drag.point = change.position
+                        indexAt(change.position)?.let(::extendTo)
+                    }
+                    drag.point = null
+                }
+            },
         ) {
             item { SectionLabel("Albums") }
             items(picker.albums, key = { "album:${it.id}" }) { album -> GalleryAlbumRow(album) { onAlbum(album) } }
             item { SectionLabel("Or pick individual photos · ${picker.selected.size} selected") }
-            items(picker.assets.chunked(COLUMNS), key = { "row:${it.first().id}" }) { row ->
+            items(rows, key = { "row:${it.first().id}" }) { row ->
                 Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp)) {
                     for (asset in row) {
                         AssetTile(
                             asset,
                             picker.thumbnails[asset.id],
                             selected = asset.id in picker.selected,
-                            modifier = Modifier.weight(1f).aspectRatio(1f).padding(1.dp)
-                                .onGloballyPositioned { tiles[asset.id] = it.boundsInRoot() },
+                            modifier = Modifier.weight(1f).aspectRatio(1f).padding(1.dp),
                             onClick = { onToggle(asset.id) },
                         )
                     }
@@ -404,3 +491,15 @@ private fun Long.megabytes(): String {
 }
 
 private const val COLUMNS = 4
+
+/** How close to the list's top or bottom a selecting finger has to be for the grid to scroll. */
+private val AUTOSCROLL_EDGE = 56.dp
+
+/** One drag's selection: where it started, whether it adds or removes, and what it started from. */
+private class DragSelection {
+    /** Where the finger is while a selection drag is under way; null otherwise. */
+    var point by mutableStateOf<Offset?>(null)
+    var anchor = 0
+    var selecting = true
+    var base: Set<String> = emptySet()
+}

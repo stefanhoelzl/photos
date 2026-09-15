@@ -85,8 +85,14 @@ public class UploadModel(
         it.copy(selected = if (assetId in it.selected) it.selected - assetId else it.selected + assetId)
     }
 
-    /** Drag across the grid: everything passed over joins the selection. */
+    /** Adds to the selection — what the control server's `/upload/select` does. */
     public fun select(assetIds: Collection<String>): Unit = _picker.update { it.copy(selected = it.selected + assetIds) }
+
+    /**
+     * The selection, whole: what a drag across the grid leaves it as. Whole rather than added to,
+     * because dragging back over photos takes them out of the range again.
+     */
+    public fun setSelection(assetIds: Set<String>): Unit = _picker.update { it.copy(selected = assetIds) }
 
     /** A gallery album: the whole album, its name prefilled. */
     public suspend fun chooseAlbum(album: GalleryAlbum) {
