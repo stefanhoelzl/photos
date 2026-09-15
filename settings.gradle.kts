@@ -40,6 +40,9 @@ include(":app:cli")
 include(":app:domain")
 include(":app:control")
 include(":ui")
+// The basemap, and nothing else: MapLibre behind `:ui`'s `BaseMap` port. A module of its own so
+// that `:ui` -- and every headless render of it -- links no native map renderer.
+include(":app:map")
 include(":app:desktop")
 include(":adapter:ios")
 include(":app:ios")

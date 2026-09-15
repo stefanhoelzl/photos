@@ -118,10 +118,12 @@ SELECT album_id, name, name_folded, parent, photo_count, date_min, date_max, lat
        cover_photo_id, thumbs_id
 FROM album WHERE name_folded LIKE ? ESCAPE '\' ORDER BY name;
 
+-- The map's pins (§6): albums that own photos and have a location. Containers carry a centroid
+-- too, but it lands between their albums -- somewhere nobody went -- so they are not placed.
 selectPlacedAlbums:
 SELECT album_id, name, name_folded, parent, photo_count, date_min, date_max, lat, lon,
        cover_photo_id, thumbs_id
-FROM album WHERE lat IS NOT NULL ORDER BY name;
+FROM album WHERE lat IS NOT NULL AND photo_count > 0 ORDER BY name;
 
 -- Every album name that appears more than once under the same parent. Two devices creating one
 -- album no longer collide on a key, so duplicates are possible. They are shown and reported,

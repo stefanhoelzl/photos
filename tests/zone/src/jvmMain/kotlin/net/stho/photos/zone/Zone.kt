@@ -40,12 +40,23 @@ public class Zone(private val s3: S3Client, private val staging: Path) {
      * Written with the same writer the CLI uses, so a scenario cannot declare a zone the real
      * ingest could never produce.
      */
-    public suspend fun album(name: String, photos: Int, thumbnails: Boolean = true): Uuid {
+    public suspend fun album(
+        name: String,
+        photos: Int,
+        thumbnails: Boolean = true,
+        /** Where every photo was taken, as EXIF GPS would say; null for photos with no location. */
+        at: Pair<Double, Double>? = null,
+        /** Per photo, by position, overriding [at]: a null entry is a photo with no location. */
+        places: List<Pair<Double, Double>?>? = null,
+    ): Uuid {
         val rows = (0 until photos).map { index ->
+            val place = if (places != null) places.getOrNull(index) else at
             PhotoRow(
                 id = Uuid.random(),
                 filename = "IMG_%04d.jpg".format(index),
                 takenAt = Instant.parse("2024-01-01T00:00:00Z"),
+                latitude = place?.first,
+                longitude = place?.second,
                 width = 4032,
                 height = 3024,
                 bytes = 3_400_000,

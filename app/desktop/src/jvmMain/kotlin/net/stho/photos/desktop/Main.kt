@@ -18,7 +18,11 @@ import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.storage.S3Client
 import net.stho.photos.storage.retryStorageFailures
 import androidx.compose.runtime.CompositionLocalProvider
+import net.stho.photos.map.MaplibreBaseMap
+import net.stho.photos.ui.screens.LocalBaseMap
 import net.stho.photos.ui.screens.LocalVideoSurface
+import org.maplibre.compose.desktop.ProvideMapPresentationHost
+import org.maplibre.compose.desktop.rememberAwtComposeMapPresentationHost
 import net.stho.photos.ui.screens.PhotosTheme
 import androidx.compose.runtime.Composable
 import net.stho.photos.app.Account
@@ -78,7 +82,14 @@ public fun main(args: Array<String>) {
             // The phone's proportions, so what is reviewed here is what a device would show.
             state = rememberWindowState(size = DpSize(430.dp, 890.dp)),
         ) {
-            content()
+            // MapLibre presents into this window, so the basemap is installed here and not in
+            // `content`: `/screenshot` renders `content` offscreen, where there is no window to
+            // present into, and draws `:ui`'s stand-in instead.
+            ProvideMapPresentationHost(rememberAwtComposeMapPresentationHost(window)) {
+                CompositionLocalProvider(LocalBaseMap provides MaplibreBaseMap) {
+                    content()
+                }
+            }
         }
     }
 }

@@ -1,6 +1,8 @@
 package net.stho.photos.app
 
+import kotlin.math.max
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
@@ -86,6 +88,8 @@ public data class AppUi(
      * moving — the same rule the album strip uses, so motion means one thing on every surface.
      */
     val openPhotoMoving: Boolean = false,
+    /** The showing map's pins and clusters; null while no map is on screen (§6). */
+    val map: MapUi? = null,
 ) {
     /** What this album's row draws. Unknown albums read as holding nothing, never as complete. */
     public fun cacheOf(album: Album): AlbumCache = cache[album.id] ?: AlbumCache.nothing
@@ -100,9 +104,16 @@ public data class AppUi(
 
     val screen: Screen get() = stack.current
 
+    /** The current level is drawn as its map rather than as its list or grid (§6). */
+    public val showingMap: Boolean get() = stack.map?.showing == true
+
     /** The nav bar's second line: a count, then the sort state, so no menu has to name it (§6). */
     public val subtitle: String
         get() = when {
+            // A map says how much of the list it can place. The rest has no location, and this
+            // line is the only thing that says so. No sort: a map has no order to name.
+            showingMap && map != null ->
+                "${map.pins.size} of ${map.total} ${if (query.isNotEmpty()) "matching" else "albums"} on the map"
             query.isNotEmpty() -> "${albums.size} matching"
             // While packs are still arriving the line says so, exactly as the mockup does: the
             // covers filling in one by one otherwise look like something going wrong. *After*
@@ -112,6 +123,11 @@ public data class AppUi(
                 "${albums.size} albums · ${sort.label} · thumbnails $packsDone/${packsDone + packsOutstanding}"
             else -> "${albums.size} albums · ${sort.label}"
         }
+
+    /** An album's second line: its photos, or on its map how many of them it can place. */
+    public val photosSubtitle: String
+        get() = if (showingMap && map != null) "${map.pins.size} of ${map.total} photos on the map"
+        else "${photos.size} photos"
 
     /** True on a first run, when there is nothing to show yet and something is on its way. */
     public val loading: Boolean get() = albums.isEmpty() && sync is SyncStatus.Running
@@ -311,6 +327,7 @@ public class AppModel(
                     // which is exactly what a screen, or a test, would sample and believe.
                     val status = SyncStatus.Succeeded(clock.now(), outcome.albums, outcome.photos)
                     _state.update { it.copy(sync = status).reloaded() }
+                    refreshMap()
                 }
                 is SyncOutcome.Failed -> _state.update {
                     // Never blocks: the catalog and every thumbnail are already on disk, so a
@@ -390,10 +407,218 @@ public class AppModel(
 
     public fun openSettings(): Unit = navigate { it.push(Screen.Settings) }
 
+    // ------------------------------------------------------------------------------ the map
+
+    /**
+     * The viewport the map was last laid out in, in dp. A frame needs it and only the screen
+     * knows it; until one reports, a phone's proportions stand in — which is what a scenario gets.
+     */
+    private var viewport: Pair<Double, Double> = DEFAULT_VIEWPORT
+
+    /**
+     * The icon showing the other representation: map ↔ list, or map ↔ grid (§6).
+     *
+     * Toggled on the level rather than pushed, so the title, the back button and the search stay
+     * what they were — and the camera outlives toggling away and back.
+     */
+    public fun toggleMap() {
+        _state.update { ui ->
+            val screen = ui.screen
+            if (screen !is Screen.Albums && screen !is Screen.Container && screen !is Screen.Grid) return@update ui
+            val view = ui.stack.map ?: MapView()
+            ui.copy(stack = ui.stack.withMap(view.copy(showing = !view.showing)))
+        }
+        refreshMap()
+    }
+
+    /**
+     * The screen reports the map's size, so frames fit what is actually visible.
+     *
+     * The first frame is made before this arrives. While the camera is still that frame, the
+     * same points are fitted again to the size that is real; once a gesture or a tap has taken
+     * the camera over, a resize leaves it where the person put it.
+     */
+    public fun mapViewport(width: Double, height: Double) {
+        if (width <= 0 || height <= 0) return
+        viewport = width to height
+        _state.update { ui ->
+            val view = ui.stack.map?.takeIf { it.showing } ?: return@update ui
+            val framing = view.framing?.takeIf { it.width != width || it.height != height } ?: return@update ui
+            val refit = framing.copy(width = width, height = height)
+            ui.copy(
+                stack = ui.stack.withMap(
+                    view.copy(camera = refit.cameraFor(width, height), moves = view.moves + 1, framing = refit),
+                ),
+            )
+        }
+    }
+
+    /** Where a gesture left the camera: remembered, never animated to — the renderer is already there. */
+    public fun cameraMoved(camera: MapCamera): Unit = updateCamera(camera, moved = false)
+
+    /** Moves the camera and has the renderer follow: a cluster tap, or the control server. */
+    public fun moveCamera(camera: MapCamera): Unit = updateCamera(camera, moved = true)
+
+    private fun updateCamera(camera: MapCamera, moved: Boolean) {
+        val limits = MapLimits.MIN_ZOOM.toDouble()..MapLimits.MAX_ZOOM.toDouble()
+        val clamped = camera.copy(zoom = camera.zoom.coerceIn(limits))
+        _state.update { ui ->
+            val view = ui.stack.map?.takeIf { it.showing } ?: return@update ui
+            if (!moved && view.camera == clamped) return@update ui
+            // Moved, so no longer the automatic frame: a later resize must not undo it.
+            ui.copy(
+                stack = ui.stack.withMap(
+                    view.copy(camera = clamped, moves = view.moves + if (moved) 1 else 0, framing = null),
+                ),
+            )
+        }
+    }
+
+    /**
+     * A tap on the map (§6).
+     *
+     * A pin opens what it stands for: an album on its own map — its photos where they were
+     * taken, the grid a toggle away — or the viewer at that photo. A cluster zooms until it
+     * splits. One whose members share a spot never splits, so its albums are listed instead —
+     * and its photos open the viewer at the earliest, since paging walks through the rest anyway.
+     */
+    public fun tapMap(cluster: Cluster) {
+        val ui = _state.value
+        val map = ui.map ?: return
+        val pins = cluster.members.map { map.pins.getOrNull(it) ?: return }
+        if (pins.isEmpty()) return
+        if (cluster.isPin) {
+            when (val pin = pins.single()) {
+                is MapPin.OfAlbum -> openOnMap(pin.album)
+                is MapPin.OfPhoto -> openPhoto(pin.index)
+            }
+            return
+        }
+        val zoom = ui.stack.map?.camera?.zoom ?: return
+        val splits = map.clusters.expansion(cluster, map.clusters.level(zoom))
+        if (splits == null) {
+            val albums = pins.filterIsInstance<MapPin.OfAlbum>().map { it.album }
+            if (albums.isNotEmpty()) {
+                _state.update { it.copy(map = it.map?.copy(sheet = albums)) }
+            } else {
+                pins.filterIsInstance<MapPin.OfPhoto>().minOfOrNull { it.index }?.let(::openPhoto)
+            }
+            return
+        }
+        val fitted = frame(pins.map { it.point }, viewport.first, viewport.second)
+        // At least the level at which it splits: the members' box alone can fit at a zoom where
+        // they are still one circle, and the tap would look like it did nothing.
+        moveCamera(fitted.copy(zoom = max(fitted.zoom, splits.toDouble())))
+    }
+
+    /** A row in the list of albums that share one spot: opened on its map, as its pin would be. */
+    public fun openFromSheet(album: Album): Unit = openOnMap(album)
+
+    /**
+     * An album reached from a map stays on the map, one level down (§6).
+     *
+     * Its map is a new level's, so it frames the album's own photos; Back pops it and the album
+     * list's map is exactly where it was left.
+     */
+    private fun openOnMap(album: Album) {
+        open(album)
+        val ui = _state.value
+        if (ui.screen is Screen.Grid && !ui.showingMap) toggleMap()
+    }
+
+    public fun dismissSheet(): Unit = _state.update { it.copy(map = it.map?.copy(sheet = null)) }
+
+    private var mapping: Job? = null
+
+    /**
+     * The showing map's pins and clusters, rebuilt when what it shows has changed.
+     *
+     * Launched rather than done in place: clustering is a pass over every point at every zoom,
+     * and a tap or a search keystroke should not wait on it. Unchanged points keep the index
+     * already built, so a pack landing — which reloads the list — reclusters nothing.
+     */
+    private fun refreshMap() {
+        val ui = _state.value
+        if (!ui.showingMap) {
+            if (ui.map != null) _state.update { if (it.showingMap) it else it.copy(map = null) }
+            return
+        }
+        mapping?.cancel()
+        mapping = scope.launch {
+            val (pins, total) = pinsOf(ui)
+            val built = ui.map?.takeIf { it.pins == pins }?.copy(total = total)
+                ?: MapUi(pins, ClusterIndex(pins.map { it.point }), total)
+            _state.update { current ->
+                if (current.screen != ui.screen || !current.showingMap) return@update current
+                val view = requireNotNull(current.stack.map)
+                val stack = if (view.camera != null) {
+                    current.stack
+                } else {
+                    val (width, height) = viewport
+                    val framing = Framing(framedPoints(current, pins), width, height)
+                    current.stack.withMap(
+                        view.copy(camera = framing.cameraFor(width, height), moves = view.moves + 1, framing = framing),
+                    )
+                }
+                current.copy(stack = stack, map = built.copy(sheet = current.map?.takeIf { it.pins == pins }?.sheet))
+            }
+        }
+    }
+
+    /**
+     * What a map places, and what the subtitle counts it against.
+     *
+     * The album list's map is flat — every located album that owns photos, whatever the level —
+     * because a container's centroid lands between its albums, somewhere nobody went (§6). A
+     * search narrows it to the albums that match, exactly as it narrows the list.
+     */
+    private fun pinsOf(ui: AppUi): Pair<List<MapPin>, Int> = when (ui.screen) {
+        is Screen.Grid -> ui.photos.mapIndexedNotNull { index, photo ->
+            placed(photo.latitude, photo.longitude)?.let { MapPin.OfPhoto(photo, index, it) }
+        } to ui.photos.size
+
+        else -> {
+            val owning = (if (ui.query.isNotBlank()) ui.albums else albumTree).filter { it.photoCount > 0 }
+            owning.mapNotNull { album ->
+                placed(album.latitude, album.longitude)?.let { MapPin.OfAlbum(album, it) }
+            } to owning.size
+        }
+    }
+
+    private fun placed(latitude: Double?, longitude: Double?): WorldPoint? =
+        if (latitude != null && longitude != null) Mercator.project(latitude, longitude) else null
+
+    /**
+     * What a map first frames: this level's albums — a container's own, with every other pin
+     * still around them — or the whole library when the level has none placed.
+     */
+    private fun framedPoints(ui: AppUi, pins: List<MapPin>): List<WorldPoint> {
+        val container = (ui.screen as? Screen.Container)?.takeIf { ui.query.isBlank() }
+        val beneath = container?.let { descendantsOf(it.albumId) }
+        val here = beneath?.let { ids -> pins.filter { it is MapPin.OfAlbum && it.album.id in ids } }
+        val framed = here?.takeIf { it.isNotEmpty() } ?: pins
+        return framed.map { it.point }
+    }
+
+    private fun descendantsOf(id: Uuid): Set<Uuid> {
+        val children = albumTree.groupBy { it.parent }
+        val out = mutableSetOf<Uuid>()
+        fun walk(parent: Uuid) {
+            children[parent].orEmpty().forEach { if (out.add(it.id)) walk(it.id) }
+        }
+        walk(id)
+        return out
+    }
+
     /** Used by the control server's `POST /nav` as well as by the UI. */
     public fun navigate(change: (BackStack) -> BackStack) {
         val leaving = _state.value.screen
-        _state.update { it.copy(stack = change(it.stack), query = "", preview = null, videoPath = null, livePair = null) }
+        _state.update {
+            it.copy(
+                stack = change(it.stack), query = "", preview = null, videoPath = null, livePair = null,
+                map = it.map?.copy(sheet = null),
+            )
+        }
         // Leaving the album abandons the prefetch queue; staying inside it (grid ↔ photo)
         // keeps the pack and whatever has already been fetched.
         val arrived = _state.value.screen.albumOf()
@@ -452,7 +677,10 @@ public class AppModel(
 
     public fun dismissNotice(): Unit = _state.update { it.copy(notice = null) }
 
-    private fun reload(): Unit = _state.update { it.reloaded() }
+    private fun reload() {
+        _state.update { it.reloaded() }
+        refreshMap()
+    }
 
     /** What this state becomes once the catalog is re-read. Pure enough to fold into an update. */
     private fun AppUi.reloaded(): AppUi {
@@ -605,5 +833,8 @@ public class AppModel(
 
         /** How long the rollup waits before recomputing again, to coalesce a burst of arrivals. */
         const val COALESCE_MS = 150L
+
+        /** A phone's map area in dp, until the screen reports its own. */
+        val DEFAULT_VIEWPORT = 390.0 to 640.0
     }
 }

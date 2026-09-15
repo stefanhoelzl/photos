@@ -31,18 +31,34 @@ public sealed interface Screen {
  * Immutable, so a snapshot of it *is* the app's location and a test can assert on one. [pop]
  * never empties the stack: the root is not something you can navigate away from.
  */
-public data class BackStack(val screens: List<Screen> = listOf(Screen.Albums)) {
+public data class BackStack(
+    val screens: List<Screen> = listOf(Screen.Albums),
+    /**
+     * Each level's map, keyed by its position in [screens].
+     *
+     * The map is a representation of a screen rather than a screen of its own (§6), so it is not
+     * pushed: it rides on the level it draws. That is what lets the camera survive opening an
+     * album and coming back, and toggling to the list and back — and why leaving the level, which
+     * drops the entry, frames the map afresh next time.
+     */
+    val maps: Map<Int, MapView> = emptyMap(),
+) {
     public val current: Screen get() = screens.last()
     public val canGoBack: Boolean get() = screens.size > 1
 
-    public fun push(screen: Screen): BackStack = BackStack(screens + screen)
+    /** The current level's map, or null when it has never been shown. */
+    public val map: MapView? get() = maps[screens.lastIndex]
+
+    public fun push(screen: Screen): BackStack = copy(screens = screens + screen)
 
     public fun pop(): BackStack =
-        if (canGoBack) BackStack(screens.dropLast(1)) else this
+        if (canGoBack) BackStack(screens.dropLast(1), maps - screens.lastIndex) else this
 
     /** Swiping does not deepen the stack: the photo you are on replaces the one you were on. */
-    public fun replace(screen: Screen): BackStack = BackStack(screens.dropLast(1) + screen)
+    public fun replace(screen: Screen): BackStack = copy(screens = screens.dropLast(1) + screen)
 
     /** Back to the root, for the control server and for Settings' own dismissal. */
-    public fun root(): BackStack = BackStack(listOf(Screen.Albums))
+    public fun root(): BackStack = BackStack()
+
+    public fun withMap(view: MapView): BackStack = copy(maps = maps + (screens.lastIndex to view))
 }

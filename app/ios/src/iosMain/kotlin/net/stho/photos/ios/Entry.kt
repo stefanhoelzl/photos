@@ -5,6 +5,8 @@ import androidx.compose.ui.window.ComposeUIViewController
 import net.stho.photos.adapter.ios.KeychainKeyring
 import net.stho.photos.app.Account
 import net.stho.photos.app.Launcher
+import net.stho.photos.map.MaplibreBaseMap
+import net.stho.photos.ui.screens.LocalBaseMap
 import net.stho.photos.ui.screens.LocalLivePhotoSurface
 import net.stho.photos.ui.screens.LocalOrientationPolicy
 import net.stho.photos.ui.screens.LocalVideoSurface
@@ -62,6 +64,7 @@ public class PhotosRoot(
             PhotosTheme {
                 // The two things on the viewer no shared code can draw (§6's interop table).
                 CompositionLocalProvider(
+                    LocalBaseMap provides MaplibreBaseMap,
                     LocalVideoSurface provides AvVideoSurface(),
                     LocalLivePhotoSurface provides PhLivePhotoSurface(onLivePhoto),
                     LocalOrientationPolicy provides IosOrientation,
