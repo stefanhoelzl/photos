@@ -302,6 +302,131 @@ class AppModelTest {
         assertEquals(listOf(library.iceland.id), model.state.value.rowOf(library.iceland).covers, "without a search, the whole container")
     }
 
+    // ------------------------------------------------------------------------------ the date filter
+
+    private val twelfthToTwentieth = DateRange(Day.of(2024, 3, 12), Day.of(2024, 3, 20))
+
+    /**
+     * March 2024 across [Library]: Reykjavík partly in the range, Reine wholly — in its last second —
+     * and Henningsvær at the midnight after it. Ring Road is a year earlier; Oslo has no dates at all.
+     */
+    private fun Library.march(): Map<Uuid, List<Instant>> = mapOf(
+        reykjavik.id to List(12) { Instant.parse("2024-03-14T10:00:00Z") } + List(28) { Instant.parse("2024-06-01T10:00:00Z") },
+        ringRoad.id to List(212) { Instant.parse("2023-08-01T10:00:00Z") },
+        reine.id to List(80) { Instant.parse("2024-03-20T23:59:59Z") },
+        henningsvaer.id to List(40) { Instant.parse("2024-03-21T00:00:00Z") },
+    )
+
+    /**
+     * An album matches a range when one of its photos was taken in it (§3). Matches keep their
+     * containers' headers as a search's do, and every line counts only the photos in the range —
+     * the numbers the calendar shows for those days.
+     */
+    @Test
+    fun aDateRangeKeepsAlbumsWithAPhotoInItAndCountsOnlyThosePhotos() = runTest {
+        val library = Library()
+        val model = model(this, albums = library.all, taken = library.march())
+        model.start()
+
+        assertTrue(model.applyRange(twelfthToTwentieth))
+        assertEquals(
+            listOf("Iceland ▾", "  Reykjavík", "— Iceland", "Norway ▾", "  Lofoten ▾", "    Reine", "  — Lofoten", "— Norway"),
+            model.state.value.lines(),
+        )
+        assertEquals("12 of 40 photos", model.state.value.rowOf(library.reykjavik).contents)
+        assertEquals("80 photos", model.state.value.rowOf(library.reine).contents, "every photo in the range reads as usual")
+        assertEquals("1 of 2 albums · 12 of 252 photos", model.state.value.rowOf(library.iceland).contents)
+        assertEquals("1 of 2 albums · 80 of 120 photos", model.state.value.rowOf(library.lofoten).contents)
+        assertEquals("1 of 2 albums · 80 of 190 photos", model.state.value.rowOf(library.norway).contents)
+        assertEquals("2 matching", model.state.value.subtitle)
+    }
+
+    @Test
+    fun aRangeWithNoPhotosIsRefusedAndChangesNothing() = runTest {
+        val library = Library()
+        val model = model(this, albums = library.all, taken = library.march())
+        model.start()
+        model.search("re")
+
+        assertFalse(model.applyRange(DateRange(Day.of(2019, 1, 1), Day.of(2019, 12, 31))))
+        assertNull(model.state.value.range)
+        assertEquals("re", model.state.value.query, "the search it would have replaced is still there")
+    }
+
+    /** One filter at a time: a range replaces the typed text, and typing replaces the range. */
+    @Test
+    fun aRangeReplacesTheQueryAndTypingReplacesTheRange() = runTest {
+        val library = Library()
+        val model = model(this, albums = library.all, taken = library.march())
+        model.start()
+
+        model.search("oslo")
+        model.applyRange(twelfthToTwentieth)
+        assertEquals("", model.state.value.query)
+        assertEquals(twelfthToTwentieth, model.state.value.range)
+
+        model.search("r")
+        assertNull(model.state.value.range)
+        assertEquals("r", model.state.value.query)
+
+        model.search("")
+        model.applyRange(twelfthToTwentieth)
+        model.clearRange()
+        assertNull(model.state.value.range)
+        assertEquals(library.all.size, model.state.value.albums.size, "cleared, the whole library is back")
+    }
+
+    /**
+     * Coming back from an album finds the list as it was left, narrowed by a range or by a search —
+     * while a container's screen, which has no field to show either, lists its whole subtree.
+     */
+    @Test
+    fun theRangeAndTheQuerySurviveOpeningAnAlbumAndComingBack() = runTest {
+        val library = Library()
+        val model = model(this, albums = library.all, taken = library.march())
+        model.start()
+
+        model.applyRange(twelfthToTwentieth)
+        model.open(library.reykjavik)
+        assertTrue(model.state.value.screen is Screen.Grid)
+        model.back()
+        assertEquals(twelfthToTwentieth, model.state.value.range)
+        assertEquals("2 matching", model.state.value.subtitle)
+
+        model.search("re")
+        model.open(library.norway)
+        assertEquals(
+            listOf("Lofoten ▾", "  Reine", "  Henningsvær", "— Lofoten", "Oslo"),
+            model.state.value.lines(),
+            "a container's own screen is not narrowed",
+        )
+        assertEquals("4 albums · newest first", model.state.value.subtitle)
+        model.back()
+        assertEquals("re", model.state.value.query)
+        assertEquals("2 matching", model.state.value.subtitle)
+    }
+
+    /** The calendar counts every dated photo in the library, whatever the list is narrowed to. */
+    @Test
+    fun theCalendarCountsTheWholeLibraryPerDay() = runTest {
+        val library = Library()
+        val model = model(this, albums = library.all, taken = library.march())
+        model.start()
+        model.search("oslo")
+        model.openCalendar()
+
+        val calendar = requireNotNull(model.state.value.calendar)
+        assertEquals(12, calendar.photosOn(Day.of(2024, 3, 14)))
+        assertEquals(80, calendar.photosOn(Day.of(2024, 3, 20)))
+        assertEquals(40, calendar.photosOn(Day.of(2024, 3, 21)))
+        assertEquals(CalendarMonth(2023, 8), calendar.months.first())
+        assertEquals(CalendarMonth(2024, 6), calendar.months.last())
+        assertEquals(92, calendar.photosIn(twelfthToTwentieth))
+
+        model.applyRange(twelfthToTwentieth)
+        assertNull(model.state.value.calendar, "Apply closes the sheet")
+    }
+
 
     // ------------------------------------------------------------------------------ fixtures
 
@@ -709,16 +834,22 @@ class AppModelTest {
         scope: TestScope,
         albums: List<Album> = emptyList(),
         outcome: SyncOutcome = SyncOutcome.Succeeded(albums.size, 0),
+        taken: Map<Uuid, List<Instant>> = emptyMap(),
     ): AppModel {
         val own = CoroutineScope(UnconfinedTestDispatcher(scope.testScheduler))
         scopes += own
-        return AppModel(FakeCatalog(albums), FakeSyncer(outcome), FakeThumbnails(), FakePreviews(), FakeVideos(), idleQueue(own), own)
+        return AppModel(FakeCatalog(albums, taken = taken), FakeSyncer(outcome), FakeThumbnails(), FakePreviews(), FakeVideos(), idleQueue(own), own)
     }
 
     private class FakeCatalog(
         private val albums: List<Album>,
         private val photos: List<PhotoRow> = emptyList(),
+        /** When each album's photos were taken, for the date filter. */
+        private val taken: Map<Uuid, List<Instant>> = emptyMap(),
     ) : Catalog {
+        override fun photosPerDay(): Map<Day, Int> = taken.values.flatten().groupingBy { Day.of(it) }.eachCount()
+        override fun photosIn(range: DateRange): Map<Uuid, Int> =
+            taken.mapValues { (_, at) -> at.count { Day.of(it) in range } }.filterValues { it > 0 }
         override fun albums(under: Uuid?): List<Album> = albums.filter { it.parent == under }
         override fun search(text: String): List<Album> =
             albums.filter { it.nameFolded.contains(text.lowercase()) }

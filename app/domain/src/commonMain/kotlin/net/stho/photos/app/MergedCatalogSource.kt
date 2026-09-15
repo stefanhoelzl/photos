@@ -26,6 +26,12 @@ public class MergedCatalogSource(
 
     override fun album(id: Uuid): Album? = read(null) { it.album(id) }
 
+    override fun photosPerDay(): Map<Day, Int> =
+        read(emptyMap()) { reader -> reader.photosPerDay().mapKeys { (epochDay, _) -> Day(epochDay) } }
+
+    override fun photosIn(range: DateRange): Map<Uuid, Int> =
+        read(emptyMap()) { it.photosTakenBetween(range.from, range.until) }
+
     override fun totals(): Totals =
         read(Totals(0, 0)) { Totals(albums = it.allAlbums().size, photos = it.photoCount()) }
 

@@ -15,6 +15,8 @@ import kotlin.uuid.Uuid
 import net.stho.photos.app.AppModel
 import net.stho.photos.app.AppUi
 import net.stho.photos.app.CacheAction
+import net.stho.photos.app.DateRange
+import net.stho.photos.app.Day
 import net.stho.photos.app.Launch
 import net.stho.photos.app.Launcher
 import net.stho.photos.app.ListEntry
@@ -32,13 +34,20 @@ import net.stho.photos.app.UploadModel
  * was drawn. Every mutating endpoint calls the same model method a tap does, so what a suite
  * drives is real behaviour rather than a stand-in.
  *
- *   GET  /state           the current screen, sort, query, albums with their cache state, sync
- *                         status, notice, what the viewer holds (videoPath, livePair), and the
- *                         upload picker and uploads when the root has a gallery
+ *   GET  /state           the current screen, sort, query, date range, albums with their cache
+ *                         state, sync status, notice, what the viewer holds (videoPath, livePair),
+ *                         the calendar's days while it is open, and the upload picker and uploads
+ *                         when the root has a gallery
  *   POST /nav?to=albums   push a screen: albums | settings | album/<uuid> |
  *                         photo/<uuid>/<index> | back
  *   POST /sort            cycle the sort, exactly as the icon does
  *   POST /search?q=text   type into the search field
+ *   POST /calendar        the search field's calendar icon: the sheet opens, and `/state`'s
+ *                         `calendar.days` says how many photos each day has; `?open=false` closes it
+ *   POST /range?from=yyyy-mm-dd&to=yyyy-mm-dd
+ *                         the sheet's Apply: the album list keeps albums with a photo taken on those
+ *                         days, both included, and the query is cleared; 422 for a range with no
+ *                         photos, which Apply refuses too. With no dates, the ✕ that clears the range
  *   POST /refresh         pull-to-refresh
  *   POST /map             the representation toggle: list ↔ map, or grid ↔ map (§6)
  *   POST /map/camera?latitude=…&longitude=…&zoom=…
@@ -159,6 +168,30 @@ public class ControlServer(
 
                 post("/sort") { model?.cycleSort(); call.json(state()) }
                 post("/search") { model?.search(call.request.queryParameters["q"].orEmpty()); call.json(state()) }
+
+                post("/calendar") {
+                    val model = model ?: return@post call.fail(HttpStatusCode.Conflict, "not set up")
+                    if (call.request.queryParameters["open"] == "false") model.closeCalendar() else model.openCalendar()
+                    call.json(state())
+                }
+
+                post("/range") {
+                    val model = model ?: return@post call.fail(HttpStatusCode.Conflict, "not set up")
+                    val parameters = call.request.queryParameters
+                    if (parameters["from"] == null && parameters["to"] == null) {
+                        model.clearRange()
+                        return@post call.json(state())
+                    }
+                    val from = parameters["from"]?.let { Day.parse(it) }
+                    val to = parameters["to"]?.let { Day.parse(it) }
+                    if (from == null || to == null) {
+                        return@post call.fail(HttpStatusCode.BadRequest, "expected from=yyyy-mm-dd&to=yyyy-mm-dd")
+                    }
+                    if (!model.applyRange(DateRange.between(from, to))) {
+                        return@post call.fail(HttpStatusCode.UnprocessableEntity, "no photo was taken in that range")
+                    }
+                    call.json(state())
+                }
                 post("/refresh") { model?.refresh(); call.json(state()) }
 
                 post("/map") { model?.toggleMap(); call.json(state()) }
@@ -382,6 +415,10 @@ public class ControlServer(
             "\"screen\":\"$screen\"",
             "\"sort\":\"${ui.sort}\"",
             "\"query\":${ui.query.json()}",
+            "\"range\":${ui.range?.let { """{"from":"${it.start}","to":"${it.end}","label":${it.label.json()}}""" } ?: "null"}",
+            "\"calendar\":${ui.calendar?.let { calendar ->
+                calendar.days.entries.sortedBy { it.key }.joinToString(",", "{\"days\":{", "}}") { (day, photos) -> "\"$day\":$photos" }
+            } ?: "null"}",
             // The line the nav bar shows: an album's own on its grid or its map, the list's elsewhere.
             // Always the list's used to read "2 of 3 albums on the map" over an album's photos.
             "\"subtitle\":${(if (ui.screen is Screen.Grid) ui.photosSubtitle else ui.subtitle).json()}",

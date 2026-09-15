@@ -29,11 +29,18 @@ public data class AppUi(
     val sort: AlbumSort = AlbumSort.DateNewest,
     val query: String = "",
     /**
+     * The date filter, when one is applied: the album list keeps albums with a photo taken in it.
+     * One filter at a time — applying a range clears [query], and typing clears the range.
+     */
+    val range: DateRange? = null,
+    /** The calendar sheet's days and months while it is open; null while it is closed. */
+    val calendar: CalendarUi? = null,
+    /**
      * The album list on screen, every level of it: albums, the containers heading them, and the
      * lines closing each container's group (§6). Empty on every screen that is not a list.
      */
     val rows: List<ListEntry> = emptyList(),
-    /** How many albums a search matched on this list; zero when there is no search. */
+    /** How many albums a search or a date range matched on this list; zero when there is neither. */
     val matched: Int = 0,
     /** The open album's photos, in §3's order. Empty on every screen that is not a grid. */
     val photos: List<PhotoRow> = emptyList(),
@@ -135,6 +142,13 @@ public data class AppUi(
 
     val screen: Screen get() = stack.current
 
+    /**
+     * A name search or a date range is narrowing the list — the album list's alone. It is the one
+     * screen with the field, and both are kept while an album is open so that coming back finds
+     * them; a container's screen, which has no field to show either, must not be narrowed unseen.
+     */
+    public val filtering: Boolean get() = screen == Screen.Albums && (query.isNotEmpty() || range != null)
+
     /** The current level is drawn as its map rather than as its list or grid (§6). */
     public val showingMap: Boolean get() = stack.map?.showing == true
 
@@ -144,8 +158,8 @@ public data class AppUi(
             // A map says how much of the list it can place. The rest has no location, and this
             // line is the only thing that says so. No sort: a map has no order to name.
             showingMap && map != null ->
-                "${map.pins.size} of ${map.total} ${if (query.isNotEmpty()) "matching" else "albums"} on the map"
-            query.isNotEmpty() -> "$matched matching"
+                "${map.pins.size} of ${map.total} ${if (filtering) "matching" else "albums"} on the map"
+            filtering -> "$matched matching"
             // While packs are still arriving the line says so, exactly as the mockup does: the
             // covers filling in one by one otherwise look like something going wrong. *After*
             // the sort, never instead of it -- a first sync drains 288 packs, and a line that
@@ -198,6 +212,9 @@ public class AppModel(
      * queue stopped draining entirely. The tree only changes when the catalog does.
      */
     private var albumTree: List<Album> = emptyList()
+
+    /** Photos per day across the library: read when the calendar first needs them, and kept until the catalog changes. */
+    private var days: Map<Day, Int>? = null
 
     private val _state = MutableStateFlow(AppUi())
     public val state: StateFlow<AppUi> = _state.asStateFlow()
@@ -271,6 +288,10 @@ public class AppModel(
     private fun refreshCatalogView() {
         blobs = catalog.blobs()
         albumTree = allAlbums()
+        // A rebuild can change any day's number: counted again when next needed, or now if the
+        // calendar is open.
+        days = null
+        if (_state.value.calendar != null) openCalendar()
         // Before any reload reads them: the list sorts containers by these dates.
         val summaries = summariesByAlbum(albumTree)
         _state.update { it.copy(summaries = summaries) }
@@ -394,10 +415,44 @@ public class AppModel(
         reload()
     }
 
+    /** Typing into the field. One filter at a time: text replaces a date range, as a range replaces text. */
     public fun search(text: String) {
-        _state.update { it.copy(query = text) }
+        _state.update { it.copy(query = text, range = if (text.isEmpty()) it.range else null) }
         reload()
     }
+
+    /**
+     * The search field's calendar icon (§6): the sheet, with how many photos were taken on each day
+     * across the whole library.
+     */
+    public fun openCalendar() {
+        _state.update { it.copy(calendar = CalendarUi.of(photosPerDay())) }
+    }
+
+    public fun closeCalendar(): Unit = _state.update { it.copy(calendar = null) }
+
+    /**
+     * The sheet's Apply: the list keeps the albums with a photo taken in [range], replacing any
+     * typed text, and the sheet closes.
+     *
+     * Refused — false, and nothing changes — for a range in which no photo was taken. The sheet
+     * never offers one: a list filtered down to nothing only looks broken.
+     */
+    public fun applyRange(range: DateRange): Boolean {
+        if (photosPerDay().none { (day, photos) -> day in range && photos > 0 }) return false
+        _state.update { it.copy(range = range, query = "", calendar = null) }
+        reload()
+        return true
+    }
+
+    /** The ✕ on a field showing a range. */
+    public fun clearRange() {
+        _state.update { it.copy(range = null) }
+        reload()
+    }
+
+    /** One `GROUP BY` over an index, kept until the catalog changes. */
+    private fun photosPerDay(): Map<Day, Int> = days ?: catalog.photosPerDay().also { days = it }
 
     public fun open(album: Album) {
         // Tapping is what promotes an album's pack: the queue's order becomes what the person
@@ -610,7 +665,7 @@ public class AppModel(
      *
      * The album list's map is flat — every located album that owns photos, whatever the level —
      * because a container's centroid lands between its albums, somewhere nobody went (§6). A
-     * search narrows it to the albums that match, exactly as it narrows the list.
+     * search or a date range narrows it to the albums that match, exactly as it narrows the list.
      */
     private fun pinsOf(ui: AppUi): Pair<List<MapPin>, Int> = when (ui.screen) {
         is Screen.Grid -> ui.photos.mapIndexedNotNull { index, photo ->
@@ -618,7 +673,7 @@ public class AppModel(
         } to ui.photos.size
 
         else -> {
-            val owning = (if (ui.query.isNotBlank()) ui.albums else albumTree).filter { it.photoCount > 0 }
+            val owning = (if (ui.filtering) ui.albums else albumTree).filter { it.photoCount > 0 }
             owning.mapNotNull { album ->
                 placed(album.latitude, album.longitude)?.let { MapPin.OfAlbum(album, it) }
             } to owning.size
@@ -633,7 +688,7 @@ public class AppModel(
      * still around them — or the whole library when the level has none placed.
      */
     private fun framedPoints(ui: AppUi, pins: List<MapPin>): List<WorldPoint> {
-        val container = (ui.screen as? Screen.Container)?.takeIf { ui.query.isBlank() }
+        val container = ui.screen as? Screen.Container
         val beneath = container?.let { descendantsOf(it.albumId) }
         val here = beneath?.let { ids -> pins.filter { it is MapPin.OfAlbum && it.album.id in ids } }
         val framed = here?.takeIf { it.isNotEmpty() } ?: pins
@@ -671,9 +726,11 @@ public class AppModel(
     public fun navigate(change: (BackStack) -> BackStack) {
         val leaving = _state.value.screen
         _state.update {
+            // The query and the range stay. Coming back from an album finds the list as it was
+            // left; picking a range again after every album looked at was the cost of clearing it.
             it.copy(
-                stack = change(it.stack), query = "", preview = null, videoPath = null, livePair = null,
-                map = it.map?.copy(sheet = null),
+                stack = change(it.stack), preview = null, videoPath = null, livePair = null,
+                calendar = null, map = it.map?.copy(sheet = null),
             )
         }
         // Leaving the album abandons the prefetch queue; staying inside it (grid ↔ photo)
@@ -768,9 +825,15 @@ public class AppModel(
                 else -> {
                     // Built from the cached tree, not re-queried per level: every level is on the
                     // list now, and the tree is re-read whenever the catalog changes anyway.
-                    val matches = current.query.takeIf { it.isNotBlank() }
-                        ?.let { query -> catalog.search(query).mapTo(mutableSetOf()) { it.id } }
-                    val rows = albumRows(albumTree, screen.parentAlbum(), current.sort, current.summaries, matches)
+                    //
+                    // A range's matches carry their counts, which every line then reads in place of
+                    // the whole album's; a search's are names alone. Neither narrows any list but
+                    // the album list's -- see [AppUi.filtering].
+                    val counted = current.range?.takeIf { current.filtering }?.let(catalog::photosIn)
+                    val matches = counted?.keys
+                        ?: current.query.takeIf { current.filtering && it.isNotBlank() }
+                            ?.let { query -> catalog.search(query).mapTo(mutableSetOf()) { it.id } }
+                    val rows = albumRows(albumTree, screen.parentAlbum(), current.sort, current.summaries, matches, counted)
                     current.copy(
                         rows = rows,
                         matched = matches?.let { ids -> rows.count { it is ListEntry.Row && it.album.id in ids } } ?: 0,

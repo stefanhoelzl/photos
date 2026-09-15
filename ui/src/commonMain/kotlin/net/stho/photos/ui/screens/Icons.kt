@@ -3,8 +3,10 @@ package net.stho.photos.ui.screens
 import androidx.compose.material.icons.Icons as MaterialIcons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
@@ -31,6 +33,10 @@ internal object Icons {
     val gear: ImageVector = MaterialIcons.Filled.Settings
     val sort: ImageVector = MaterialIcons.Filled.SwapVert
     val search: ImageVector = MaterialIcons.Filled.Search
+
+    /** The date filter: the field's calendar, and the ✕ that clears a range or closes the sheet. */
+    val calendar: ImageVector = MaterialIcons.Filled.CalendarMonth
+    val close: ImageVector = MaterialIcons.Filled.Close
 
     /** F's representation toggle. */
     val map: ImageVector = MaterialIcons.Filled.Map

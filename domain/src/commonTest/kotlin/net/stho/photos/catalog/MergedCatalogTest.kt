@@ -309,6 +309,56 @@ class MergedCatalogTest {
         assertTrue(built.reader.placedAlbums().isEmpty())
     }
 
+    // ------------------------------------------------------------------------ the date filter
+
+    /**
+     * The calendar's numbers: photos per UTC day of `taken_at`, which is the camera's own day (§3).
+     * Floored, so a photo from the last second of 1969 is on day −1 rather than day 0.
+     */
+    @Test
+    fun photosAreCountedPerDayAndAnUndatedOneOnNone() {
+        val built = build(
+            listOf(
+                album(
+                    "Island",
+                    photos = listOf(
+                        photo("a.jpg", takenAt = Instant.parse("2024-03-20T00:00:00Z")),
+                        photo("b.jpg", takenAt = Instant.parse("2024-03-20T23:59:59Z")),
+                        photo("c.jpg", takenAt = Instant.parse("2024-03-21T00:00:00Z")),
+                        photo("d.jpg", takenAt = null),
+                    ),
+                ),
+                album("Ahnen", photos = listOf(photo("e.jpg", takenAt = Instant.parse("1969-12-31T23:59:59Z")))),
+            ),
+        )
+
+        val twentieth = Instant.parse("2024-03-20T00:00:00Z").epochSeconds / 86_400
+        assertEquals(mapOf(-1L to 1, twentieth to 2, twentieth + 1 to 1), built.reader.photosPerDay())
+    }
+
+    /** A range's matches: each album's photos from its first instant up to, not including, its end. */
+    @Test
+    fun photosTakenBetweenCountsEachAlbumAndLeavesOutAnAlbumWithNone() {
+        val island = album(
+            "Island",
+            photos = listOf(
+                photo("a.jpg", takenAt = Instant.parse("2024-03-12T00:00:00Z")),
+                photo("b.jpg", takenAt = Instant.parse("2024-03-20T23:59:59Z")),
+                photo("c.jpg", takenAt = Instant.parse("2024-03-21T00:00:00Z")),
+            ),
+        )
+        val before = album(
+            "Vorher",
+            photos = listOf(photo("d.jpg", takenAt = Instant.parse("2024-03-11T23:59:59Z")), photo("e.jpg", takenAt = null)),
+        )
+        val built = build(listOf(island, before))
+
+        assertEquals(
+            mapOf(island.info.id to 2),
+            built.reader.photosTakenBetween(Instant.parse("2024-03-12T00:00:00Z"), Instant.parse("2024-03-21T00:00:00Z")),
+        )
+    }
+
     // --------------------------------------------------------------------------------- search
 
     @Test
