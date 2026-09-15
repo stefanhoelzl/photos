@@ -31,7 +31,7 @@ download queue and no screen to keep in order.
 | `:tests:cli` | the end-to-end suite: declares a library and a zone, runs the *shipped* binary, asserts both |
 | `:tests:app` | its counterpart for the app: declares a zone — shards plus real media blobs — starts the real composition root, and asserts what the model reports and what lands on disk |
 | `:tests:zone` | the zone builder both app suites share — shards, thumbnail packs and real media blobs — with nothing Linux-only in it, so a Mac can run it |
-| `:tests:ios` | the app scenarios again, on a Mac, against the signed Debug app on a simulator, driven through its control server; `:tests:ios:e2e`, and it fails rather than skips without a simulator |
+| `:tests:ios` | the app scenarios again, on a Mac, against the signed Debug app on a simulator, driven through its control server — with `app/ios/PhotosUITests` for what HTTP cannot do (tapping a system alert, seeding an edited Live Photo); `:tests:ios:e2e`, and it fails rather than skips without a simulator |
 
 Not modules, and not Kotlin:
 
@@ -136,6 +136,15 @@ neither `PHOTOS_ENDPOINT`/`PHOTOS_PASSWORD` nor a `photos-cli login` has answere
 Linux build writes (`:tests:fixtures:fixtureMedia`), passed as `-Pphotos.fixtureMedia=<dir>`, and
 it fails rather than skips when anything it needs is missing. CI runs it on every pull request, in
 a macOS job that waits for the Linux job's media, and a failure blocks the merge like any other.
+
+Some of what the phone does cannot be asked for over HTTP: iOS confirms every deletion from the
+photo library with a system alert, and a Live Photo can only be *edited* through PhotoKit. For
+those the Xcode project carries a UI test target, `PhotosUITests`, which a scenario starts beside
+itself with `xcodebuild test-without-building` — `SystemAlerts` taps the buttons it is told to,
+`LivePhotoSeed` creates (and edits) a Live Photo in the simulator's library. So
+`Scripts/ios-sim.sh build` builds *for testing*: the same `Photos.app`, plus the test runner and
+the `.xctestrun` it is started from. The simulator's photo grant is written as the user's own
+choice, because the one `simctl privacy grant` records still makes iOS 26 prompt.
 
 `./gradlew :app:domain:iosSimulatorArm64Test` runs the app tier's suites against iOS's own
 SQLite; `:domain`'s run there too, which is what answers §3's question about the platform

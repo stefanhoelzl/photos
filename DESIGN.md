@@ -1737,7 +1737,7 @@ then keeps:
 | still | the edited full-size image when there is one, otherwise the original; `image_id` |
 | RAW or ProRAW | its rendered JPEG/HEIC only — the RAW is neither uploaded nor archived |
 | video | the original file in `video_id`, **no poster**: §7's pull archives `image_id` before `video_id`, so a poster would be archived in place of the video. The viewer shows the thumbnail until the laptop encodes it |
-| Live Photo | the still in `image_id` *and* `live_still_id` (one object), the MOV in `live_video_id`. The edited pair when edited — provided an edited pair keeps its content identifier, which is unverified; otherwise always the original pair |
+| Live Photo | the still in `image_id` *and* `live_still_id` (one object), the MOV in `live_video_id`. The edited pair when edited: an edit made through `PHLivePhotoEditingContext` re-renders both halves and they still pair — verified on a simulator, where the uploaded, inverted pair assembles in full |
 | iCloud-only | downloaded during preparation |
 
 **A row's filename is the camera's stem and the extension of the bytes sent** — `IMG_1234.heic`,
@@ -1962,14 +1962,20 @@ shows whether the overlay keeps up with the native map while panning.
 > `UploadTest`), and every reader skips an `uploading` shard. On a simulator `:tests:ios`'s
 > `UploadTest` uploads the device's own library through PhotoKit and a background `URLSession`,
 > and asserts the zone: an `uploaded` shard, a row per asset, every object at the size its row
-> names, and a seeded HEIC byte for byte. Still owed on a device: deleting from the library, which
-> iOS confirms through an alert no scenario can answer, and whether an edited Live Photo's pair
-> keeps its content identifier.
+> names, and a seeded HEIC byte for byte. Deleting from the library is driven there too, with iOS's
+> confirmation tapped by `PhotosUITests`' `SystemAlerts`: only once the album has landed, and only
+> the assets that went up. And §8's last open question is answered on the same simulator: a Live
+> Photo seeded and edited through `PHLivePhotoEditingContext` — still and video both re-rendered —
+> uploads as its edit and still assembles in full, against an unedited control.
 >
-> Two things the simulator taught. `simctl privacy grant photos` records a system-set grant that
-> iOS 26 still prompts for, so the harness rewrites it as the user's choice. And a still is
-> exported by resource, byte for byte: matching `PHImageManager`'s type identifier sent a HEIF
-> labelled `public.heif` through the render path, and it went up as a JPEG.
+> What the simulator taught. `simctl privacy grant photos` records a system-set grant that iOS 26
+> still prompts for, so the harness rewrites it as the user's choice. A still is exported by
+> resource, byte for byte: matching `PHImageManager`'s type identifier sent a HEIF labelled
+> `public.heif` through the render path, and it went up as a JPEG. And editing a Live Photo needs
+> the MOV's timed `com.apple.quicktime.still-image-time` track, which assembling one does not: the
+> fixture's generated MOV has none, so the seeder re-writes it as an iPhone would before editing —
+> without it the save fails with `PHPhotosErrorDomain` -1 and "invalid or missing image display
+> time".
 
 **H · systemd units** = D. Pull is not part of it: `sync` already pulls and claims
 phone-owned albums, so H is the units and nothing more.

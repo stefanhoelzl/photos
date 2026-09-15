@@ -41,7 +41,10 @@ LOG=build/ios-sim.log
 BUILD_LOG=build/ios-sim-build.log
 
 build() {
-  xcodebuild build \
+  # `build-for-testing` rather than `build`: the same Photos.app, plus the PhotosUITests runner and
+  # the .xctestrun that `xcodebuild test-without-building` starts it from -- the iOS suite's hands
+  # for what a scenario over HTTP cannot do (tap a system alert, seed an edited Live Photo).
+  xcodebuild build-for-testing \
     -project "$PROJECT" \
     -scheme "$SCHEME" \
     -destination "platform=iOS Simulator,name=$DEVICE" \
