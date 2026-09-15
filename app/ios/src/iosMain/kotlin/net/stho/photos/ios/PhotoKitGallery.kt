@@ -83,8 +83,9 @@ import platform.posix.memcpy
  * through `PHAssetResourceManager`, the edited full-size resource first. Network access is
  * allowed throughout, which is how an iCloud-only asset reaches the disk during preparation.
  *
- * Unverified, and deferred to a device: whether an *edited* Live Photo's still and MOV still carry
- * the content identifier that pairs them (§8).
+ * An *edited* Live Photo's full-size still and MOV still carry the content identifier that pairs
+ * them: `:tests:ios`' `UploadTest` edits one through `PHLivePhotoEditingContext`, uploads it through
+ * here, and the viewer assembles the uploaded pair in full (§8).
  */
 internal class PhotoKitGallery : Gallery {
 

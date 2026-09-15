@@ -6,6 +6,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.uuid.Uuid
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -87,7 +88,117 @@ class UploadTest {
         assertEquals(listOf("Landed"), state.albums().map { it.string("name") })
     }
 
+    /**
+     * §8's delete-from-gallery, answered as a person would: iOS confirms every deletion with an
+     * alert, which `SystemAlerts` taps. Only the assets this scenario added are uploaded, so the
+     * library's own photos are what proves the picker read the library again afterwards.
+     */
+    @Test
+    fun deletingFromTheLibraryHappensOnceTheAlbumHasLanded() = iosScenario("upload-delete") {
+        install()
+        allowPhotos()
+        // Before launch: xcodebuild installs the app it tests. It answers the deletion alert, and the
+        // full-access alert the simulator can raise again mid-upload.
+        val tapper = startUiTest(
+            "SystemAlerts/testTapAlerts",
+            mapOf("PHOTOS_TAP" to "Allow Full Access,Delete"),
+            ready = "PHOTOS_TAPPER_READY",
+        )
+        launch(); setUp()
+
+        val before = libraryIds()
+        post("/nav?to=back")
+        addToLibrary(STILL, VIDEO)
+        post("/upload/open")
+        val added = awaitState("the two added assets in the picker") { state ->
+            state.picker().assets().count { it.string("id") !in before } == 2
+        }.picker().assets().map { it.string("id") }.filterNot { it in before }
+
+        post("/upload/select?ids=${added.joinToString(",").encoded()}")
+        post("/upload/name?name=${NAME.encoded()}&delete=true")
+        val albumId = confirmAndLand()
+        assertTrue("PHOTOS_TAPPED Delete" in tapper.awaitSuccess(), "iOS asked, and Delete was tapped")
+
+        assertEquals(AlbumState.UPLOADED, assertNotNull(zone.shard(albumId)).info.state, "the album landed first")
+        post("/upload/open")
+        awaitState("the library without the uploaded assets") { state ->
+            val ids = state.picker().assets().map { it.string("id") }.toSet()
+            ids.containsAll(before) && added.none { it in ids }
+        }
+        screenshot("upload-delete")
+    }
+
+    /**
+     * §8's open question: does an *edited* Live Photo's full-size still and paired video still carry
+     * the content identifier that pairs them? Seeded and edited through PhotoKit, uploaded through the
+     * app, and handed back to `PHLivePhoto` by the viewer, which must assemble it in full.
+     */
+    @Test
+    fun anEditedLivePhotoStillPairsOnceUploaded() = livePhotoPairs("upload-live-edited", edited = true)
+
+    /** The control: without it, a failure of the edited case could not be told apart from the harness. */
+    @Test
+    fun anUneditedLivePhotoPairsOnceUploaded() = livePhotoPairs("upload-live-unedited", edited = false)
+
+    private fun livePhotoPairs(label: String, edited: Boolean) = iosScenario(label) {
+        install()
+        allowPhotos()
+        val seeded = startUiTest(
+            "LivePhotoSeed/testSeedLivePhoto",
+            mapOf(
+                "PHOTOS_LIVE_STILL" to fixture(LIVE_STILL).absolutePath,
+                "PHOTOS_LIVE_VIDEO" to fixture(LIVE_VIDEO).absolutePath,
+                "PHOTOS_LIVE_IDENTIFIER" to LIVE_IDENTIFIER,
+                "PHOTOS_LIVE_EDIT" to if (edited) "yes" else "no",
+            ),
+        ).awaitSuccess()
+        val assetId = Regex("PHOTOS_SEEDED (\\S+)").find(seeded)?.groupValues?.get(1)
+            ?: error("the seeder named no asset")
+        launch(); setUp()
+
+        post("/upload/open")
+        val asset = awaitState("the seeded Live Photo in the picker") { state ->
+            state.picker().assets().any { it.string("id") == assetId }
+        }.picker().assets().single { it.string("id") == assetId }
+        assertEquals("LIVE_PHOTO", asset.string("type"))
+        post("/upload/select?ids=${assetId.encoded()}")
+        post("/upload/name?name=${NAME.encoded()}")
+        val albumId = confirmAndLand()
+
+        val row = assertNotNull(zone.shard(albumId)).photos.single()
+        assertEquals(MediaType.LIVE_PHOTO, row.mediaType)
+        assertNotNull(row.liveVideoId, "the paired video went up with the still")
+
+        awaitState("the album in the list") { state -> state.albums().any { it.string("id") == albumId.toString() } }
+        post("/nav?to=album/$albumId")
+        post("/nav?to=photo/$albumId/0")
+        awaitState("both halves of the uploaded Live Photo on disk") { it["livePair"] !is JsonNull && it["livePair"] != null }
+        awaitState("PHLivePhoto to assemble the uploaded pair in full") { it.nullableString("livePhoto") == "full" }
+        screenshot(label)
+    }
+
+    /** The library as the picker lists it, once it has read it. */
+    private suspend fun IosScenario.libraryIds(): Set<String> {
+        post("/upload/open")
+        return awaitState("the library in the picker") { state ->
+            state.picker().assets().isNotEmpty()
+        }.picker().assets().map { it.string("id") }.toSet()
+    }
+
+    /** Upload, and wait for the album to land — failing with the upload's own reason if it does not. */
+    private suspend fun IosScenario.confirmAndLand(): Uuid {
+        val albumId = Uuid.parse(post("/upload/confirm").uploads().last().string("album"))
+        awaitState("the upload to land") { state ->
+            val upload = state.uploads().single { it.string("album") == albumId.toString() }
+            check(upload.string("stage") != "Failed") { "the upload failed: ${upload.nullableString("failure")}" }
+            upload.string("stage") == "Done"
+        }
+        return albumId
+    }
+
     private fun JsonObject.picker(): JsonObject = getValue("picker").jsonObject
+
+    private fun JsonObject.assets(): List<JsonObject> = getValue("assets").jsonArray.map { it.jsonObject }
 
     private fun JsonObject.uploads(): List<JsonObject> = getValue("uploads").jsonArray.map { it.jsonObject }
 
@@ -95,5 +206,10 @@ class UploadTest {
         const val NAME = "From the phone"
         const val STILL = "photo.heic"
         const val VIDEO = "video.mp4"
+        const val LIVE_STILL = "live-still.heic"
+        const val LIVE_VIDEO = "live.mov"
+
+        /** `FixtureMedia.LIVE_IDENTIFIER`, spelled again: this suite cannot link that linuxX64 module. */
+        const val LIVE_IDENTIFIER = "5E1C9A2B-7D40-4F3E-9B61-2A8C0D4E7F10"
     }
 }

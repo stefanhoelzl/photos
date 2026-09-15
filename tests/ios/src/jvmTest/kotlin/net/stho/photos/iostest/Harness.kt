@@ -81,13 +81,40 @@ internal class IosScenario(
      * Full photo-library access for the installed app, as a person tapping Allow would give it
      * (§8). Granted after [install], which is what resets it.
      */
-    fun allowPhotos() = simulator.grantPhotos()
+    fun allowPhotos() {
+        // The UI test runner reads and writes the library too, when it seeds a Live Photo.
+        simulator.grantPhotos(BUNDLE_ID, UI_TEST_RUNNER)
+    }
 
     /**
      * Fixture media into the simulator's own photo library — the phone's gallery for an upload
      * scenario. The library is the device's, not the app's, so a reinstall does not empty it.
      */
     fun addToLibrary(vararg fixtures: String) = simulator.addMedia(fixtures.map { File(media, it) })
+
+    /** A fixture file, for a UI test that reads it from the host. */
+    fun fixture(name: String): File = File(media, name)
+
+    private val uiTests = mutableListOf<UiTest>()
+
+    /**
+     * One test from `PhotosUITests`, started beside the scenario — the suite's hands for what a
+     * scenario over HTTP cannot do: tap a system alert, seed the library through PhotoKit.
+     *
+     * Started with `xcodebuild test-without-building`, which installs the app it tests over the one
+     * [install] put there, so a UI test is started *before* [launch]. [environment] reaches the test
+     * as `TEST_RUNNER_*`, the one prefix xcodebuild passes on. Returns once [ready] has been printed,
+     * or straight away without one.
+     */
+    fun startUiTest(test: String, environment: Map<String, String> = emptyMap(), ready: String? = null): UiTest {
+        val products = requireNotNull(app.parentFile?.parentFile) { "no products directory above $app" }
+        val xctestrun = products.listFiles { file -> file.name.endsWith(".xctestrun") }?.singleOrNull()
+            ?: error("no .xctestrun in $products -- Scripts/ios-sim.sh build builds the app for testing")
+        val log = File(scratch, "${test.replace('/', '-')}.log")
+        return UiTest.start(xctestrun, simulator.device, "PhotosUITests/$test", environment, log)
+            .also { uiTests += it }
+            .also { test -> ready?.let(test::awaitLine) }
+    }
 
     /**
      * A fresh port for every launch, not one per scenario. A terminated app can still hold its
@@ -185,7 +212,75 @@ internal class IosScenario(
     }
 
     override fun close() {
+        uiTests.forEach(UiTest::close)
         runCatching { simulator.terminate() }
+    }
+}
+
+/** The runner app Xcode wraps `PhotosUITests` in, which is what asks PhotoKit for access. */
+internal const val UI_TEST_RUNNER: String = "net.stho.photos.uitests.xctrunner"
+
+internal const val BUNDLE_ID: String = "net.stho.photos"
+
+/** An XCUITest running in its own `xcodebuild`, its output kept in a log beside the scenario. */
+internal class UiTest private constructor(private val process: Process, private val log: File) : AutoCloseable {
+    private val output = StringBuffer()
+    private val reader = Thread {
+        process.inputStream.bufferedReader().forEachLine { line ->
+            output.append(line).append('\n')
+            log.appendText(line + "\n")
+        }
+    }.apply {
+        isDaemon = true
+        start()
+    }
+
+    /** The first line holding [marker], waiting for the test to print it. */
+    fun awaitLine(marker: String, seconds: Long = 300): String {
+        val deadline = System.currentTimeMillis() + seconds * 1_000
+        while (System.currentTimeMillis() < deadline) {
+            output.lines().firstOrNull { marker in it }?.let { return it }
+            if (!process.isAlive) {
+                reader.join(5_000)
+                output.lines().firstOrNull { marker in it }?.let { return it }
+                error("the UI test ended before printing $marker; its log is $log\n${summary()}")
+            }
+            Thread.sleep(250)
+        }
+        error("no $marker from the UI test within ${seconds}s; its log is $log\n${summary()}")
+    }
+
+    /** Waits for the test to end, requires that it passed, and returns everything it printed. */
+    fun awaitSuccess(seconds: Long = 600): String {
+        check(process.waitFor(seconds, java.util.concurrent.TimeUnit.SECONDS)) {
+            "the UI test did not finish within ${seconds}s; its log is $log"
+        }
+        reader.join(5_000)
+        check(process.exitValue() == 0) { "the UI test failed (exit ${process.exitValue()}); its log is $log\n${summary()}" }
+        return output.toString()
+    }
+
+    private fun summary(): String =
+        output.lines().filter { "PHOTOS_" in it || "error" in it || "failed" in it }.takeLast(20).joinToString("\n")
+
+    override fun close() {
+        if (process.isAlive) process.destroy()
+    }
+
+    companion object {
+        fun start(xctestrun: File, device: String, test: String, environment: Map<String, String>, log: File): UiTest {
+            log.parentFile.mkdirs()
+            val process = ProcessBuilder(
+                "xcodebuild", "test-without-building",
+                "-xctestrun", xctestrun.absolutePath,
+                "-destination", "platform=iOS Simulator,name=$device",
+                "-only-testing:$test",
+            )
+                .redirectErrorStream(true)
+                .apply { environment().putAll(environment.mapKeys { (name, _) -> "TEST_RUNNER_$name" }) }
+                .start()
+            return UiTest(process, log)
+        }
     }
 }
 
@@ -206,7 +301,7 @@ internal class Control(private val base: String) {
 }
 
 /** `xcrun simctl`, one device, and every failure loud. */
-internal class Simulator(private val device: String) {
+internal class Simulator(val device: String) {
 
     fun boot() {
         // Booting a booted device exits non-zero; `bootstatus -b` is what actually waits.
@@ -229,18 +324,22 @@ internal class Simulator(private val device: String) {
      * runner: the same row rewritten as the user's choice at the current version (`auth_reason` 2,
      * `auth_version` 2), with `tccd` restarted to drop its cache, answers Full with no alert.
      */
-    fun grantPhotos() {
-        run("xcrun", "simctl", "privacy", device, "grant", "photos", BUNDLE_ID)
+    fun grantPhotos(vararg bundles: String) {
         // The simulator's HOME is its data directory on the host, where TCC.db lives.
         val database = File(run("xcrun", "simctl", "getenv", device, "HOME").trim(), "Library/TCC/TCC.db")
-        check(database.isFile) { "no TCC database at $database" }
-        run(
-            "sqlite3", database.absolutePath,
-            "update access set auth_reason = 2, auth_version = 2 " +
-                "where client = '$BUNDLE_ID' and service = 'kTCCServicePhotos';",
-        )
-        run("xcrun", "simctl", "spawn", device, "launchctl", "kill", "TERM", "user/foreground/com.apple.tccd")
-        // launchd brings tccd back on the next request; give it a moment to be there.
+        for (bundle in bundles) {
+            run("xcrun", "simctl", "privacy", device, "grant", "photos", bundle)
+            check(database.isFile) { "no TCC database at $database" }
+            run(
+                "sqlite3", database.absolutePath,
+                "update access set auth_reason = 2, auth_version = 2 " +
+                    "where client = '$bundle' and service = 'kTCCServicePhotos';",
+            )
+        }
+        // Once, after every row: a second kill straight after the first finds no tccd to stop and
+        // exits 3 — measured, as a scenario failing before it had done anything. launchd brings tccd
+        // back on the next request, so an already-stopped one is not a failure.
+        run("xcrun", "simctl", "spawn", device, "launchctl", "kill", "TERM", "user/foreground/com.apple.tccd", allowFailure = true)
         Thread.sleep(2_000)
     }
 
@@ -271,9 +370,6 @@ internal class Simulator(private val device: String) {
         return output
     }
 
-    private companion object {
-        const val BUNDLE_ID = "net.stho.photos"
-    }
 }
 
 internal fun JsonObject.string(name: String): String = getValue(name).jsonPrimitive.content

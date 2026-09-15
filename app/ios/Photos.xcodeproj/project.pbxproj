@@ -9,17 +9,39 @@
 /* Begin PBXBuildFile section */
 		A1000101 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000001 /* App.swift */; };
 		A1000102 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000002 /* Assets.xcassets */; };
+		A1001101 /* SystemAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1001001 /* SystemAlerts.swift */; };
+		A1001102 /* LivePhotoSeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1001002 /* LivePhotoSeed.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A1001901 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A1000800 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A1000400;
+			remoteInfo = Photos;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		A1000001 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		A1000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A1000003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1000004 /* Photos.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Photos.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1001001 /* SystemAlerts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAlerts.swift; sourceTree = "<group>"; };
+		A1001002 /* LivePhotoSeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePhotoSeed.swift; sourceTree = "<group>"; };
+		A1001004 /* PhotosUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PhotosUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A1000200 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1001200 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -33,6 +55,7 @@
 			isa = PBXGroup;
 			children = (
 				A1000301 /* Photos */,
+				A1001301 /* PhotosUITests */,
 				A1000302 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -47,10 +70,20 @@
 			path = Photos;
 			sourceTree = "<group>";
 		};
+		A1001301 /* PhotosUITests */ = {
+			isa = PBXGroup;
+			children = (
+				A1001001 /* SystemAlerts.swift */,
+				A1001002 /* LivePhotoSeed.swift */,
+			);
+			path = PhotosUITests;
+			sourceTree = "<group>";
+		};
 		A1000302 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				A1000004 /* Photos.app */,
+				A1001004 /* PhotosUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -77,6 +110,26 @@
 			productReference = A1000004 /* Photos.app */;
 			productType = "com.apple.product-type.application";
 		};
+		/* The iOS suite's hands (tests/ios): what a JVM scenario driving the app over HTTP cannot
+		   do itself — tap a system alert, and put an edited Live Photo into the library. Never run
+		   on its own; each test is started by a scenario with `xcodebuild test-without-building`. */
+		A1001400 /* PhotosUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1001700 /* Build configuration list for PBXNativeTarget "PhotosUITests" */;
+			buildPhases = (
+				A1001600 /* Sources */,
+				A1001200 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A1001900 /* PBXTargetDependency */,
+			);
+			name = PhotosUITests;
+			productName = PhotosUITests;
+			productReference = A1001004 /* PhotosUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -89,6 +142,10 @@
 				TargetAttributes = {
 					A1000400 = {
 						CreatedOnToolsVersion = 16.0;
+					};
+					A1001400 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = A1000400;
 					};
 				};
 			};
@@ -106,6 +163,7 @@
 			projectRoot = "";
 			targets = (
 				A1000400 /* Photos */,
+				A1001400 /* PhotosUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -164,7 +222,24 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A1001600 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1001101 /* SystemAlerts.swift in Sources */,
+				A1001102 /* LivePhotoSeed.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A1001900 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A1000400 /* Photos */;
+			targetProxy = A1001901 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A1000901 /* Debug */ = {
@@ -262,6 +337,9 @@
 					QuartzCore,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = net.stho.photos;
+				/* Not `Photos`: that is Apple's framework, and PhotosUITests is built against this
+				   target, so `import Photos` there found the app's own module and no PHAsset. */
+				PRODUCT_MODULE_NAME = PhotosShell;
 				PRODUCT_NAME = Photos;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -314,9 +392,46 @@
 					QuartzCore,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = net.stho.photos;
+				/* Not `Photos`: that is Apple's framework, and PhotosUITests is built against this
+				   target, so `import Photos` there found the app's own module and no PHAsset. */
+				PRODUCT_MODULE_NAME = PhotosShell;
 				PRODUCT_NAME = Photos;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		A1001701 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				/* The seeder reads and writes the photo library from the test runner. */
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Seeds the simulator's library for the iOS scenarios.";
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = net.stho.photos.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Photos;
+			};
+			name = Debug;
+		};
+		A1001702 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				/* The seeder reads and writes the photo library from the test runner. */
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Seeds the simulator's library for the iOS scenarios.";
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = net.stho.photos.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Photos;
 			};
 			name = Release;
 		};
@@ -337,6 +452,15 @@
 			buildConfigurations = (
 				A1000701 /* Debug */,
 				A1000702 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1001700 /* Build configuration list for PBXNativeTarget "PhotosUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1001701 /* Debug */,
+				A1001702 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
