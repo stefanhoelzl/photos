@@ -167,7 +167,17 @@ public data class DuplicateName(public val name: String, public val albums: List
  */
 public class CatalogReader(public val path: Path, drivers: SqlDrivers) : AutoCloseable {
 
-    private val driver = path.openMergedDriver(drivers)
+    /**
+     * Opened as the file it finds, never as `creating`.
+     *
+     * Creating means "run the schema if `user_version` is still 0" — which is exactly what the
+     * file reads as while the writer is still creating it. A reader that did so needed the write
+     * lock the writer held, and a first run's album list failed with "database is locked" (measured
+     * on iOS). The writer alone creates this database; a reader that arrives before it has finished
+     * gets "no such file" or "no such table", which every caller already reads as "nothing yet".
+     * WAL is still named, because it persists in the file and naming anything else would change it.
+     */
+    private val driver = path.openDriver(drivers, MergedDatabase.Schema, creating = false, journal = Journal.WAL)
     private val queries: MergedQueries =
         MergedDatabase(driver, mergedAlbumAdapter, mergedPhotoAdapter).mergedQueries
 
