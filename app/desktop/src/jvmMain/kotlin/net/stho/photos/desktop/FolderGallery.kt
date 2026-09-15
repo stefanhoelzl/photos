@@ -66,13 +66,19 @@ internal class FolderGallery(private val root: File, private val imaging: FfmIma
         )
     }
 
-    /** No confirmation to show here: the name dialog's checkbox was the one this stand-in has. */
-    override suspend fun delete(ids: List<String>): Boolean = withContext(Dispatchers.IO) {
+    /**
+     * No confirmation to show here: the name dialog's checkbox was the one this stand-in has.
+     *
+     * The album's folder goes once nothing is left in it — PhotoKit's rule, checked afterwards here
+     * because nothing can refuse in between.
+     */
+    override suspend fun delete(ids: List<String>, album: String?): Boolean = withContext(Dispatchers.IO) {
         for (id in ids) {
             val file = File(root, id)
             pairOf(file)?.delete()
             file.delete()
         }
+        album?.let { File(root, it) }?.takeIf { it.isDirectory && it.list().isNullOrEmpty() }?.delete()
         true
     }
 

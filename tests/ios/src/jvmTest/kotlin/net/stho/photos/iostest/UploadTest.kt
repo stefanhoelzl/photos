@@ -129,6 +129,53 @@ class UploadTest {
     }
 
     /**
+     * §8's delete-from-gallery for an album chosen whole: its photos and the album go in one PhotoKit
+     * change, so iOS asks once and `SystemAlerts` taps that one alert. `AlbumSeed` makes the album,
+     * since `simctl` can add photos but not group them.
+     */
+    @Test
+    fun deletingAWholeGalleryAlbumRemovesTheAlbumToo() = iosScenario("upload-delete-album") {
+        install()
+        allowPhotos()
+        val seeded = startUiTest(
+            "AlbumSeed/testSeedAlbum",
+            mapOf(
+                "PHOTOS_ALBUM_NAME" to GALLERY_ALBUM,
+                "PHOTOS_ALBUM_FILES" to listOf(STILL, VIDEO).joinToString(",") { fixture(it).absolutePath },
+            ),
+        ).awaitSuccess()
+        val (galleryAlbum, assetList) = Regex("PHOTOS_SEEDED_ALBUM (\\S+) (\\S+)").find(seeded)?.destructured
+            ?: error("the seeder named no album")
+        val assetIds = assetList.split(',')
+        val tapper = startUiTest(
+            "SystemAlerts/testTapAlerts",
+            mapOf("PHOTOS_TAP" to "Allow Full Access,Delete"),
+            ready = "PHOTOS_TAPPER_READY",
+        )
+        launch(); setUp()
+
+        post("/upload/open")
+        awaitState("the seeded album in the picker") { state -> state.picker().albums().any { it.string("id") == galleryAlbum } }
+        val naming = post("/upload/album?id=${galleryAlbum.encoded()}").picker().getValue("naming").jsonObject
+        assertEquals(GALLERY_ALBUM, naming.string("name"), "the name is prefilled from the gallery album")
+        assertEquals(galleryAlbum, naming.string("album"))
+        post("/upload/name?delete=true")
+        val albumId = confirmAndLand()
+        assertTrue("PHOTOS_TAPPED Delete" in tapper.awaitSuccess(), "iOS asked, and Delete was tapped")
+
+        assertEquals(assetIds.size, assertNotNull(zone.shard(albumId)).photos.size, "the album landed first")
+        // Opening the picker empties it until the library has been read, and an empty album list would
+        // pass any "not there" check. The simulator's own photos mark the read done: albums and assets
+        // arrive in one update, and the deletion finished before the upload counted as done.
+        post("/upload/open")
+        val picker = awaitState("the library read again") { state -> state.picker().assets().isNotEmpty() }.picker()
+        assertTrue(picker.albums().none { it.string("id") == galleryAlbum }, "the gallery album was deleted")
+        assertTrue(picker.albums().none { it.string("name") == GALLERY_ALBUM }, "no album by that name is left")
+        assertTrue(picker.assets().none { it.string("id") in assetIds }, "its photos were deleted with it")
+        screenshot("upload-delete-album")
+    }
+
+    /**
      * §8's open question: does an *edited* Live Photo's full-size still and paired video still carry
      * the content identifier that pairs them? Seeded and edited through PhotoKit, uploaded through the
      * app, and handed back to `PHLivePhoto` by the viewer, which must assemble it in full.
@@ -204,6 +251,7 @@ class UploadTest {
 
     private companion object {
         const val NAME = "From the phone"
+        const val GALLERY_ALBUM = "Seeded album"
         const val STILL = "photo.heic"
         const val VIDEO = "video.mp4"
         const val LIVE_STILL = "live-still.heic"

@@ -34,6 +34,7 @@ import platform.Photos.PHAccessLevelReadWrite
 import platform.Photos.PHAsset
 import platform.Photos.PHAssetChangeRequest
 import platform.Photos.PHAssetCollection
+import platform.Photos.PHAssetCollectionChangeRequest
 import platform.Photos.PHAssetCollectionSubtypeAny
 import platform.Photos.PHAssetCollectionTypeAlbum
 import platform.Photos.PHAssetMediaSubtypePhotoLive
@@ -52,6 +53,7 @@ import platform.Photos.PHAuthorizationStatus
 import platform.Photos.PHAuthorizationStatusAuthorized
 import platform.Photos.PHAuthorizationStatusLimited
 import platform.Photos.PHAuthorizationStatusNotDetermined
+import platform.Photos.PHCollectionEditOperationDelete
 import platform.Photos.PHFetchOptions
 import platform.Photos.PHFetchResult
 import platform.Photos.PHImageContentMode
@@ -175,12 +177,31 @@ internal class PhotoKitGallery : Gallery {
         )
     }
 
-    /** iOS shows its own confirmation; an app cannot delete library assets silently (§8). */
-    override suspend fun delete(ids: List<String>): Boolean = suspendCancellableCoroutine { continuation ->
+    /**
+     * iOS shows its own confirmation; an app cannot delete library assets silently (§8).
+     *
+     * The album is decided before the change rather than re-counted after it, so the assets and the
+     * album go in one change and iOS asks once: refused, both stay. An album synced from a computer
+     * or shared cannot be deleted by an app, and is left without a word.
+     */
+    override suspend fun delete(ids: List<String>, album: String?): Boolean = suspendCancellableCoroutine { continuation ->
         val assets = PHAsset.fetchAssetsWithLocalIdentifiers(ids, null)
+        val emptied = album
+            ?.let { PHAssetCollection.fetchAssetCollectionsWithLocalIdentifiers(listOf(it), null) }
+            ?.takeIf { it.emptiedBy(ids.toSet()) }
         PHPhotoLibrary.sharedPhotoLibrary().performChanges(
-            { PHAssetChangeRequest.deleteAssets(assets) },
+            {
+                PHAssetChangeRequest.deleteAssets(assets)
+                emptied?.let(PHAssetCollectionChangeRequest::deleteAssetCollections)
+            },
         ) { success, _ -> if (continuation.isActive) continuation.resume(success) }
+    }
+
+    /** Whether this one-album fetch names a deletable album holding nothing besides [ids]. */
+    private fun PHFetchResult.emptiedBy(ids: Set<String>): Boolean {
+        val collection = firstObject as? PHAssetCollection ?: return false
+        if (!collection.canPerformEditOperation(PHCollectionEditOperationDelete)) return false
+        return PHAsset.fetchAssetsInAssetCollection(collection, null).items<PHAsset>().all { it.localIdentifier in ids }
     }
 
     override fun openSettings() {

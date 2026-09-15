@@ -374,7 +374,15 @@ private fun NameDialog(
                 ) {
                     Checkbox(checked = naming.deleteFromGallery, onCheckedChange = onDelete)
                     Column(Modifier.padding(top = 12.dp)) {
-                        Text("Delete them from this device after upload", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
+                        Text(
+                            if (naming.galleryAlbum != null) {
+                                "Delete the album and its photos from this device after upload"
+                            } else {
+                                "Delete them from this device after upload"
+                            },
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
                         // §8's accepted risk, said where it is accepted.
                         Text(
                             "You will be asked to confirm. Until the laptop syncs, the storage zone holds the only copy.",

@@ -141,7 +141,8 @@ Some of what the phone does cannot be asked for over HTTP: iOS confirms every de
 photo library with a system alert, and a Live Photo can only be *edited* through PhotoKit. For
 those the Xcode project carries a UI test target, `PhotosUITests`, which a scenario starts beside
 itself with `xcodebuild test-without-building` — `SystemAlerts` taps the buttons it is told to,
-`LivePhotoSeed` creates (and edits) a Live Photo in the simulator's library. So
+`LivePhotoSeed` creates (and edits) a Live Photo in the simulator's library, `AlbumSeed` an album
+of fixture photos. So
 `Scripts/ios-sim.sh build` builds *for testing*: the same `Photos.app`, plus the test runner and
 the `.xctestrun` it is started from. The simulator's photo grant is written as the user's own
 choice, because the one `simctl privacy grant` records still makes iOS 26 prompt.

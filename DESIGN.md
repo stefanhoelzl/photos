@@ -1771,7 +1771,8 @@ upload icon               on the album list or a container, never inside an albu
   → write the shard       at `uploading`, naming every object
   → background upload     every PUT pre-signed; each object read back by HEAD
   → write the shard       at `uploaded`, If-Match
-  → delete from gallery   when asked
+  → delete from gallery   when asked: the photos, and a gallery album chosen whole
+                          once it holds nothing else
 ```
 
 **No prompt appears during the upload flow.** The password was read from the Keychain when the
@@ -1887,6 +1888,16 @@ silently, no prompt.
 own deletion confirmation — an app cannot delete library assets silently — so there are
 necessarily two confirmations. Deletion runs only after the uploaded objects are read back and
 verified.
+
+**A gallery album chosen whole goes with its photos** — the same checkbox, worded "Delete the album
+and its photos" when an album was chosen. It goes only when it holds nothing besides the uploaded
+assets: a photo added to it after it was chosen keeps its album, and nothing that did not go up is
+touched. The album is decided before the change, and the assets and the album are deleted in *one*
+PhotoKit change, so iOS still asks once and a refusal keeps both. An album an app may not delete —
+synced from a computer, or shared — is left without a word. The gallery album's id is part of the
+upload's persisted request, so a resumed upload deletes it too; a request written before this
+carries none and deletes the photos alone. On the desktop stand-in the album's folder goes once it
+is empty.
 
 > **Accepted risk.** Until the hourly laptop pull runs, the bucket copy is the *only* copy, and
 > bunny.net has no versioning or undelete. Ticking that box leaves a single unversioned copy for

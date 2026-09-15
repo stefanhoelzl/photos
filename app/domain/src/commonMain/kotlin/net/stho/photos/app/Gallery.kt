@@ -36,8 +36,14 @@ public interface Gallery {
      */
     public suspend fun export(asset: GalleryAsset, directory: Path): ExportedAsset
 
-    /** Removes these assets from the library. The platform asks first; false when refused. */
-    public suspend fun delete(ids: List<String>): Boolean
+    /**
+     * Removes these assets from the library. The platform asks first; false when refused.
+     *
+     * [album] is the gallery album they were chosen as, null for loose photos. It goes too, but only
+     * when it holds nothing besides [ids] and the platform lets it be deleted: a photo added to it
+     * since keeps its album, and deleting an album never takes a photo that was not uploaded (§8).
+     */
+    public suspend fun delete(ids: List<String>, album: String?): Boolean
 
     /** Opens the system settings where library access is granted. */
     public fun openSettings()

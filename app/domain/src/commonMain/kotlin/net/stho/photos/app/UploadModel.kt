@@ -30,6 +30,8 @@ public data class PickerUi(
 public data class Naming(
     val name: String,
     val assetIds: List<String>,
+    /** The gallery album chosen whole, which deleting takes too; null for loose photos. */
+    val galleryAlbum: String? = null,
     /** Decided up front rather than asked afterwards (§8). */
     val deleteFromGallery: Boolean = false,
 ) {
@@ -97,7 +99,7 @@ public class UploadModel(
     /** A gallery album: the whole album, its name prefilled. */
     public suspend fun chooseAlbum(album: GalleryAlbum) {
         val ids = gallery.assets(album).map(GalleryAsset::id)
-        _picker.update { it.copy(naming = Naming(album.name, ids)) }
+        _picker.update { it.copy(naming = Naming(album.name, ids, galleryAlbum = album.id)) }
     }
 
     /** Loose photos, in the library's order rather than the order they were tapped. */
@@ -118,7 +120,9 @@ public class UploadModel(
         val naming = picker.naming ?: return null
         if (naming.name.isBlank() || naming.assetIds.isEmpty()) return null
         close()
-        return uploads.start(UploadRequest(naming.name.trim(), picker.parent, naming.assetIds, naming.deleteFromGallery))
+        return uploads.start(
+            UploadRequest(naming.name.trim(), picker.parent, naming.assetIds, naming.galleryAlbum, naming.deleteFromGallery),
+        )
     }
 
     public fun close() {
