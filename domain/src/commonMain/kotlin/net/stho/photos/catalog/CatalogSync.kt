@@ -43,8 +43,8 @@ public data class SyncReport(
     /** Names appearing more than once under one parent. Shown, never merged (§2). */
     public val duplicateNames: List<String> = emptyList(),
     /**
-     * LIST entries that were not shards: the `meta/` directory marker, or a key whose name is not
-     * a uuid.
+     * LIST entries that were not shards: the `meta/` or `addition/` directory marker, or a key whose
+     * name is not a uuid.
      */
     public val ignoredKeys: List<String> = emptyList(),
 ) {
@@ -67,10 +67,11 @@ public fun interface ShardProgress {
 }
 
 public data class RefreshResult(
+    /** Albums, and the additions the phone wrote to them (§8), told apart by [AlbumInfo.addsTo]. */
     public val shards: List<Shard>,
     public val report: SyncReport,
     /**
-     * Whether the LIST changed anything. `false` means the no-op run §7 promises: one request and
+     * Whether the LIST changed anything. `false` means the no-op run §7 promises: the two LISTs and
      * nothing else.
      */
     public val changed: Boolean,
@@ -137,9 +138,9 @@ public class CatalogSync(
     /**
      * LIST, diff, fetch, rebuild, record.
      *
-     * One LIST covers thumbnails and every derivative too: a pack is a blob referenced by
-     * [AlbumInfo.thumbsId], so nothing in the zone can change without some shard's ETag moving
-     * (§4).
+     * Two LISTs — `meta/` and `addition/` — cover thumbnails and every derivative too: a pack is a
+     * blob referenced by [AlbumInfo.thumbsId], so nothing in the zone can change without some
+     * shard's ETag moving (§4).
      */
     public suspend fun sync(
         /**
@@ -153,7 +154,7 @@ public class CatalogSync(
 
     /**
      * Everything [sync] does except the rebuild: LIST, diff, fetch, record ETags, and hand back
-     * every shard now on disk.
+     * every shard now on disk — albums and additions alike, told apart by [AlbumInfo.addsTo].
      *
      * The CLI stops here — it reconciles against the shards themselves and never wants a merged
      * database (§7). Splitting it out rather than giving the CLI its own loop is the point: one
@@ -163,7 +164,7 @@ public class CatalogSync(
     public suspend fun refresh(onProgress: ShardProgress = ShardProgress { _, _ -> }): RefreshResult =
         mutex.withLock { refreshing(onProgress) }
 
-    /** The single LIST, diffed against what is on disk. The whole sync plan (§4). */
+    /** The two LISTs, diffed against what is on disk. The whole sync plan (§4). */
     public suspend fun plan(): ShardDiff = mutex.withLock { planning() }
 
     private suspend fun syncing(alwaysRebuild: Boolean, onProgress: ShardProgress): SyncReport {
@@ -190,7 +191,7 @@ public class CatalogSync(
         // list -- the CLI passes nothing and is unaffected.
         onProgress.at(0, diff.changed.size)
         for ((albumId, etag) in diff.changed) {
-            bytesFetched += fetchShard(albumId)
+            bytesFetched += fetchShard(albumId, diff.keyOf(albumId))
             // Recorded only once the file has landed, so a crash leaves the state behind reality
             // rather than ahead of it — one re-download, not a missing album.
             state.record(albumId, etag)
@@ -223,23 +224,32 @@ public class CatalogSync(
         val changed = mutableMapOf<Uuid, ETag>()
         val ignoredKeys = mutableListOf<String>()
         val seen = mutableSetOf<Uuid>()
+        val additions = mutableSetOf<Uuid>()
 
-        s3.list(prefix = META_PREFIX).collect { listed ->
-            // bunny.net still materialises the `meta/` marker itself — one per prefix now that
-            // keys do not nest, but LIST returns it and it is not a shard (§2).
-            val albumId = if (listed.isDirectoryMarker) null else listed.key.asShardAlbumId()
-            // No ETag means nothing to diff against, so the shard cannot be trusted to be
-            // current. Skipped rather than guessed at.
-            val etag = listed.etag
-            if (albumId == null || etag == null) {
-                ignoredKeys += listed.key
-                return@collect
-            }
-            seen += albumId
-            if (known[albumId] != etag || !SystemFileSystem.exists(shardPath(albumId))) {
-                changed[albumId] = etag
+        suspend fun listing(prefix: String, idOf: (String) -> Uuid?, addition: Boolean) {
+            s3.list(prefix = prefix).collect { listed ->
+                // bunny.net still materialises each prefix's marker itself — one per prefix, since
+                // keys do not nest, but LIST returns it and it is not a shard (§2).
+                val albumId = if (listed.isDirectoryMarker) null else idOf(listed.key)
+                // No ETag means nothing to diff against, so the shard cannot be trusted to be
+                // current. Skipped rather than guessed at.
+                val etag = listed.etag
+                // An addition the laptop has just turned into an album of its own is written to
+                // `meta/` under the same id before its `addition/` key goes (§7), so for that
+                // moment both are listed. The album is what it now is.
+                if (albumId == null || etag == null || albumId in seen) {
+                    ignoredKeys += listed.key
+                    return@collect
+                }
+                seen += albumId
+                if (addition) additions += albumId
+                if (known[albumId] != etag || !SystemFileSystem.exists(shardPath(albumId))) {
+                    changed[albumId] = etag
+                }
             }
         }
+        listing(META_PREFIX, String::asShardAlbumId, addition = false)
+        listing(ADDITION_PREFIX, String::asAdditionId, addition = true)
 
         // A key that vanished means the album was deleted (§4). There is no manifest to consult,
         // so absence *is* the signal.
@@ -247,6 +257,7 @@ public class CatalogSync(
             changed = changed,
             deleted = known.keys.filterNot(seen::contains).sortedBy(Uuid::toString),
             ignoredKeys = ignoredKeys,
+            additions = additions.filterTo(mutableSetOf(), changed::containsKey),
         )
     }
 
@@ -257,9 +268,9 @@ public class CatalogSync(
      * would read a truncated file as a shard that failed to parse rather than as one still on its
      * way.
      */
-    private suspend fun fetchShard(albumId: Uuid): Long {
+    private suspend fun fetchShard(albumId: Uuid, key: String): Long {
         val scratch = Path(shardsDirectory, "$albumId.part")
-        s3.download(albumId.shardKey, scratch)
+        s3.download(key, scratch)
         val size = SystemFileSystem.metadataOrNull(scratch)?.size
             ?: throw ShardUnavailableFailure(albumId)
         SystemFileSystem.atomicMove(scratch, shardPath(albumId))
@@ -329,7 +340,7 @@ public class CatalogSync(
         val scratch = Path(shardsDirectory, "$albumId.part")
         shard.writeTo(scratch, drivers)
         try {
-            when (val result = s3.put(albumId.shardKey, Body.File(scratch), ifMatch = ifMatch)) {
+            when (val result = s3.put(shard.info.key, Body.File(scratch), ifMatch = ifMatch)) {
                 PutResult.StaleETag -> ShardWriteResult.StaleETag
                 is PutResult.Written -> {
                     result.etag?.let { state.record(albumId, it) }
@@ -347,25 +358,41 @@ public class CatalogSync(
      * actually landed, re-decide against it, write again.
      */
     public suspend fun reload(albumId: Uuid): Shard = mutex.withLock {
-        fetchShard(albumId)
+        fetchShard(albumId, albumId.shardKey)
         s3.head(albumId.shardKey)?.etag?.let { state.record(albumId, it) }
         shardPath(albumId).readShard(drivers)
+    }
+
+    /**
+     * The shard this device holds for [id], as last fetched or written, or null when there is none
+     * it can read. No network: a run that has just rewritten an album reads its own write back here.
+     */
+    public suspend fun cached(id: Uuid): Shard? = mutex.withLock {
+        runCatching { shardPath(id).readShard(drivers) }.getOrNull()
     }
 
     /** The ETag this device last saw for a shard, for `If-Match`. */
     public suspend fun etag(of: Uuid): ETag? = mutex.withLock { state.known()[of] }
 
     /**
-     * Removes an album's shard from the zone and from the local cache.
+     * Removes a shard from the zone and from the local cache — an album's, or an addition's.
      *
      * The shard goes **first**, so the album stops existing before its blobs do: the reverse order
      * would leave a shard pointing at objects that are gone, and §2's rule is that the catalog
      * never lies. The blobs it listed become unreferenced and are the caller's to delete.
+     *
+     * An addition the laptop turned into an album of its own shares that album's id, and by the
+     * time its `addition/` key is deleted the local file is already the album. So the local copy
+     * goes only when it is the same kind of shard as the key being deleted.
      */
-    public suspend fun deleteShard(albumId: Uuid): Unit = mutex.withLock {
-        s3.delete(albumId.shardKey)
-        SystemFileSystem.delete(shardPath(albumId), mustExist = false)
-        state.forget(albumId)
+    public suspend fun deleteShard(shard: Shard): Unit = mutex.withLock {
+        val id = shard.info.id
+        s3.delete(shard.info.key)
+        val local = runCatching { shardPath(id).readShard(drivers) }.getOrNull()
+        if (local == null || local.info.isAddition == shard.info.isAddition) {
+            SystemFileSystem.delete(shardPath(id), mustExist = false)
+            state.forget(id)
+        }
     }
 
     // ---------------------------------------------------------------------------- local state

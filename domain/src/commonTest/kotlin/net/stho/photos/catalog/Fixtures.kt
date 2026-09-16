@@ -96,6 +96,29 @@ internal fun album(
 )
 
 /**
+ * Photos the phone is adding to [target] (§8): a shard of their own naming the album, with the
+ * album's name and parent recorded and nothing encoded.
+ */
+internal fun addition(
+    target: Shard,
+    photos: List<PhotoRow>,
+    state: AlbumState = AlbumState.UPLOADED,
+    thumbsId: ObjectId? = blobId(),
+): Shard = Shard(
+    info = AlbumInfo(
+        id = Uuid.random(),
+        name = target.info.name,
+        parent = target.info.parent,
+        thumbsId = thumbsId,
+        state = state,
+        encodingVersion = 0,
+        addedAt = fixtureEpoch,
+        addsTo = target.info.id,
+    ),
+    photos = photos,
+)
+
+/**
  * A container and its children, matching INGEST.md's shape: containers hold no photos of their
  * own, and the XOR rule means a mixed album never exists.
  */

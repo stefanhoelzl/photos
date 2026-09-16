@@ -123,28 +123,73 @@ class UploadTest {
         }
     }
 
+    /**
+     * §8's addition, on the harness: upload from inside an album puts the photos into it. They go up
+     * as an addition naming the album — not as an album of their own, and not by rewriting the
+     * album's shard — under the camera's own names, and the album's grid shows them, thumbnails
+     * and all, from the addition's pack beside its own.
+     */
     @Test
-    fun anAlbumOfPhotosOffersNoUpload() = runBlocking {
-        scenario("upload-grid") {
-            zone.album("Alps", photos = 2)
+    fun aGalleryAlbumAddedToAnAlbumLandsAsAnAdditionAndShowsInItsGrid() = runBlocking {
+        scenario("upload-add") {
+            val folder = zone.galleryAlbum(gallery, "Weekend")
+            val trips = zone.album("Trips", photos = 0, thumbnails = false)
+            val alps = zone.album("Alps", photos = 2, parent = trips)
+            val before = assertNotNull(zone.shard(alps))
             val ui = launch(withGallery = true)
 
-            model.open(ui.albums.single())
-            assertNull(model.openUpload(), "an album of photos cannot hold a sub-album (§2)")
-            assertTrue(model.state.value.screen is Screen.Grid)
+            model.open(ui.albums.single { it.id == alps })
+            val additionId = uploadWholeGalleryAlbum(expectedParent = trips, addTo = alps, screenshots = "upload-add") {
+                uploads.deleteAfterUpload(true)
+            }
+
+            val addition = assertNotNull(zone.shard(additionId))
+            assertEquals(alps, addition.info.addsTo)
+            assertEquals(AlbumState.UPLOADED, addition.info.state)
+            assertEquals("Alps", addition.info.name, "the album's name, for when it is gone before the merge")
+            assertEquals(trips, addition.info.parent)
+            assertEquals(setOf("IMG_0001.heic", "IMG_0002.mp4", "IMG_0003.heic"), addition.photos.map { it.filename }.toSet())
+            assertEquals(before, zone.shard(alps), "the phone never rewrites the album it adds to")
+            assertFalse(folder.exists(), "deleting from the gallery works the same when adding")
+
+            val grid = await("the added photos in the album's grid") { it.photos.size == 5 && it.thumbnails.size == 5 }
+            assertEquals(Screen.Grid(alps, "Alps"), grid.screen)
+            assertEquals("5 photos", grid.photosSubtitle)
+            screenshot("upload-add-landed")
         }
     }
 
-    /** Picks the gallery's one album whole, names it as prefilled, uploads, and waits for it to land. */
+    /** An addition whose album is gone before the laptop merges it is shown as that album, where it was. */
+    @Test
+    fun anAdditionWhoseAlbumIsGoneIsListedAsThatAlbum() = runBlocking {
+        scenario("upload-add-orphan") {
+            val trips = zone.album("Trips", photos = 0, thumbnails = false)
+            zone.album("Rome", photos = 1, parent = trips)
+            zone.addition(to = kotlin.uuid.Uuid.random(), name = "Alps", photos = 2, parent = trips)
+
+            val ui = launch()
+
+            val alps = ui.albums.single { it.name == "Alps" }
+            assertEquals(trips, alps.parent)
+            assertEquals(2, alps.photoCount)
+        }
+    }
+
+    /**
+     * Picks the gallery's one album whole, names it as prefilled — or, adding to [addTo], names
+     * nothing — uploads, and waits for it to land.
+     */
     private suspend fun Scenario.uploadWholeGalleryAlbum(
         expectedParent: kotlin.uuid.Uuid?,
+        addTo: kotlin.uuid.Uuid? = null,
         /** A name prefix for frames of the picker and the name dialog, for a person to look at. */
         screenshots: String? = null,
         beforeConfirm: () -> Unit = {},
     ): kotlin.uuid.Uuid {
         val screen = assertNotNull(model.openUpload())
         assertEquals(expectedParent, screen.parent)
-        uploads.open(screen.parent, screen.parentName)
+        assertEquals(addTo, screen.addTo)
+        uploads.open(screen.parent, screen.parentName, screen.addTo)
         awaitTrue("the gallery's albums and thumbnails") {
             val picker = uploads.picker.value
             picker.albums.isNotEmpty() && picker.thumbnails.size == picker.assets.size

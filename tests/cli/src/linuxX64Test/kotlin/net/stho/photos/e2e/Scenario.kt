@@ -124,7 +124,7 @@ internal class Scenario(
 
 /** The zone a scenario starts from. */
 internal class GivenZone {
-    internal val albums = mutableListOf<GivenAlbum>()
+    internal val albums = mutableListOf<Given>()
     internal var cleared = false
 
     /** Nothing in the zone. Implied at the start of every scenario; stated where it matters. */
@@ -132,9 +132,16 @@ internal class GivenZone {
         cleared = true
     }
 
-    fun album(name: String, body: GivenAlbum.() -> Unit) {
-        albums += GivenAlbum(name).apply(body)
-    }
+    fun album(name: String, body: GivenAlbum.() -> Unit): GivenAlbum =
+        GivenAlbum(name).apply(body).also { albums += it }
+
+    /** Photos the phone added to the album a run made from the folder [path] (§8). */
+    fun addition(path: String, body: GivenAddition.() -> Unit): GivenAddition =
+        GivenAddition(into = path, intoId = null, name = path.substringAfterLast('/')).apply(body).also { albums += it }
+
+    /** Photos the phone added to the album [id] — given in this scenario, or not in the zone at all. */
+    fun addition(id: Uuid, name: String, body: GivenAddition.() -> Unit): GivenAddition =
+        GivenAddition(into = null, intoId = id, name = name).apply(body).also { albums += it }
 }
 
 /** A random id, for a scenario that needs to name one. */

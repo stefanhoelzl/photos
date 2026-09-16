@@ -11,10 +11,13 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Clock
+import kotlin.time.Instant
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.files.Path
 import net.stho.photos.IngestAbort
+import net.stho.photos.catalog.ADDITION_PREFIX
 import net.stho.photos.catalog.AlbumInfo
 import net.stho.photos.catalog.AlbumState
 import net.stho.photos.catalog.CatalogSync
@@ -100,13 +103,39 @@ class IngestCycleTest {
             error("no album named $named in the zone")
         }
 
-        /** Overwrite a shard in the zone, the way another writer would have. */
+        /** Overwrite a shard in the zone, the way another writer would have — an album's, or an addition's. */
         fun writeShard(shard: Shard) {
             val scratch = temporaryDirectory("ingest-write")
             val file = Path(scratch, "write.db")
             shard.writeTo(file, testDrivers)
-            zone.put(shard.info.id.shardKey, file.readBytes(), "etag-${'$'}{Uuid.random()}")
+            zone.put(shard.info.key, file.readBytes(), "etag-${'$'}{Uuid.random()}")
         }
+
+        /**
+         * What the phone leaves in the zone when it adds [names] to [target] (§8): an `uploaded`
+         * addition, and the full-quality blobs and pack it names.
+         */
+        fun addTo(target: Shard, vararg names: String, sourcePath: String? = null): Shard {
+            val added = Shard(
+                AlbumInfo(
+                    id = Uuid.random(),
+                    name = target.info.name,
+                    parent = target.info.parent,
+                    sourcePath = sourcePath,
+                    thumbsId = blobId(),
+                    state = AlbumState.UPLOADED,
+                    encodingVersion = 0,
+                    addedAt = fixtureAddedAt,
+                    addsTo = target.info.id,
+                ),
+                names.map { library.row(it) },
+            )
+            for (id in added.objectIds) zone.put(id.blobKey, ByteArray(64) { 0x41 }, "e")
+            writeShard(added)
+            return added
+        }
+
+        fun additionKeys(): List<String> = zone.keys.filter { it.startsWith(ADDITION_PREFIX) }
 
         fun blobKeys(): List<String> = zone.keys.filter { it.startsWith("blob/") }
 
@@ -183,6 +212,138 @@ class IngestCycleTest {
         }
     }
 
+    // ---------------------------------------------------------------------------------- additions
+
+    /**
+     * §7's merge, end to end: photos the phone added to an album land in its folder — the one whose
+     * name the folder already had gaining a suffix, since only the laptop names files — and in its
+     * shard, as the same photographs the phone described, and the addition and its blobs are gone.
+     */
+    @Test
+    fun anAdditionIsMergedIntoItsAlbumsFolderAndShard() = runTest {
+        val cycle = cycle("merge")
+        cycle.run()
+        val before = cycle.shard("Rauhöd")
+        val added = cycle.addTo(before, "a.jpg", "d.jpg")
+
+        val report = cycle.run()
+
+        assertTrue(report.failures.isEmpty(), report.failures.toString())
+        assertEquals(listOf(IngestReport.MergedAddition("Rauhöd", 2)), report.mergedAdditions)
+        val after = cycle.shard("Rauhöd")
+        assertEquals(before.info.id, after.info.id)
+        assertEquals(AlbumState.ENCODED, after.info.state)
+        assertEquals(
+            listOf("a (2).jpg", "a.jpg", "b.jpg", "d.jpg"),
+            after.photos.map(PhotoRow::filename).sorted(),
+        )
+        assertTrue(cycle.library.exists("Rauhöd/a (2).jpg"))
+        assertTrue(cycle.library.exists("Rauhöd/d.jpg"))
+        assertEquals(
+            added.photos.map(PhotoRow::id).toSet(),
+            after.photos.map(PhotoRow::id).toSet() - before.photos.map(PhotoRow::id).toSet(),
+            "a merged photo is the photo the phone added",
+        )
+        assertNotEquals(before.info.thumbsId, after.info.thumbsId, "the pack is repacked with the new thumbnails")
+        assertTrue(cycle.additionKeys().isEmpty())
+        for (id in added.objectIds) {
+            assertFalse(cycle.zone.contains(id.blobKey), "the phone's blob should be swept")
+        }
+
+        val again = cycle.run()
+        assertEquals(0, again.uploadedFiles, "the merged files are the album's rows, not new photos")
+        assertEquals(4, cycle.shard("Rauhöd").photos.size)
+    }
+
+    /**
+     * A run that stopped after the claim and the download left the files in the folder (§7). The walk
+     * must not upload them as photos of its own: the merge that resumes brings them in, once.
+     */
+    @Test
+    fun aMergeInterruptedAfterItsDownloadResumesWithoutDuplicates() = runTest {
+        val cycle = cycle("merge-resume")
+        cycle.run()
+        val before = cycle.shard("Rauhöd")
+        val added = cycle.addTo(before, "d.jpg", sourcePath = "Rauhöd")
+        cycle.library.file("Rauhöd/d.jpg")
+
+        val report = cycle.run()
+
+        assertTrue(report.failures.isEmpty(), report.failures.toString())
+        val after = cycle.shard("Rauhöd")
+        assertEquals(listOf("a.jpg", "b.jpg", "d.jpg"), after.photos.map(PhotoRow::filename).sorted())
+        assertTrue(added.photos.single().id in after.photos.map(PhotoRow::id))
+        assertTrue(cycle.additionKeys().isEmpty())
+    }
+
+    /** A run that stopped after writing the album but before deleting the addition has one step left. */
+    @Test
+    fun aMergeInterruptedAfterItsCommitOnlyDeletesTheAddition() = runTest {
+        val cycle = cycle("merge-commit")
+        cycle.library.file("Rauhöd/d.jpg")
+        cycle.run()
+        val album = cycle.shard("Rauhöd")
+        val merged = album.photos.single { it.filename == "d.jpg" }
+        cycle.addTo(album, "d.jpg", sourcePath = "Rauhöd")
+
+        val report = cycle.run()
+
+        assertEquals(1, report.mergedAdditions.size)
+        assertEquals(0, report.uploadedFiles)
+        assertEquals(album.photos.toSet(), cycle.shard("Rauhöd").photos.toSet())
+        assertTrue(merged.id in cycle.shard("Rauhöd").photos.map(PhotoRow::id))
+        assertTrue(cycle.additionKeys().isEmpty())
+    }
+
+    /**
+     * An addition whose album was deleted before the merge becomes the album it records (§8): pulled
+     * into a folder of its own and encoded, rather than lost with the folder it was meant for. Not
+     * *that* folder, though: this run deleted it, and a pull never puts a deleted folder back.
+     */
+    @Test
+    fun anAdditionWhoseAlbumIsDeletedBecomesAnAlbumOfItsOwn() = runTest {
+        val cycle = cycle("merge-adopt")
+        cycle.run()
+        val neuseeland = cycle.shard("Neuseeland")
+        val added = cycle.addTo(neuseeland, "x.jpg", "x.jpg")
+        cycle.library.remove("Neuseeland")
+
+        val report = cycle.run()
+
+        assertTrue(report.failures.isEmpty(), report.failures.toString())
+        val adopted = cycle.shard("Neuseeland")
+        assertEquals(added.info.id, adopted.info.id)
+        assertEquals(AlbumState.ENCODED, adopted.info.state)
+        assertEquals(listOf("x (2).jpg", "x.jpg"), adopted.photos.map(PhotoRow::filename).sorted())
+        val folder = assertNotNull(adopted.info.sourcePath)
+        assertTrue(folder.startsWith("Neuseeland (") && folder != "Neuseeland", folder)
+        assertTrue(cycle.library.exists("$folder/x (2).jpg"))
+        assertFalse(cycle.library.exists("Neuseeland"))
+        assertEquals(added.photos.map(PhotoRow::id).toSet(), adopted.photos.map(PhotoRow::id).toSet())
+        assertTrue(cycle.additionKeys().isEmpty())
+        assertEquals(2, cycle.metaKeys().size)
+    }
+
+    /** Still uploading: nothing merges it, and the album it adds to is left exactly as it was. */
+    @Test
+    fun anAdditionStillUploadingIsLeftAlone() = runTest {
+        val cycle = cycle("merge-uploading")
+        cycle.run()
+        val before = cycle.shard("Rauhöd")
+        val added = cycle.addTo(before, "d.jpg")
+        // Just now: an upload older than the sweep's floor is abandoned and collected, which is the
+        // other thing that can happen to one.
+        val now = Instant.fromEpochSeconds(Clock.System.now().epochSeconds)
+        cycle.writeShard(added.copy(info = added.info.copy(state = AlbumState.UPLOADING, addedAt = now)))
+
+        val report = cycle.run()
+
+        assertTrue(report.mergedAdditions.isEmpty())
+        assertEquals(before, cycle.shard("Rauhöd"))
+        assertFalse(cycle.library.exists("Rauhöd/d.jpg"))
+        assertEquals(listOf(added.info.key), cycle.additionKeys())
+    }
+
     // -------------------------------------------------------------------------------- first sync
 
     @Test
@@ -211,20 +372,20 @@ class IngestCycleTest {
     }
 
     /**
-     * §7's promise, taken literally: a run that changes nothing costs **one** request. Not one
-     * LIST plus a re-read of 288 shards — that is what the ETag cache beside them is for — and not
-     * one LIST plus a 34,000-key sweep of `blob/` either, which is why the sweep stands down when
-     * neither the zone nor the library moved.
+     * §7's promise, taken literally: a run that changes nothing costs **two** requests — the LISTs
+     * of `meta/` and `addition/`. Not those plus a re-read of 288 shards — that is what the ETag
+     * cache beside them is for — and not those plus a 34,000-key sweep of `blob/` either, which is
+     * why the sweep stands down when neither the zone nor the library moved.
      */
     @Test
-    fun aRunWithNothingToDoIsExactlyOneList() = runTest {
+    fun aRunWithNothingToDoIsExactlyTwoLists() = runTest {
         val cycle = cycle("one-list")
         cycle.run()
 
         val before = cycle.zone.listCount
         cycle.run()
 
-        assertEquals(before + 1, cycle.zone.listCount)
+        assertEquals(before + 2, cycle.zone.listCount)
     }
 
     @Test

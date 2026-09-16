@@ -31,6 +31,7 @@ import net.stho.photos.catalog.Shard
 import net.stho.photos.catalog.ShardProbe
 import net.stho.photos.catalog.ShardWriteResult
 import net.stho.photos.catalog.ThumbPack
+import net.stho.photos.catalog.asAdditionId
 import net.stho.photos.catalog.asBlobObjectId
 import net.stho.photos.catalog.ObjectId
 import net.stho.photos.catalog.blobKey
@@ -179,7 +180,13 @@ public class Ingest(
         // neither the zone nor the library moved cannot have produced any. The phone's crash
         // debris waits for the next run that does something, which costs nothing but a week of
         // $0.01/GB.
-        if (!refreshed.changed && !plan.hasWork) return report.build()
+        // An adoption that stopped between writing `meta/` and deleting `addition/` leaves the old
+        // key listed beside the album it became (§8). The album is what the LIST keeps; the key is
+        // only in the way.
+        val albumIds = refreshed.shards.mapTo(mutableSetOf()) { it.info.id }
+        val superseded = refreshed.report.ignoredKeys.filter { key -> key.asAdditionId()?.let(albumIds::contains) == true }
+
+        if (!refreshed.changed && !plan.hasWork && superseded.isEmpty()) return report.build()
 
         // Said before anything is uploaded, because the first album's line cannot appear until
         // that album is derived *and* uploaded — minutes, on a link that manages 0.85 MB/s. A
@@ -195,7 +202,7 @@ public class Ingest(
         emit(
             IngestEvent.Planned(
                 albums = work.size, files = files, bytes = bytes,
-                deletions = plan.deletions.size, pulls = plan.pulls.size,
+                deletions = plan.deletions.size, pulls = plan.pulls.size, merges = plan.merges.size,
             ),
         )
         meter.start(files, bytes)
@@ -213,6 +220,10 @@ public class Ingest(
             for (album in work) commit(album, refreshed.etags, report)
             for (deletion in plan.deletions) delete(deletion, report)
             for (pull in plan.pulls) archive(pull, refreshed.etags, report)
+            // Last: an addition goes into its album as that album stands after everything above,
+            // including a pull of the album itself earlier in this run.
+            for (merge in plan.merges) merge(merge, report)
+            deleteAll(superseded, swallowing = true)
 
             // The sweep reads every shard now on disk, so it must run after the writes above.
             val after = catalog.refresh()
@@ -270,15 +281,20 @@ public class Ingest(
             report.pulledAlbums +=
                 IngestReport.PulledAlbum(pull.sourcePath, pull.shard.photos.size, 0)
         }
+        for (merge in plan.merges) {
+            report.mergedAdditions +=
+                IngestReport.MergedAddition(merge.sourcePath, merge.addition.photos.size)
+        }
     }
 
     // -------------------------------------------------------------------------------- one album
 
+    /** Returns whether the album's shard was written. */
     private suspend fun commit(
         album: AlbumPlan,
         etags: Map<Uuid, ETag>,
         report: ReportBuilder,
-    ) {
+    ): Boolean {
         val started = clock.now()
 
         // The whole album, not just the new files: pairing is a property of the set. A Live
@@ -323,16 +339,17 @@ public class Ingest(
             throw cancelled
         } catch (failure: Exception) {
             report.failures += IngestReport.Failure(album.sourcePath, failure.describe())
-            return
+            return false
         }
 
         // §3: `photo.id` is row identity and must survive re-encoding — it is what
         // `cover_photo_id` points at and what the thumbnail pack keys by. Re-deriving an album
         // produces fresh rows, so the identity has to be carried across explicitly, matched by
         // the file each row came from. Without this a profile bump would silently clear every
-        // custom cover in the library.
-        val carried = if (!album.reencoding) produced else {
-            val previous = album.drop.associateBy(PhotoRow::diskFilename)
+        // custom cover in the library. A merged addition carries the phone's rows the same way.
+        val sources = if (album.reencoding) album.drop + album.carried else album.carried
+        val carried = if (sources.isEmpty()) produced else {
+            val previous = sources.associateBy(PhotoRow::diskFilename)
             produced.map { made ->
                 val before = previous[made.row.diskFilename] ?: return@map made
                 Produced(made.row.copy(id = before.id), made.thumbnail, made.uploadedBytes)
@@ -351,7 +368,7 @@ public class Ingest(
                 // try once more — a blind retry would overwrite their work.
                 ShardWriteResult.StaleETag -> if (!rewriteAfterConflict(album, carried)) {
                     report.contendedAlbums += album.sourcePath
-                    return
+                    return false
                 }
             }
 
@@ -365,7 +382,7 @@ public class Ingest(
             throw cancelled
         } catch (failure: Exception) {
             report.failures += IngestReport.Failure(album.sourcePath, failure.describe())
-            return
+            return false
         }
 
         val outcome = IngestReport.AlbumOutcome(
@@ -378,6 +395,7 @@ public class Ingest(
         )
         report.albums += outcome
         emit(IngestEvent.Line(outcome.asLine()))
+        return true
     }
 
     /**
@@ -613,7 +631,7 @@ public class Ingest(
         try {
             // Shard first: the album stops existing before its objects do, so the catalog never
             // names a blob that is gone (§2).
-            catalog.deleteShard(deletion.shard.info.id)
+            catalog.deleteShard(deletion.shard)
             // The shard is gone, so its blobs are unreferenced unless another album shares
             // them — which the sweep decides, once, at the end of this run (§2).
             val photos = deletion.shard.photos.size
@@ -690,65 +708,65 @@ public class Ingest(
      * `.photosignore` is not consulted: the rules govern what goes up (§7).
      */
     private suspend fun archive(pull: PullPlan, etags: Map<Uuid, ETag>, report: ReportBuilder) {
-        val directory = Path(config.libraryRoot, *pull.sourcePath.split('/').toTypedArray())
-        val downloaded = mutableListOf<Path>()
-        var bytes = 0L
+        val directory = libraryPath(pull.sourcePath)
         try {
-            var etag = etags[pull.shard.info.id]
-            if (!pull.claimed) {
-                val claimed = pull.shard.info.copy(sourcePath = pull.sourcePath)
-                when (val write = catalog.writeShard(Shard(claimed, pull.shard.photos), ifMatch = etag)) {
+            var shard = pull.shard
+            var etag = etags[shard.info.id]
+            if (pull.adopting) {
+                // The album it records being added to is gone, so it becomes that album: `meta/`
+                // first, then the `addition/` key, so at no instant does the zone hold neither (§8).
+                val adopted = Shard(shard.info.copy(addsTo = null, sourcePath = null), shard.photos)
+                when (val write = catalog.writeShard(adopted, ifMatch = null)) {
                     is ShardWriteResult.Written -> etag = write.etag
                     ShardWriteResult.StaleETag -> {
                         report.contendedAlbums += pull.sourcePath
                         return
                     }
                 }
+                catalog.deleteShard(pull.shard)
+                shard = adopted
+            }
+            if (!pull.claimed) {
+                // The names are fixed here, before any file exists, for the same reason the path
+                // is: a resumed download skips a file already on disk, which is only safe once
+                // nothing else can be called that (§7).
+                val claimed = Shard(
+                    shard.info.copy(sourcePath = pull.sourcePath),
+                    shard.photos.namedAgainst(directory.fileNames()),
+                )
+                when (val write = catalog.writeShard(claimed, ifMatch = etag)) {
+                    is ShardWriteResult.Written -> etag = write.etag
+                    ShardWriteResult.StaleETag -> {
+                        report.contendedAlbums += pull.sourcePath
+                        return
+                    }
+                }
+                shard = claimed
             }
 
-            SystemFileSystem.createDirectories(directory)
-            for (row in pull.shard.photos) {
-                // A Live Photo keeps an untouched still precisely so its identifier survives, so
-                // that is the file to archive when there is one (§5).
-                val primary = row.liveStillId ?: row.imageId ?: row.videoId ?: continue
-                val destination = Path(directory, row.filename)
-                if (!SystemFileSystem.exists(destination)) s3.download(primary.blobKey, destination)
-                downloaded += destination
-                bytes += row.bytes ?: 0
-                // Since schema 4 the catalog names the paired MOV, so a pull restores the name
-                // the file actually had. `<stem>.MOV` remains the fallback for a row written
-                // before that column existed — the convention every pair in this library
-                // follows — and pairing is by content identifier rather than by name, so the
-                // walker re-pairs it either way.
-                row.liveVideoId?.let { liveVideoId ->
-                    val name = row.liveVideoFilename ?: row.filename.withExtension("MOV")
-                    val path = Path(directory, name)
-                    if (!SystemFileSystem.exists(path)) s3.download(liveVideoId.blobKey, path)
-                    downloaded += path
-                }
-            }
+            val (downloaded, bytes) = download(shard.photos, directory)
             report.pulledAlbums += IngestReport.PulledAlbum(pull.sourcePath, downloaded.size, bytes)
             emit(IngestEvent.Line("v ${pull.sourcePath}  ${downloaded.size} files pulled"))
 
             commit(
                 AlbumPlan(
-                    id = pull.shard.info.id,
-                    name = pull.shard.info.name,
+                    id = shard.info.id,
+                    name = shard.info.name,
                     sourcePath = pull.sourcePath,
-                    parent = pull.shard.info.parent,
+                    parent = shard.info.parent,
                     directory = directory,
-                    existing = pull.shard,
+                    existing = shard,
                     uploads = downloaded,
                     files = downloaded,
                     keep = emptyList(),
                     // The rows the phone wrote, and the full-quality blobs they own. Deleting
                     // them is the ordinary drop path, and it runs only now that the library
                     // holds the files they were the only copy of.
-                    drop = pull.shard.photos,
+                    drop = shard.photos,
                     mixedFileCount = 0,
                     reencoding = true,
                 ),
-                etags = etag?.let { mapOf(pull.shard.info.id to it) } ?: emptyMap(),
+                etags = etag?.let { mapOf(shard.info.id to it) } ?: emptyMap(),
                 report = report,
             )
             // Every file is now on disk, so the album can be derived like any other — which is
@@ -760,6 +778,122 @@ public class Ingest(
             throw cancelled
         } catch (failure: Exception) {
             report.failures += IngestReport.Failure(pull.sourcePath, failure.describe())
+        }
+    }
+
+    /**
+     * Every file these rows name, into [directory], skipping any already there — which is what
+     * makes an interrupted pull or merge resume rather than start again. The files and the bytes the
+     * rows say they hold.
+     */
+    private suspend fun download(rows: List<PhotoRow>, directory: Path): Pair<List<Path>, Long> {
+        val downloaded = mutableListOf<Path>()
+        var bytes = 0L
+        SystemFileSystem.createDirectories(directory)
+        for (row in rows) {
+            // A Live Photo keeps an untouched still precisely so its identifier survives, so
+            // that is the file to archive when there is one (§5).
+            val primary = row.liveStillId ?: row.imageId ?: row.videoId ?: continue
+            val destination = Path(directory, row.filename)
+            if (!SystemFileSystem.exists(destination)) s3.download(primary.blobKey, destination)
+            downloaded += destination
+            bytes += row.bytes ?: 0
+            // Since schema 4 the catalog names the paired MOV, so a pull restores the name
+            // the file actually had. `<stem>.MOV` remains the fallback for a row written
+            // before that column existed — the convention every pair in this library
+            // follows — and pairing is by content identifier rather than by name, so the
+            // walker re-pairs it either way.
+            row.liveVideoId?.let { liveVideoId ->
+                val name = row.liveVideoFilename ?: row.filename.withExtension("MOV")
+                val path = Path(directory, name)
+                if (!SystemFileSystem.exists(path)) s3.download(liveVideoId.blobKey, path)
+                downloaded += path
+            }
+        }
+        return downloaded to bytes
+    }
+
+    // --------------------------------------------------------------------- merging an addition
+
+    /**
+     * §7's merge: photos the phone added to an album go into that album's folder and shard.
+     *
+     * ```
+     * claim     the addition's `source_path` and the names its files take on disk, If-Match
+     * download  into the album's folder, skipping what is already there
+     * derive    only those files, into the album: rows appended, pack repacked, still `encoded`
+     * delete    the addition's shard — its full-quality blobs are then the sweep's
+     * ```
+     *
+     * Each step survives being interrupted. A claimed addition's files are kept out of the walk's
+     * uploads (see [Reconciler]), so a folder holding them is not read as new photos; and one whose
+     * files the album already has rows for was committed by a run that stopped before the last step,
+     * so only that step is left. The phone's rows lend the derived ones their identity, which is
+     * what keeps a photograph the same photograph once it is merged.
+     *
+     * The album is read from the cache rather than from the plan: a pull of it, or a commit to it,
+     * may have written it earlier in this run. If it is not `encoded` by now the merge waits for a
+     * run in which it is.
+     */
+    private suspend fun merge(plan: MergePlan, report: ReportBuilder) {
+        try {
+            val target = catalog.cached(plan.target)
+            if (target == null || target.info.isAddition || target.info.state != AlbumState.ENCODED) return
+            val directory = libraryPath(plan.sourcePath)
+
+            var addition = plan.addition
+            if (!plan.claimed) {
+                // Only the laptop names files (§7): the phone sends the camera's names as they are,
+                // and they are made unique here against what the folder and the album already hold.
+                val taken = directory.fileNames() + target.photos.flatMap { it.claimedFilenames + it.filename }
+                val claimed = Shard(
+                    addition.info.copy(sourcePath = plan.sourcePath),
+                    addition.photos.namedAgainst(taken),
+                )
+                when (catalog.writeShard(claimed, ifMatch = catalog.etag(addition.info.id))) {
+                    is ShardWriteResult.Written -> addition = claimed
+                    ShardWriteResult.StaleETag -> {
+                        report.contendedAlbums += plan.sourcePath
+                        return
+                    }
+                }
+            }
+
+            val (downloaded, _) = download(addition.photos, directory)
+            val merged = target.photos.flatMapTo(mutableSetOf()) { it.claimedFilenames }
+            val fresh = downloaded.filterNot { it.name in merged }
+            if (fresh.isNotEmpty()) {
+                val written = commit(
+                    AlbumPlan(
+                        id = target.info.id,
+                        name = target.info.name,
+                        sourcePath = plan.sourcePath,
+                        parent = target.info.parent,
+                        directory = directory,
+                        existing = target,
+                        uploads = fresh,
+                        files = fresh,
+                        keep = target.photos,
+                        drop = emptyList(),
+                        mixedFileCount = 0,
+                        carried = addition.photos,
+                    ),
+                    etags = catalog.etag(target.info.id)?.let { mapOf(target.info.id to it) } ?: emptyMap(),
+                    report = report,
+                )
+                if (!written) return
+            }
+
+            // The library holds every file now, and the album names them: the addition and the
+            // blobs only it referenced can go. A file that failed to derive is still in the folder,
+            // so the next walk takes it up as the new photo it is.
+            catalog.deleteShard(addition)
+            report.mergedAdditions += IngestReport.MergedAddition(plan.sourcePath, addition.photos.size)
+            emit(IngestEvent.Line("+ ${plan.sourcePath}  ${addition.photos.size} added from the phone"))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            report.failures += IngestReport.Failure(plan.sourcePath, failure.describe())
         }
     }
 
@@ -806,7 +940,7 @@ public class Ingest(
             report.abandonedUploads++
             if (dryRun) continue
             try {
-                catalog.deleteShard(shard.info.id)
+                catalog.deleteShard(shard)
                 deleteBlobs(shard.objectIds)
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -832,6 +966,9 @@ public class Ingest(
     }
 
     // -------------------------------------------------------------------------------- helpers
+
+    private fun libraryPath(sourcePath: String): Path =
+        Path(config.libraryRoot, *sourcePath.split('/').toTypedArray())
 
     private fun relative(path: String): String {
         val root = config.libraryRoot.toString().trimEnd('/')
@@ -875,6 +1012,7 @@ private class ReportBuilder {
     val albums = mutableListOf<IngestReport.AlbumOutcome>()
     val deletedAlbums = mutableListOf<IngestReport.DeletedAlbum>()
     val pulledAlbums = mutableListOf<IngestReport.PulledAlbum>()
+    val mergedAdditions = mutableListOf<IngestReport.MergedAddition>()
     val failures = mutableListOf<IngestReport.Failure>()
     val strays = mutableListOf<IngestReport.Failure>()
     val mixedFolders = mutableListOf<IngestReport.MixedFolder>()
@@ -902,6 +1040,7 @@ private class ReportBuilder {
         albums = albums.toList(),
         deletedAlbums = deletedAlbums.toList(),
         pulledAlbums = pulledAlbums.toList(),
+        mergedAdditions = mergedAdditions.toList(),
         failures = failures.toList(),
         strays = strays.toList(),
         mixedFolders = mixedFolders.toList(),
@@ -959,6 +1098,41 @@ private fun List<PhotoRow>.healLiveVideoNames(items: List<MediaItem>): List<Phot
  * to what it can say about itself.
  */
 private fun Throwable.describe(): String = message ?: toString()
+
+/** The names in this directory, or none when there is no directory yet. */
+private fun Path.fileNames(): List<String> =
+    runCatching { SystemFileSystem.list(this).map(Path::name) }.getOrDefault(emptyList())
+
+/**
+ * These rows, renamed where a file of theirs would clash with [taken] or with each other: `IMG_1234
+ * (2).heic`, and a Live Photo's MOV beside it under the same stem (§7).
+ *
+ * Compared by stem and ignoring case. By stem because a derivative renames its source — a video
+ * lands as `.mp4`, a RAW as `.jpg` — so two files differing only in extension can still claim one
+ * row's name; ignoring case because the library may sit on a filesystem that does.
+ */
+internal fun List<PhotoRow>.namedAgainst(taken: Collection<String>): List<PhotoRow> {
+    val stems = taken.mapTo(mutableSetOf()) { it.stem().lowercase() }
+    return map { row ->
+        val stem = row.filename.stem()
+        var candidate = stem
+        var attempt = 1
+        while (candidate.lowercase() in stems) candidate = "$stem (${++attempt})"
+        stems += candidate.lowercase()
+        if (candidate == stem) {
+            row
+        } else {
+            row.copy(
+                filename = candidate + row.filename.extensionPart(),
+                liveVideoFilename = row.liveVideoFilename?.let { candidate + it.extensionPart() },
+            )
+        }
+    }
+}
+
+private fun String.stem(): String = if ('.' in this) substringBeforeLast('.') else this
+
+private fun String.extensionPart(): String = if ('.' in this) "." + substringAfterLast('.') else ""
 
 private fun Path.deleteQuietly() {
     runCatching { SystemFileSystem.delete(this, mustExist = false) }

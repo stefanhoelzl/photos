@@ -12,6 +12,7 @@ import net.stho.photos.catalog.AlbumState
 import net.stho.photos.catalog.ObjectId
 import net.stho.photos.catalog.PAGE_SIZE
 import net.stho.photos.catalog.Shard
+import net.stho.photos.catalog.additionKey
 import net.stho.photos.catalog.blobKey
 import net.stho.photos.catalog.packThumbnails
 import net.stho.photos.catalog.readShard
@@ -79,6 +80,31 @@ public class Zone(private val s3: S3Client, private val staging: Path) {
     }
 
     /**
+     * Photos the phone added to the album [to] (§8): an addition at `addition/<id>.db`, recording
+     * [name] and [parent] as that album's. [to] need not exist — an addition whose album is gone.
+     */
+    public suspend fun addition(
+        to: Uuid,
+        name: String,
+        photos: Int,
+        parent: Uuid? = null,
+        state: AlbumState = AlbumState.UPLOADED,
+    ): Uuid {
+        val rows = (0 until photos).map { index ->
+            PhotoRow(
+                id = Uuid.random(),
+                filename = "IMG_%04d.heic".format(100 + index),
+                takenAt = Instant.parse("2024-01-02T00:00:00Z"),
+                width = 4032,
+                height = 3024,
+                bytes = 3_400_000,
+                mediaType = MediaType.PHOTO,
+            )
+        }
+        return write(name, rows, thumbnails = true, parent, state, addsTo = to).id
+    }
+
+    /**
      * An album of the three shapes a row can have, each backed by real bytes (decision 2).
      *
      * A still, a video with its poster and transcode, and a Live Photo with its viewing image,
@@ -139,12 +165,15 @@ public class Zone(private val s3: S3Client, private val staging: Path) {
         return folder
     }
 
-    /** The shard the zone holds for [id], as its readers see it. Null when there is none. */
+    /**
+     * The shard the zone holds for [id] — an album's at `meta/`, or an addition's at `addition/` —
+     * as its readers see it. Null when there is none.
+     */
     public suspend fun shard(id: Uuid): Shard? {
-        if (s3.head(id.shardKey) == null) return null
+        val key = listOf(id.shardKey, id.additionKey).firstOrNull { s3.head(it) != null } ?: return null
         val file = Path(staging, "read-${Uuid.random()}.db")
         kotlinx.io.files.SystemFileSystem.createDirectories(staging)
-        s3.download(id.shardKey, file)
+        s3.download(key, file)
         return file.readShard(drivers)
     }
 
@@ -165,6 +194,7 @@ public class Zone(private val s3: S3Client, private val staging: Path) {
         thumbnails: Boolean,
         parent: Uuid?,
         state: AlbumState,
+        addsTo: Uuid? = null,
     ): Written {
         kotlinx.io.files.SystemFileSystem.createDirectories(staging)
         val albumId = Uuid.random()
@@ -188,10 +218,11 @@ public class Zone(private val s3: S3Client, private val staging: Path) {
                 state = state,
                 // The schema's CHECK: only an encoded album has a profile.
                 encodingVersion = if (state == AlbumState.ENCODED) DerivativeSpec.ENCODING_VERSION else 0,
+                addsTo = addsTo,
             ),
             rows,
         ).writeTo(shardFile, drivers)
-        s3.put(albumId.shardKey, Body.File(shardFile))
+        s3.put(if (addsTo == null) albumId.shardKey else albumId.additionKey, Body.File(shardFile))
         return Written(albumId, thumbsId)
     }
 

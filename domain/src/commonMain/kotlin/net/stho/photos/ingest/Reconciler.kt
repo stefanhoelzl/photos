@@ -53,6 +53,12 @@ public data class AlbumPlan(
      * a full album as deleted and re-added.
      */
     public val reencoding: Boolean = false,
+    /**
+     * Rows whose identity the derived rows take over, matched by the file each came from: the
+     * phone's rows for the photos an addition brings in (§7). `photo.id` is what a cover points at
+     * and what a pack keys by, so a photograph merged into an album stays the same photograph.
+     */
+    public val carried: List<PhotoRow> = emptyList(),
 ) {
     public val isNew: Boolean get() = existing == null
 
@@ -92,7 +98,30 @@ public data class PullPlan(
     public val sourcePath: String,
     /** Whether a previous run already wrote `source_path`, so this is a resume. */
     public val claimed: Boolean = false,
+    /**
+     * An addition whose album is gone (§8), still at `addition/`. The pull first makes it the album
+     * it reads as — `meta/` under the same id, then the `addition/` key goes — and then pulls that.
+     */
+    public val adopting: Boolean = false,
 )
+
+/**
+ * An addition the phone finished uploading, and the album it goes into (§7).
+ *
+ * The merge claims it — `source_path` and the names its files will have on disk, fixed against the
+ * album's folder — downloads the files into that folder, derives only them into the album, and
+ * deletes the addition. [target] is the album as this run planned it: one still `uploaded` is
+ * pulled earlier in the same run, and the merge reads it back from the cache once that has landed.
+ */
+public data class MergePlan(
+    public val addition: Shard,
+    public val target: Uuid,
+    /** The album's folder, relative to `$LIBRARY_ROOT`. */
+    public val sourcePath: String,
+) {
+    /** Whether a previous run already claimed it, so its names are fixed and this is a resume. */
+    public val claimed: Boolean get() = addition.info.sourcePath != null
+}
 
 /** A directory more than one encoded album claims — a duplicate left for a person to remove. */
 public data class DoubleClaim(
@@ -117,6 +146,7 @@ public data class IngestPlan(
     public val albums: List<AlbumPlan> = emptyList(),
     public val deletions: List<AlbumDeletion> = emptyList(),
     public val pulls: List<PullPlan> = emptyList(),
+    public val merges: List<MergePlan> = emptyList(),
     /**
      * Directories claimed by a shard this build cannot read. Left completely alone: not uploaded
      * to, not deleted, not counted as new (§3).
@@ -137,7 +167,8 @@ public data class IngestPlan(
     public val dropCount: Int get() = albums.sumOf { it.drop.size }
 
     public val hasWork: Boolean
-        get() = albums.any(AlbumPlan::needsWrite) || deletions.isNotEmpty() || pulls.isNotEmpty()
+        get() = albums.any(AlbumPlan::needsWrite) || deletions.isNotEmpty() || pulls.isNotEmpty() ||
+            merges.isNotEmpty()
 }
 
 /**
@@ -162,6 +193,18 @@ public class Reconciler(
         shards: List<Shard>,
         unreadable: List<ShardProbe> = emptyList(),
     ): IngestPlan {
+        // Additions are not albums: they are planned as merges at the end, and until then only
+        // their claimed names matter, which keep their files from reading as new uploads.
+        val additions = shards.filter { it.info.isAddition }
+        val shards = shards.filterNot { it.info.isAddition }
+        // Files an unfinished merge already put in its album's folder (§7). They belong to the
+        // addition that claimed them, which the merge brings in with the phone's row identities, so
+        // the walk must not upload them first as photos of its own.
+        val mergingNames = additions
+            .filter { it.info.state == AlbumState.UPLOADED && it.info.sourcePath != null }
+            .groupBy { requireNotNull(it.info.addsTo) }
+            .mapValues { (_, pending) -> pending.flatMap { it.photos }.flatMapTo(mutableSetOf()) { it.claimedFilenames } }
+
         // Shards a *previous* run of this tool wrote, keyed by the folder they claim.
         // Only albums the laptop owns. A shard still `uploading` or `uploaded` may carry a
         // `source_path` — the pull claims before it downloads — but it is not an ordinary album
@@ -231,7 +274,8 @@ public class Reconciler(
             val claimedNames = if (reencoding) emptySet() else buildSet {
                 for (row in rows) addAll(row.claimedFilenames)
             }
-            val uploads = files.filterNot { it.name in claimedNames }
+            val merging = existing?.let { mergingNames[it.info.id] }.orEmpty()
+            val uploads = files.filterNot { it.name in claimedNames || it.name in merging }
 
             val keep = mutableListOf<PhotoRow>()
             val drop = mutableListOf<PhotoRow>()
@@ -305,10 +349,47 @@ public class Reconciler(
             pulls += PullPlan(shard, path, claimed = claimed != null)
         }
 
+        // An addition merges once its album is there to take it: `encoded`, or `uploaded` and pulled
+        // earlier in this same run. One whose album is gone — or is being deleted by this very run —
+        // is adopted instead, and pulled as the album it records being added to (§8). One still
+        // `uploading` waits, and past the sweep's floor it is abandoned like any other upload.
+        val deleted = deletions.mapTo(mutableSetOf()) { it.shard.info.id }
+        // An album this build cannot read is not an album that is gone: adopting its additions would
+        // make a second album of photos that belong in it (§3's unreadable-not-absent rule).
+        val unreadableIds = unreadable.mapTo(mutableSetOf(), ShardProbe::albumId)
+        val albumsById = shards.associateBy { it.info.id }
+        val pulledPaths = pulls.associate { it.shard.info.id to it.sourcePath }
+        val merges = mutableListOf<MergePlan>()
+        for (addition in additions.filter { it.info.state == AlbumState.UPLOADED }
+            .sortedWith(compareBy({ it.info.addedAt }, { it.info.id.toString() }))) {
+            val targetId = requireNotNull(addition.info.addsTo)
+            if (targetId in unreadableIds) continue
+            val target = albumsById[targetId]?.takeIf { it.info.id !in deleted }
+            val path = when (target?.info?.state) {
+                AlbumState.ENCODED -> target.info.sourcePath?.normalisedPath()?.ifEmpty { null }
+                AlbumState.UPLOADED -> pulledPaths[targetId]
+                // Still uploading: an album cannot be chosen before it is shown, so this is the
+                // phone being ahead of the zone. It waits.
+                AlbumState.UPLOADING -> continue
+                null -> {
+                    val adopted = availablePath(addition, reserved)
+                    if (!matchesFilter(adopted)) continue
+                    reserved += adopted
+                    pulls += PullPlan(addition, adopted, claimed = false, adopting = true)
+                    continue
+                }
+            }
+            // A target left alone this run — too new to read beside it, claimed twice, filtered out,
+            // or a pull that never planned — is merged into by a later run instead.
+            if (path == null || path in blockedPaths || !matchesFilter(path)) continue
+            merges += MergePlan(addition, targetId, path)
+        }
+
         return IngestPlan(
             albums = albums,
             deletions = deletions,
             pulls = pulls,
+            merges = merges,
             blockedByUnreadable = unreadable,
             doublyClaimed = doublyClaimed,
             looseRootFiles = looseRootFiles,

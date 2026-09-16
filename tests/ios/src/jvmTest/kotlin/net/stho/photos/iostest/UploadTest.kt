@@ -77,6 +77,38 @@ class UploadTest {
         screenshot("upload-landed")
     }
 
+    /**
+     * §8's addition on the phone: upload from inside an album sends the photos into it, as a shard
+     * of their own naming the album, and the album's grid shows them once they land.
+     */
+    @Test
+    fun photosFromTheLibraryAddedToAnAlbumLandAsAnAddition() = iosScenario("upload-add") {
+        val alps = zone.album("Alps", photos = 2)
+        val before = assertNotNull(zone.shard(alps))
+        install()
+        allowPhotos()
+        addToLibrary(STILL)
+        launch(); setUp()
+
+        post("/nav?to=album/$alps")
+        post("/upload/open")
+        val picker = awaitState("the library's assets") { state -> state.picker().assets().isNotEmpty() }.picker()
+        assertEquals(alps.toString(), picker.string("addTo"))
+        val ids = picker.assets().map { it.string("id") }
+
+        post("/upload/select?ids=${ids.joinToString(",").encoded()}")
+        val additionId = confirmAndLand()
+
+        val addition = assertNotNull(zone.shard(additionId))
+        assertEquals(alps, addition.info.addsTo)
+        assertEquals(AlbumState.UPLOADED, addition.info.state)
+        assertEquals("Alps", addition.info.name)
+        assertEquals(ids.size, addition.photos.size, "one row per asset picked")
+        assertEquals(before, zone.shard(alps), "the phone never rewrites the album it adds to")
+        awaitState("the added photos in the album's grid") { state -> state.getValue("photos").jsonArray.size == 2 + ids.size }
+        screenshot("upload-add-landed")
+    }
+
     @Test
     fun anAlbumStillUploadingIsNotListedButOneThatLandedIs() = iosScenario("upload-visibility") {
         zone.album("In flight", photos = 2, state = AlbumState.UPLOADING)

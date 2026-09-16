@@ -56,17 +56,22 @@ internal class SyncState(
     override fun close(): Unit = driver.close()
 }
 
-/** What one LIST implies for the local copy. */
+/** What the LISTs imply for the local copy. */
 public data class ShardDiff(
     /** Shards to download: new, or whose ETag moved. */
     public val changed: Map<Uuid, ETag> = emptyMap(),
     /** Albums whose key is gone from the zone. §4: absent means deleted. */
     public val deleted: List<Uuid> = emptyList(),
     /**
-     * Keys the LIST returned that are not shards — the `meta/` directory marker, or anything
-     * whose name is not a uuid. Skipped, never guessed at.
+     * Keys the LISTs returned that are not shards — a prefix's directory marker, or anything whose
+     * name is not a uuid. Skipped, never guessed at.
      */
     public val ignoredKeys: List<String> = emptyList(),
+    /** Which of [changed] live under `addition/` rather than `meta/` (§8). */
+    public val additions: Set<Uuid> = emptySet(),
 ) {
     public val isEmpty: Boolean get() = changed.isEmpty() && deleted.isEmpty()
+
+    /** Where a changed shard is fetched from. */
+    public fun keyOf(id: Uuid): String = if (id in additions) id.additionKey else id.shardKey
 }

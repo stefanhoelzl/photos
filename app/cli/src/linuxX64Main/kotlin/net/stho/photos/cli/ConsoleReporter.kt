@@ -158,6 +158,7 @@ private fun plan(event: IngestEvent.Planned): String {
         }
         if (event.deletions > 0) add("${event.deletions} album(s) to delete")
         if (event.pulls > 0) add("${event.pulls} album(s) to pull")
+        if (event.merges > 0) add("${event.merges} addition(s) to merge")
     }
     return if (parts.isEmpty()) "nothing to do" else "to do: " + parts.joinToString(", ")
 }
@@ -171,6 +172,7 @@ private fun summary(report: IngestReport): List<String> = buildList {
     if (report.droppedRows > 0) add("${report.droppedRows} row(s) dropped")
     if (report.deletedAlbums.isNotEmpty()) add("${report.deletedAlbums.size} album(s) deleted")
     if (report.pulledAlbums.isNotEmpty()) add("${report.pulledAlbums.size} album(s) pulled")
+    if (report.mergedAdditions.isNotEmpty()) add("${report.mergedAdditions.size} addition(s) merged")
     if (report.failures.isNotEmpty()) add("${report.failures.size} failed")
     if (report.ignoredFiles > 0) add("${report.ignoredFiles} ignored")
 }

@@ -23,6 +23,7 @@ public sealed interface IngestEvent {
         public val bytes: Long,
         public val deletions: Int,
         public val pulls: Int,
+        public val merges: Int = 0,
     ) : IngestEvent
 
     /**

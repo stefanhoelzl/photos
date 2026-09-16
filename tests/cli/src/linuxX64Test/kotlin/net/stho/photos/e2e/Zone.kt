@@ -9,6 +9,7 @@ import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.flow.toList
 import kotlinx.io.files.Path
+import net.stho.photos.catalog.ADDITION_PREFIX
 import net.stho.photos.catalog.AlbumInfo
 import net.stho.photos.catalog.AlbumState
 import net.stho.photos.catalog.BLOB_PREFIX
@@ -36,6 +37,8 @@ import net.stho.photos.storage.list
 /** The zone as it actually is, read back through the same client the CLI writes with. */
 internal data class ZoneState(
     val albums: List<Shard>,
+    /** Every shard under `addition/`: photos the phone added that no run has merged yet (§8). */
+    val additions: List<Shard>,
     /** Every key under `blob/`, by id, with its size. */
     val blobs: Map<ObjectId, Long>,
 ) {
@@ -53,18 +56,19 @@ internal suspend fun S3Client.clearZone() {
 
 /** Reads the zone: every shard, opened, plus the blob keys they should account for. */
 internal suspend fun S3Client.readZone(scratch: Path): ZoneState {
-    val shards = mutableListOf<Shard>()
-    for (listed in list(prefix = META_PREFIX).toList()) {
-        if (listed.isDirectoryMarker) continue
-        val bytes = (get(listed.key) as GetResult.Content).bytes
-        val local = Path(scratch, "read-${Uuid.random()}.db").write(bytes)
-        shards += local.readShard(NativeSqlDrivers())
-    }
+    suspend fun shards(prefix: String): List<Shard> = list(prefix = prefix).toList()
+        .filterNot(S3Object::isDirectoryMarker)
+        .map { listed ->
+            val bytes = (get(listed.key) as GetResult.Content).bytes
+            Path(scratch, "read-${Uuid.random()}.db").write(bytes).readShard(NativeSqlDrivers())
+        }
+    val shards = shards(META_PREFIX)
+    val additions = shards(ADDITION_PREFIX)
     val blobs = list(prefix = BLOB_PREFIX).toList()
         .filterNot(S3Object::isDirectoryMarker)
         .mapNotNull { listed -> listed.key.asBlobObjectId()?.let { it to listed.size } }
         .toMap()
-    return ZoneState(shards, blobs)
+    return ZoneState(shards, additions, blobs)
 }
 
 /**
@@ -73,7 +77,7 @@ internal suspend fun S3Client.readZone(scratch: Path): ZoneState {
  * The only way to reach a state no run produces -- above all an album with no `source_path`,
  * which is what an album the phone made looks like, and what §7's archive-only pull acts on.
  */
-internal class GivenAlbum(private val name: String) {
+internal class GivenAlbum(private val name: String) : Given {
     /** Null means unclaimed: no local directory has been connected to this album yet. */
     var sourcePath: String? = null
 
@@ -85,16 +89,96 @@ internal class GivenAlbum(private val name: String) {
     var state: AlbumState? = null
 
     val id: Uuid = Uuid.random()
-    private val photos = mutableListOf<GivenPhoto>()
+    private val photos = GivenPhotos()
 
     fun photo(filename: String, width: Int = 160, height: Int = 120) {
-        photos += GivenPhoto(filename, width, height)
+        photos.add(filename, width, height)
     }
 
     private val resolvedState: AlbumState
         get() = state ?: if (sourcePath == null) AlbumState.UPLOADED else AlbumState.ENCODED
 
-    internal suspend fun materialise(s3: S3Client, scratch: Path) {
+    override suspend fun materialise(s3: S3Client, scratch: Path) {
+        val (rows, thumbsId) = photos.upload(s3, scratch)
+        val shard = Shard(
+            info = AlbumInfo(
+                id = id,
+                name = name,
+                sourcePath = sourcePath,
+                thumbsId = thumbsId,
+                state = resolvedState,
+                encodingVersion = if (resolvedState == AlbumState.ENCODED) {
+                    DerivativeSpec.ENCODING_VERSION
+                } else {
+                    0
+                },
+                addedAt = Instant.fromEpochSeconds(Clock.System.now().epochSeconds),
+            ),
+            photos = rows,
+        )
+        val local = Path(scratch, "given-$id.db")
+        shard.writeTo(local, NativeSqlDrivers())
+        s3.put(id.shardKey, Body.File(local))
+    }
+}
+
+/** Something a scenario puts in the zone directly. */
+internal interface Given {
+    suspend fun materialise(s3: S3Client, scratch: Path)
+}
+
+/**
+ * Photos the phone added to an album and finished uploading (§8): an `uploaded` addition at
+ * `addition/<id>.db`, under the camera's names — the phone leaves clashes to the laptop.
+ *
+ * The album is named by [into], the folder a run already made it from, and looked up in the zone
+ * when the addition is written; or by [intoId], for a phone album given in the same scenario or
+ * one that is not there at all. [name] is what the addition records as the album's name.
+ */
+internal class GivenAddition(
+    private val into: String?,
+    private val intoId: Uuid?,
+    private val name: String,
+) : Given {
+    val id: Uuid = Uuid.random()
+    private val photos = GivenPhotos()
+
+    fun photo(filename: String, width: Int = 160, height: Int = 120) {
+        photos.add(filename, width, height)
+    }
+
+    override suspend fun materialise(s3: S3Client, scratch: Path) {
+        val target = intoId ?: requireNotNull(into?.let { s3.readZone(scratch).byPath[it] }) {
+            "no album at $into to add to -- run sync first"
+        }.info.id
+        val (rows, thumbsId) = photos.upload(s3, scratch)
+        val shard = Shard(
+            info = AlbumInfo(
+                id = id,
+                name = name,
+                thumbsId = thumbsId,
+                state = AlbumState.UPLOADED,
+                encodingVersion = 0,
+                addedAt = Instant.fromEpochSeconds(Clock.System.now().epochSeconds),
+                addsTo = target,
+            ),
+            photos = rows,
+        )
+        val local = Path(scratch, "given-$id.db")
+        shard.writeTo(local, NativeSqlDrivers())
+        s3.put(shard.info.key, Body.File(local))
+    }
+}
+
+/** A given shard's photos: real HEIC blobs, and a real pack of their thumbnails. */
+private class GivenPhotos {
+    private val photos = mutableListOf<GivenPhoto>()
+
+    fun add(filename: String, width: Int, height: Int) {
+        photos += GivenPhoto(filename, width, height)
+    }
+
+    suspend fun upload(s3: S3Client, scratch: Path): Pair<List<PhotoRow>, ObjectId> {
         val rows = photos.map { photo ->
             // A real HEIC, for the same reason the thumbnail pack is real: a forged zone that a
             // shape assertion can tell apart from a genuine one is a fixture that proves nothing.
@@ -122,26 +206,7 @@ internal class GivenAlbum(private val name: String) {
         thumbnails.packThumbnails(pack, NativeSqlDrivers())
         val thumbsId = ObjectId.ofContent(pack)
         s3.put(thumbsId.blobKey, Body.File(pack))
-
-        val shard = Shard(
-            info = AlbumInfo(
-                id = id,
-                name = name,
-                sourcePath = sourcePath,
-                thumbsId = thumbsId,
-                state = resolvedState,
-                encodingVersion = if (resolvedState == AlbumState.ENCODED) {
-                    DerivativeSpec.ENCODING_VERSION
-                } else {
-                    0
-                },
-                addedAt = Instant.fromEpochSeconds(Clock.System.now().epochSeconds),
-            ),
-            photos = rows,
-        )
-        val local = Path(scratch, "given-$id.db")
-        shard.writeTo(local, NativeSqlDrivers())
-        s3.put(id.shardKey, Body.File(local))
+        return rows to thumbsId
     }
 
     private data class GivenPhoto(val filename: String, val width: Int, val height: Int)

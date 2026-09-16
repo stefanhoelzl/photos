@@ -20,6 +20,7 @@ private val mergedAlbumAdapter = AlbumTable.Adapter(
     date_maxAdapter = instantAdapter,
     cover_photo_idAdapter = uuidAdapter,
     thumbs_idAdapter = objectIdAdapter,
+    addition_packsAdapter = objectIdListAdapter,
 )
 
 private val mergedPhotoAdapter = MergedPhoto.Adapter(
@@ -74,34 +75,51 @@ public class CatalogWriter(public val path: Path, drivers: SqlDrivers) : AutoClo
      */
     public fun rebuild(shards: List<Shard>): RebuildSummary {
         val visible = shards.filter { it.info.state != AlbumState.UPLOADING }
-        val present = visible.mapTo(mutableSetOf()) { it.info.id }
+        // An addition is folded into the album it adds to (§8): its photos are that album's, and
+        // its pack is one more the album's grid reads from. An addition whose target is not here —
+        // deleted before the laptop merged it — is shown as the album it records being added to,
+        // so photos the phone may already have deleted from its gallery stay in sight.
+        val albumIds = visible.filterNot { it.info.isAddition }.mapTo(mutableSetOf()) { it.info.id }
+        val folded = visible.filter { it.info.addsTo?.let(albumIds::contains) == true }
+            .sortedBy { it.info.addedAt }
+            .groupBy { requireNotNull(it.info.addsTo) }
+        val albums = visible.filterNot { it.info.addsTo?.let(albumIds::contains) == true }
+        val present = albums.mapTo(mutableSetOf()) { it.info.id }
         val queries = database.mergedQueries
+        var photoCount = 0
 
         database.transaction {
             queries.deleteAllPhotos()
             queries.deleteAllAlbums()
 
-            for (shard in visible) {
+            for (shard in albums) {
                 val info = shard.info
                 // A parent naming a shard that is not here is not an error: the album surfaces
                 // at the root and the sync reports it, so no album can become unreachable
                 // because one object failed to arrive (§2).
                 val parent = info.parent?.takeIf(present::contains)
-                val dates = shard.photos.mapNotNull(PhotoRow::takenAt)
+                val additions = folded[info.id].orEmpty()
+                // A merge the laptop wrote but did not get to finish leaves an addition whose rows
+                // the album already holds (§7). They are the same photographs, so they count once.
+                val ids = shard.photos.mapTo(mutableSetOf(), PhotoRow::id)
+                val photos = shard.photos + additions.flatMap { addition -> addition.photos.filter { ids.add(it.id) } }
+                val dates = photos.mapNotNull(PhotoRow::takenAt)
+                photoCount += photos.size
 
                 queries.insertAlbum(
                     album_id = info.id,
                     name = info.name,
                     name_folded = info.name.foldedForSearch(),
                     parent = parent,
-                    photo_count = shard.photos.size,
+                    photo_count = photos.size,
                     date_min = dates.minOrNull(),
                     date_max = dates.maxOrNull(),
                     cover_photo_id = info.coverPhotoId,
                     thumbs_id = info.thumbsId,
+                    addition_packs = additions.mapNotNull { it.info.thumbsId }.distinct(),
                 )
 
-                for (photo in shard.photos) queries.insertPhoto(
+                for (photo in photos) queries.insertPhoto(
                     album_id = info.id,
                     id = photo.id,
                     filename = photo.filename,
@@ -128,9 +146,9 @@ public class CatalogWriter(public val path: Path, drivers: SqlDrivers) : AutoClo
         }
 
         return RebuildSummary(
-            albums = visible.size,
-            photos = visible.sumOf { it.photos.size },
-            orphanedAlbums = visible.mapNotNull { shard ->
+            albums = albums.size,
+            photos = photoCount,
+            orphanedAlbums = albums.mapNotNull { shard ->
                 shard.info.id.takeIf { shard.info.parent?.let(present::contains) == false }
             },
         )
@@ -239,8 +257,8 @@ public class CatalogReader(public val path: Path, drivers: SqlDrivers) : AutoClo
     }
 
     /**
-     * The album a photo belongs to — which is where its thumbnail's pack is. A container's cover
-     * photo belongs to a descendant, since a container has no pack of its own (§2).
+     * The album a photo belongs to — which is where its thumbnail's pack is: one of its [Album.packs].
+     * A container's cover photo belongs to a descendant, since a container has no pack of its own (§2).
      */
     public fun albumOf(photo: Uuid): Album? = queries.selectAlbumOfPhoto(photo, ::Album).executeAsOneOrNull()
 

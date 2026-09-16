@@ -27,7 +27,7 @@ Both render identically; only the content differs.
 - **Storage** — one bunny.net storage zone (Frankfurt), S3-compatible API.
 - **Ingest CLI** — Linux, one self-contained binary (`photos-cli`). Reconciles the zone with a
   local library root in one command, and pulls phone-uploaded albums back down.
-- **iOS app** — browses the zone; can upload new albums.
+- **iOS app** — browses the zone; can upload new albums, and add photos to existing ones.
 
 Both are Kotlin Multiplatform, over one shared domain (§7). The app's UI also runs as a Linux
 desktop harness, which is how it is developed and reviewed (§6).
@@ -243,13 +243,22 @@ Consequence: no edge caching, so on-device caching matters.
 
 ### Keys
 
-The zone holds exactly two prefixes.
+The zone holds exactly three prefixes.
 
 ```
 meta/<album-uuid>.db         per-album catalog shard
+addition/<uuid>.db           transient: photos the phone added to an existing album (§8)
 blob/<sha256>                every derivative and thumbnail pack
 blob/<uuid>                  transient: an upload the phone cannot hash yet
 ```
+
+**`addition/` is its own prefix rather than a folder under `meta/`**, because keys never nest
+(below) and because what a shard *is* should be readable from the LIST. It costs a second LIST
+per sync (§4). A build that predates it never lists the prefix — which is harmless for the app,
+and **not** for the CLI: an older CLI's sweep would find an addition's blobs referenced by no
+shard it knows and delete them. **The CLI is therefore updated before the app starts adding
+photos**; that ordering is the whole of the compatibility story, since the phone has no way to
+know what the laptop runs.
 
 There is no path in any key, no extension on any blob, and nothing in the zone names a photo,
 an album or a folder. A shard says what its objects are; the objects say nothing about
@@ -282,7 +291,8 @@ the start of a run answers "does the zone already hold this?" for every object, 
 import resumes** rather than re-uploading what it finished, and **a profile bump sends no
 thumbnail packs at all**: thumbnails do not change when the image profile does, both encoders
 are byte-deterministic (measured), and identical bytes hash identically. That listing is taken
-after the early return described in §7, so a run that changes nothing still costs one request.
+after the early return described in §7, so a run that changes nothing still costs only its two
+shard LISTs.
 
 **The cost, paid explicitly: a blob can have more than one referent.** "This album stopped
 pointing at it" is no longer "nobody wants it", so **nothing deletes blobs eagerly any more**.
@@ -353,6 +363,9 @@ guard does not apply to album *creation* — see below.
 
 - **One shard per album, single owner.** `meta/<album-uuid>.db` is rewritten wholesale by
   whichever device writes it. Merge is concatenation; delete is a rewrite of that one shard.
+- **The phone never rewrites an album to add photos to it.** It writes an *addition* of its
+  own (§8), and only the laptop folds that into the album's shard (§7). So the phone and the laptop
+  never race on an album the laptop owns, and an addition has a single writer until it is merged.
 - Accepted risk: simultaneous writes to one album from both devices are last-writer-wins.
   Safe in practice because every device holds the full merged metadata and can therefore
   rewrite any shard correctly, and one person with two devices does not write concurrently.
@@ -384,6 +397,7 @@ CREATE TABLE album_info (
   encoding_version INTEGER NOT NULL, -- 0 = as uploaded; profiles number from 1 (§5)
   added_at       INTEGER NOT NULL,
   schema_version INTEGER NOT NULL,
+  adds_to        TEXT,               -- an addition's album (§8); NULL for an album
   CHECK (state IN ('uploading', 'uploaded', 'encoded')),
   CHECK ((state = 'encoded') = (encoding_version > 0))
 );
@@ -449,6 +463,11 @@ shard claims without understanding the rest of it — so a shard too new to read
 *identifiable*, and the CLI can leave its directory alone instead of uploading it a second
 time. Everything else in the schema is free to change.
 
+**An addition is the same schema with `adds_to` set** (§8). It lives at `addition/<uuid>.db`, is
+never `encoded`, and its `name` and `parent` are the album's as they were when it was uploaded —
+so the one thing that differs between "photos for this album" and "an album of its own" is whether
+the album it names is still there.
+
 **A typed single row, not a key/value bag.** `album_info` holds real columns with real types,
 so the schema documents itself and a mistyped field fails when the statement is prepared
 rather than reading back NULL. The price is that adding a field is a migration, which
@@ -502,7 +521,9 @@ promise is that a grid opens in one request, offline, and that promise is what t
 **Why the pack is referenced rather than living under its own prefix.** Because the reference
 *is* the change signal. A `thumbs/` prefix would need either a second LIST every sync or an
 ordering rule between two writes; a `thumbs_id` that changed means the meta shard changed,
-which §4's single LIST already sees. The cost is repacking a whole album to add one photo.
+which §4's LIST already sees. The cost is repacking a whole album to add one photo — which is why
+the *phone* never does: photos it adds to an album bring a pack of their own (§8), and the laptop
+repacks when it merges them.
 
 ### Merged local database (on device)
 
@@ -520,7 +541,8 @@ CREATE TABLE album (
   lat           REAL,              -- computed at rebuild, not stored in the shard
   lon           REAL,
   cover_photo_id TEXT,
-  thumbs_id     TEXT
+  thumbs_id     TEXT,
+  addition_packs TEXT NOT NULL      -- the packs of the additions folded in (§8), space-separated
 );
 CREATE INDEX ix_album_parent ON album(parent);
 CREATE INDEX ix_album_folded ON album(name_folded);
@@ -675,10 +697,14 @@ self-correcting once that device updates.
 > directory entirely alone — not uploaded, not deleted, not re-minted. A shard whose probe also
 > fails is the one genuinely unidentifiable case, and it aborts the run.
 
-Version **4** is current. **2** added `source_filename` and redefined `bytes` as the size of
+Version **5** is current. **2** added `source_filename` and redefined `bytes` as the size of
 the blob rather than of the file on disk; **3** was the two-tier rewrite, collapsing the
 original and preview ids into one `image_id` and giving `album_info` its `state` and
-`encoding_version`; **4** added `live_video_filename`.
+`encoding_version`; **4** added `live_video_filename`; **5** added `adds_to`.
+
+The merged database is the one file here that migrates rather than being skipped: it is ours,
+derived, and rebuilt on every app sync, so a migration only has to make the columns exist
+(`addition_packs` came in with the first one).
 
 A column that is merely *added* still costs a bump, and the reason is the reader below rather
 than the one above: a shard has no column it was not written with, and SQLite answers a
@@ -692,12 +718,12 @@ recoverable, and that is not.
 
 ## 4. Sync algorithm
 
-Discovery is a **single `ListObjectsV2` on the flat `meta/` prefix**. The response carries the
-ETag and size of every shard, so that one request *is* the sync plan. There is no manifest
-object and therefore no shared mutable state to conflict on.
+Discovery is **one `ListObjectsV2` on the flat `meta/` prefix, and one on `addition/`**. The
+responses carry the ETag and size of every shard, so those two requests *are* the sync plan.
+There is no manifest object and therefore no shared mutable state to conflict on.
 
 ```
-1. LIST meta/  (encoding-type=url)
+1. LIST meta/ and addition/  (encoding-type=url)
 2. diff returned ETags against sync_state.db
      changed / new ETag  → download that shard
      key absent          → album deleted → drop its rows
@@ -711,10 +737,18 @@ step 3 runs: a rebuild that fails after it leaves a merged DB that no later diff
 touch again. That was measured — an album deleted from the zone stayed on a phone's list across
 relaunches. The app syncs at launch and on a pull of the album list, so either repairs it.
 
-**One LIST covers thumbnails too**, because a thumbnail pack is an ordinary blob referenced by
+**The LISTs cover thumbnails too**, because a thumbnail pack is an ordinary blob referenced by
 `album_info.thumbs_id` (§3): if the pack changed, the shard that points at it changed, and step
 2 already saw that. The same holds for every derivative — nothing in the zone can change
 without some shard's ETag moving.
+
+**An addition is folded into the album it adds to** at the rebuild (§8): its rows become that
+album's, counted, dated and placed with the rest, and its pack is recorded beside the album's own
+(`album.addition_packs`), so the grid reads thumbnails from both. One still `uploading` is shown by
+no reader, like an album. One whose album is not there is shown *as* that album — under the name
+and parent it recorded — so photos the phone may already have deleted from its gallery stay in
+sight. A row an addition shares with its album, left by a merge the laptop committed but did not
+finish (§7), counts once.
 
 The merged DB is **rebuilt wholesale** rather than spliced incrementally. There is no partial
 update path, so stale rows are impossible by construction — which is also why there is no
@@ -998,12 +1032,12 @@ it jumped a slot each time the map came and went.
 | Albums (map) | gear, **list**, upload |
 | Container list | gear, **map**, sort, upload |
 | Container map | gear, **list**, upload |
-| Album grid | gear, **map** — no sort: an album's photos have one order (§3) |
-| Album map | gear, **grid** |
+| Album grid | gear, **map**, upload — no sort: an album's photos have one order (§3) |
+| Album map | gear, **grid**, upload |
 
-**An album's own screens carry no upload.** An upload always makes a new album whose parent is
-the screen it started from (§8), and an album holds photos or sub-albums, never both (§2) — so
-from inside an album of photos there is nowhere legal for one to go.
+**An album's own upload adds to it.** On a list the upload makes a new album whose parent is the
+screen it started from (§8); an album holds photos or sub-albums, never both (§2), so from inside
+an album of photos the only legal place for photos is that album.
 | Fullscreen viewer | gear, share, set-cover |
 | Settings | — |
 
@@ -1651,6 +1685,39 @@ what the zone contains; the other two decide nothing at all.
   `<still-stem>.MOV` for a row from before schema 4 — the convention all 187 pairs already
   follow; pairing is by content identifier, so the walker re-pairs it either way. Pulls write unconditionally — the ignore
   rules govern what goes up.
+- **An addition is merged into its album, and the laptop alone names its files.** An `uploaded`
+  addition (§8) whose album is `encoded` — or `uploaded` and pulled earlier in the same run — goes
+  in after every other write of the run, in four steps that each survive being interrupted:
+
+  ```
+  claim     If-Match: source_path = the album's folder, and every row's final name
+  download  into that folder, skipping files already there
+  derive    only those files, into the album's shard: rows appended, pack repacked, still encoded
+  delete    the addition's shard — its full-quality blobs are then the sweep's
+  ```
+
+  **Names are fixed in the claim**, against what the folder and the album already hold: a clash
+  gains ` (2)`, compared by stem and ignoring case, since a derivative renames its source (a video
+  lands as `.mp4`) and the library may not tell case apart. The phone does none of this (§8): it
+  cannot see the folder. Fixing them before any file exists is what makes "skip a file already
+  there" a safe resume, exactly as claiming the path is for a pull.
+
+  **A claimed addition's files are not new photos.** A run that stopped after the download leaves
+  them in the album's folder; the walk keeps every file a claimed addition names out of that
+  album's uploads, so the merge — which carries the phone's `photo.id` onto each derived row —
+  brings them in once. A run that stopped after committing the album finds the album already
+  holding those files and has only the delete left. A file that failed to derive stays in the
+  folder, and the next walk takes it up as the new photo it is.
+
+  **An addition whose album is gone becomes that album.** Its album deleted before the merge —
+  including by this very run, which deletes before it merges — it is written to `meta/` under its
+  own id with `adds_to` cleared, its `addition/` key is deleted, and it is pulled like any phone
+  album. The folder it lands in is new: the name of the one just deleted is taken for this run, so
+  a pull never puts a deleted folder back. An adoption interrupted between those two writes leaves
+  both keys listed for a moment; the album wins, and the next run deletes the stale key.
+
+  An addition at `uploading` is skipped like a phone album in flight, and abandoned past the
+  seven-day floor the same way.
 - **A laptop-owned album is never restored.** `sync` reads the library and writes the zone; it
   does not put files back. Deleting a folder is a deletion, not a divergence to repair — and
   since ownership is now a column rather than an inference from `source_path`, there is no
@@ -1719,8 +1786,8 @@ what the zone contains; the other two decide nothing at all.
 
 ### Unattended sync (systemd user units)
 
-- `OnCalendar=hourly`, `Persistent=true`, `RandomizedDelaySec=5m`. A no-op run is one LIST —
-  which is exactly what the ETag cache beside the shards buys.
+- `OnCalendar=hourly`, `Persistent=true`, `RandomizedDelaySec=5m`. A no-op run is two LISTs —
+  `meta/` and `addition/` — which is exactly what the ETag cache beside the shards buys.
 - `SuccessExitStatus=75`, which covers all three deferrals: a keyring still locked before the
   first login, an hourly firing that lands while a long run still holds the lock, and a zone
   that cannot be reached at all — no DNS, no route, a refused connection.
@@ -1767,11 +1834,12 @@ Settings. There is no reduced mode: it would be a second picker to build and to 
 **Flow.**
 
 ```
-upload icon               on the album list or a container, never inside an album
+upload icon               on the album list or a container — or inside an album, to add to it
   → gallery picker        album, or loose photos with drag-across-to-select
   → name dialog           name prefilled from the gallery album,
                           parent = the list you started from,
                           delete-from-gallery checkbox
+                          (adding: "Add to <album>", no name, the same checkbox)
   → [tap Upload]
   → prepare               export every asset to disk, name its file, pack the thumbnails
   → write the shard       at `uploading`, naming every object
@@ -1785,11 +1853,33 @@ upload icon               on the album list or a container, never inside an albu
 app launched (§1) and is already in memory; tapping Upload uses it to pre-sign every PUT for
 this album, and the background session then runs against those URLs alone.
 
-**An upload always makes a new album, and the list you started from becomes its parent** — from
-the root a top-level album, from a container a sub-album of it. It never adds to an existing
-album: a shard has one `state` for the whole album, and an encoded album holding rows the laptop
-has not archived would need that state per photo, in the pull and the sweep alike. So an album's
-own grid and map carry no upload icon (§6): an album of photos cannot hold a sub-album (§2).
+**From a list, an upload makes a new album, and the list you started from becomes its parent** —
+from the root a top-level album, from a container a sub-album of it.
+
+**From inside an album, an upload adds to it** — an album of photos cannot hold a sub-album (§2),
+so its grid and map carry the icon for this instead (§6). Any album the phone shows that holds
+photos rather than sub-albums can take them: one the laptop owns, or one the phone uploaded that
+the laptop has not pulled yet.
+
+The photos do **not** go into the album's shard. A shard has one `state` for the whole album, and
+an encoded album holding rows the laptop has not archived would need that state per photo, in the
+pull and the sweep alike. So they go up as an **addition**: a shard of their own at
+`addition/<uuid>.db`, with its own `state` and its own pack, whose `album_info.adds_to` names the
+album. Everything else about it is an upload like any other — the same flow, the same order (the
+addition first at `uploading`, the objects, the addition again at `uploaded`), the same resume,
+cancel, abandonment and delete-from-gallery; the sheet and pill say *Adding to* the album.
+
+- **Readers fold it into the album** (§4): its photos are the album's the moment it lands, with no
+  badge — a photo the phone added behaves as any photo, as a new phone album's do.
+- **The laptop merges it** (§7): the files go into the album's folder, the rows into its shard,
+  and the addition is deleted. `photo.id` survives the merge, so a cover set on an added photo
+  still points at it.
+- **Its `name` and `parent` are the album's**, recorded when it was uploaded. An addition whose
+  album is deleted before the merge — its folder removed on the laptop, say — is shown as that
+  album, and the laptop pulls it as a new album: the photos may exist nowhere else.
+- **The phone names nothing.** An addition's rows carry the camera's names exactly, clashes and
+  all: only the laptop can see what the album's folder holds, so only the laptop makes a name
+  unique (§7). A new album still suffixes its own clashes, as below.
 
 **What goes up, per asset** — the version the Photos app shows, since that is what the library
 then keeps:

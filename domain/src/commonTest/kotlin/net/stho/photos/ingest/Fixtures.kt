@@ -83,6 +83,8 @@ internal class LibraryFixture(label: String = "library") {
         SystemFileSystem.createDirectories(pathOf(path))
     }
 
+    fun exists(path: String): Boolean = SystemFileSystem.exists(pathOf(path))
+
     fun remove(path: String) {
         pathOf(path).deleteRecursively()
     }

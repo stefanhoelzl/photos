@@ -28,8 +28,12 @@ import net.stho.photos.model.PhotoRow
  * A version-3 reader would read such a shard correctly but write it back without the column,
  * which is why this is a bump and not a silent addition — being skipped and reported is
  * recoverable, and being quietly un-fixed once per run is not.
+ *
+ * **5** — `album_info.adds_to`, for the shards the phone writes when it adds photos to an album
+ * that already exists (§8). Those live under `addition/` rather than `meta/`, so a reader that
+ * predates them never lists one; the bump is for the column, as every added column's is.
  */
-public const val SHARD_SCHEMA_VERSION: Int = 4
+public const val SHARD_SCHEMA_VERSION: Int = 5
 
 /**
  * The first version whose `photo` table has `live_video_filename`.
@@ -38,6 +42,9 @@ public const val SHARD_SCHEMA_VERSION: Int = 4
  * asking is "does this file have the column", not "is this shard modern".
  */
 internal const val SCHEMA_LIVE_VIDEO_FILENAME: Int = 4
+
+/** The first version whose `album_info` has `adds_to`. */
+internal const val SCHEMA_ADDS_TO: Int = 5
 
 /**
  * An album's own record — the single row of a shard's `album_info` table.
@@ -84,7 +91,22 @@ public data class AlbumInfo(
      */
     public val addedAt: Instant,
     public val schemaVersion: Int = SHARD_SCHEMA_VERSION,
-)
+    /**
+     * The album these photos are being added to, or null for an album of its own (§8).
+     *
+     * An addition is the phone's way of putting photos into an album it does not own: a shard of
+     * its own at `addition/<id>.db`, with its own [state] and its own pack, which readers fold into
+     * the target and the laptop merges into it. [name] and [parent] hold the target's as they were
+     * when it was uploaded, so an addition whose target has gone reads as an album of its own.
+     */
+    public val addsTo: Uuid? = null,
+) {
+    /** Whether this shard adds photos to another album rather than being one. */
+    public val isAddition: Boolean get() = addsTo != null
+
+    /** Where this shard lives in the zone: `meta/<id>.db`, or `addition/<id>.db` for an addition. */
+    public val key: String get() = if (isAddition) id.additionKey else id.shardKey
+}
 
 /**
  * One album as the merged database sees it: the shard's own fields plus everything that can only
@@ -108,7 +130,15 @@ public data class Album(
     public val longitude: Double?,
     public val coverPhotoId: Uuid?,
     public val thumbsId: ObjectId?,
-)
+    /**
+     * The packs of the additions folded into this album, which hold the thumbnails of the photos
+     * the phone added and the laptop has not merged yet (§8). Merged-DB only.
+     */
+    public val additionPacks: List<ObjectId> = emptyList(),
+) {
+    /** Every pack this album's grid reads from: its own, then its additions'. */
+    public val packs: List<ObjectId> get() = listOfNotNull(thumbsId) + additionPacks
+}
 
 /** The contents of one shard. */
 public data class Shard(
@@ -126,13 +156,17 @@ public data class Shard(
 
 // ------------------------------------------------------------------------------------- keys
 //
-// The two prefixes the zone has (§2). Keys are built here and nowhere else.
+// The three prefixes the zone has (§2). Keys are built here and nowhere else.
 
 public const val META_PREFIX: String = "meta/"
+public const val ADDITION_PREFIX: String = "addition/"
 public const val BLOB_PREFIX: String = "blob/"
 
 /** This album's shard key: `meta/<album-uuid>.db`. */
 public val Uuid.shardKey: String get() = "$META_PREFIX$this.db"
+
+/** An addition's shard key: `addition/<uuid>.db` (§8). */
+public val Uuid.additionKey: String get() = "$ADDITION_PREFIX$this.db"
 
 /** This object's blob key: `blob/<id>`, with no extension (§2). */
 public val ObjectId.blobKey: String get() = "$BLOB_PREFIX$this"
@@ -144,9 +178,14 @@ public val ObjectId.blobKey: String get() = "$BLOB_PREFIX$this"
  * The design leans on LIST being the whole sync mechanism, so this is deliberately strict: a key
  * it cannot parse is skipped, never guessed at.
  */
-public fun String.asShardAlbumId(): Uuid? {
-    if (!startsWith(META_PREFIX) || !endsWith(".db")) return null
-    val name = substring(META_PREFIX.length, length - ".db".length)
+public fun String.asShardAlbumId(): Uuid? = shardId(META_PREFIX)
+
+/** The addition id in `addition/<uuid>.db`, or null for anything else — as strict as [asShardAlbumId]. */
+public fun String.asAdditionId(): Uuid? = shardId(ADDITION_PREFIX)
+
+private fun String.shardId(prefix: String): Uuid? {
+    if (!startsWith(prefix) || !endsWith(".db")) return null
+    val name = substring(prefix.length, length - ".db".length)
     return if (name.isEmpty()) null else Uuid.parseOrNull(name)
 }
 

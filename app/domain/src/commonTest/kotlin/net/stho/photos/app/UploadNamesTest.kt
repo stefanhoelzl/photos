@@ -28,6 +28,14 @@ class UploadNamesTest {
         assertEquals("IMG_0007 (2).mov" to null, names.claim("IMG_0007", "mov"))
     }
 
+    /** An addition's names are the camera's, clash or not: only the laptop can see the album's folder (§7). */
+    @Test
+    fun anAdditionLeavesClashesToTheLaptop() {
+        val names = UploadNames(unique = false)
+        assertEquals("IMG_0001.heic" to "IMG_0001.MOV", names.claim("IMG_0001", "heic", pairedExtension = "MOV"))
+        assertEquals("IMG_0001.heic" to null, names.claim("IMG_0001", "heic"))
+    }
+
     @Test
     fun aPairMovesTogetherWhenEitherHalfClashes() {
         val names = UploadNames()

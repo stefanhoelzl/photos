@@ -32,6 +32,11 @@ CREATE TABLE IF NOT EXISTS album_info (
   encoding_version INTEGER AS Int NOT NULL,
   added_at       INTEGER AS Instant NOT NULL,
   schema_version INTEGER AS Int NOT NULL,
+  -- The album this shard adds photos to, or NULL for an album of its own. An addition lives at
+  -- `addition/<uuid>.db` rather than under `meta/`, and its `name` and `parent` hold the target's
+  -- as they were when it was uploaded -- so a target deleted before the laptop merges it leaves an
+  -- addition that reads as an album of its own, with nothing lost (§8). Schema 5.
+  adds_to        TEXT AS Uuid,
   CHECK (state IN ('uploading', 'uploaded', 'encoded')),
   -- The two columns cannot disagree about whether the laptop has encoded this album: an
   -- 'encoded' album at version 0, or an 'uploaded' one at version 1, are both unwritable.
@@ -83,12 +88,19 @@ CREATE INDEX IF NOT EXISTS ix_photo_taken ON photo(taken_at);
 insertAlbumInfo:
 INSERT INTO album_info (
   id, album_id, name, parent, source_path, cover_photo_id, thumbs_id,
-  state, encoding_version, added_at, schema_version
-) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  state, encoding_version, added_at, schema_version, adds_to
+) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- Columns are named rather than starred: `schema_version` promises a reader keeps working when
 -- a *newer* writer adds a column, and `SELECT *` would break that promise by shifting indices.
 selectAlbumInfo:
+SELECT album_id, name, parent, source_path, cover_photo_id, thumbs_id,
+       state, encoding_version, added_at, schema_version, adds_to
+FROM album_info WHERE id = 1;
+
+-- A shard written before schema 5 has no `adds_to`, for the same reason as the two photo selects
+-- below: SQLite fails a statement naming a column the file does not have.
+selectAlbumInfoBeforeSchema5:
 SELECT album_id, name, parent, source_path, cover_photo_id, thumbs_id,
        state, encoding_version, added_at, schema_version
 FROM album_info WHERE id = 1;
