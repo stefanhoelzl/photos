@@ -56,10 +56,10 @@ public fun App(
         onDispose { orientation.allowLandscape(false) }
     }
 
-    // The list on screen becomes the new album's parent, which is why only the two album lists
-    // carry the icon: an album of photos cannot hold a sub-album (§2).
+    // On the two album lists the list on screen becomes the new album's parent; on an album of
+    // photos, which cannot hold a sub-album (§2), the photos are added to that album instead (§8).
     val startUpload: (() -> Unit)? = uploads?.let { upload ->
-        { model.openUpload()?.let { upload.open(it.parent, it.parentName) } }
+        { model.openUpload()?.let { upload.open(it.parent, it.parentName, it.addTo) } }
     }
 
     // The ground runs under the status bar and home indicator; the content does not. On a
@@ -130,8 +130,9 @@ public fun App(
                 is Screen.Grid -> {
                     // No sort here: an album's photos have one order, oldest first (§3). The
                     // icon on this screen used to cycle the *album* sort, which changed nothing
-                    // visible and read as broken. No upload either: see [startUpload].
+                    // visible and read as broken. Upload adds to this album: see [startUpload].
                     NavBar(screen.name, ui.photosSubtitle, onBack = model::back) {
+                        startUpload?.let { BarButton(Icons.upload, "Upload", it) }
                         if (ui.showingMap) BarButton(Icons.grid, "Grid", model::toggleMap)
                         else BarButton(Icons.map, "Map", model::toggleMap)
                         BarButton(Icons.gear, "Settings", model::openSettings)

@@ -76,6 +76,20 @@ internal val albumStateAdapter: ColumnAdapter<AlbumState, String> =
         override fun encode(value: AlbumState): String = value.wire
     }
 
+/**
+ * A list of object ids as one space-separated column: the merged database's `addition_packs`.
+ *
+ * A column rather than a table because the list only ever travels with its album row — every
+ * reader that has an [Album] then has its packs, with no second query.
+ */
+internal val objectIdListAdapter: ColumnAdapter<List<ObjectId>, String> =
+    object : ColumnAdapter<List<ObjectId>, String> {
+        override fun decode(databaseValue: String): List<ObjectId> =
+            databaseValue.split(' ').filter(String::isNotEmpty).map(objectIdAdapter::decode)
+
+        override fun encode(value: List<ObjectId>): String = value.joinToString(" ")
+    }
+
 /** Stored unquoted, exactly as [ETag] holds it. */
 internal val etagAdapter: ColumnAdapter<ETag, String> = object : ColumnAdapter<ETag, String> {
     override fun decode(databaseValue: String): ETag = ETag(databaseValue)

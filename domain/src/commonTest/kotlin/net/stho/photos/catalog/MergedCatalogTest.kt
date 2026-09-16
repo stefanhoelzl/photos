@@ -46,6 +46,65 @@ class MergedCatalogTest {
     }
 
     /**
+     * §8's addition: photos the phone added to an album are that album's to every reader before the
+     * laptop merges them — counted, dated, and in its grid, with their thumbnails in a pack of their
+     * own that the album now also reads.
+     */
+    @Test
+    fun anAdditionIsFoldedIntoTheAlbumItAddsTo() {
+        val island = album("Island", photos = listOf(photo("IMG_0001.jpg", takenAt = fixtureEpoch)))
+        val added = addition(island, listOf(photo("IMG_0002.heic", takenAt = fixtureEpoch + 3600.seconds)))
+        val inFlight = addition(island, listOf(photo("IMG_0003.heic")), state = AlbumState.UPLOADING)
+
+        val built = build(listOf(island, added, inFlight))
+
+        assertEquals(1, built.summary.albums)
+        assertEquals(2, built.summary.photos)
+        val album = assertNotNull(built.reader.album(island.info.id))
+        assertEquals(2, album.photoCount)
+        assertEquals(fixtureEpoch + 3600.seconds, album.dateMax)
+        assertEquals(listOf(island.info.thumbsId, added.info.thumbsId), album.packs)
+        assertEquals(
+            listOf("IMG_0001.jpg", "IMG_0002.heic"),
+            built.reader.photos(island.info.id).map(PhotoRow::filename),
+            "an addition still uploading is shown by no reader",
+        )
+        assertEquals(island.info.id, built.reader.albumOf(added.photos.single().id)?.id)
+    }
+
+    /**
+     * A merge the laptop committed but did not finish leaves the addition beside an album that
+     * already holds its rows (§7). The photographs are the album's once, not twice.
+     */
+    @Test
+    fun anAdditionTheAlbumAlreadyHoldsCountsOnce() {
+        val added = photo("IMG_0002.heic")
+        val island = album("Island", photos = listOf(photo("IMG_0001.jpg"), added))
+        val leftover = addition(island, listOf(added))
+
+        val built = build(listOf(island, leftover))
+
+        assertEquals(2, assertNotNull(built.reader.album(island.info.id)).photoCount)
+        assertEquals(2, built.reader.photoCount())
+    }
+
+    /** An addition whose album is gone reads as the album it recorded, so nothing it holds is out of sight. */
+    @Test
+    fun anAdditionWhoseAlbumIsGoneIsShownAsThatAlbum() {
+        val container = album("Reisen", thumbsId = null)
+        val island = album("Island", parent = container.info.id, photos = listOf(photo("IMG_0001.jpg")))
+        val orphan = addition(island, listOf(photo("IMG_0002.heic")))
+
+        val built = build(listOf(container, orphan))
+
+        val shown = assertNotNull(built.reader.album(orphan.info.id))
+        assertEquals("Island", shown.name)
+        assertEquals(container.info.id, shown.parent)
+        assertEquals(1, shown.photoCount)
+        assertEquals(listOf(orphan.info.thumbsId), shown.packs)
+    }
+
+    /**
      * §8 writes a phone album's shard before its objects, so while it is `uploading` the shard
      * names blobs that may not exist yet. No reader shows it until the second write lands.
      */

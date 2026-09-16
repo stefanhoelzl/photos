@@ -45,8 +45,9 @@ public class PackFetcher(
         SystemFileSystem.createDirectories(directory)
     }
 
+    /** Whether every pack the album's grid reads — its own and its additions' (§8) — has landed. */
     override fun has(album: Album): Boolean =
-        album.thumbsId?.let { SystemFileSystem.exists(store.packPath(it)) } == true
+        album.packs.isNotEmpty() && album.packs.all { SystemFileSystem.exists(store.packPath(it)) }
 
     override fun cover(album: Album): ByteArray? {
         // An album of photos whose own pack has not landed stops here, before opening the merged
@@ -57,24 +58,30 @@ public class PackFetcher(
         // thumbnail is then in the pack of whichever album holds that photo: the album itself, or
         // for a container the descendant it came from. Reading only the album's own pack left
         // every container row on the placeholder.
-        val (photo, pack) = runCatching {
+        // A photo the phone added and the laptop has not merged is in one of the album's addition
+        // packs rather than its own (§8), so each is asked in turn.
+        val (photo, packs) = runCatching {
             CatalogReader(mergedPath, drivers).use { reader ->
                 val photo = reader.coverPhoto(of = album.id)
-                val pack = photo?.let { reader.albumOf(it.id)?.thumbsId }
-                photo to pack
+                val packs = photo?.let { reader.albumOf(it.id)?.packs }.orEmpty()
+                photo to packs
             }
         }.getOrNull() ?: return null
-        if (photo == null || pack == null) return null
-        val path = store.packPath(pack)
-        if (!SystemFileSystem.exists(path)) return null
-        return runCatching { ThumbPack(path, drivers).thumbnail(photo.id) }.getOrNull()
+        if (photo == null) return null
+        return packs.firstNotNullOfOrNull { pack ->
+            val path = store.packPath(pack)
+            if (!SystemFileSystem.exists(path)) null
+            else runCatching { ThumbPack(path, drivers).thumbnail(photo.id) }.getOrNull()
+        }
     }
 
-    override fun all(album: Album): Map<Uuid, ByteArray> {
-        val thumbs = album.thumbsId ?: return emptyMap()
-        val path = store.packPath(thumbs)
-        if (!SystemFileSystem.exists(path)) return emptyMap()
-        return runCatching { ThumbPack(path, drivers).unpack() }.getOrDefault(emptyMap())
+    /** Every thumbnail the album's landed packs hold: its own, and its additions' (§8). */
+    override fun all(album: Album): Map<Uuid, ByteArray> = buildMap {
+        for (pack in album.packs) {
+            val path = store.packPath(pack)
+            if (!SystemFileSystem.exists(path)) continue
+            putAll(runCatching { ThumbPack(path, drivers).unpack() }.getOrDefault(emptyMap()))
+        }
     }
 
     /**
@@ -84,9 +91,10 @@ public class PackFetcher(
      * allowed — and this is what makes that bearable rather than a minute of placeholders.
      */
     override fun prioritise(album: Album) {
-        val ref = album.packRef() ?: return
-        store.expectPack(ref.id)
-        queue.visiblePacks(listOf(ref))
+        val refs = album.packRefs()
+        if (refs.isEmpty()) return
+        refs.forEach { store.expectPack(it.id) }
+        queue.visiblePacks(refs)
     }
 
     /**
@@ -96,7 +104,7 @@ public class PackFetcher(
      * makes it acceptable for an explicit download to sit below it on the ladder.
      */
     public fun sweep(albums: List<Album>) {
-        val wanted = albums.mapNotNull { it.packRef() }.filterNot { store.has(it.id) }
+        val wanted = albums.flatMap { it.packRefs() }.filterNot { store.has(it.id) }
         wanted.forEach { store.expectPack(it.id) }
         _outstanding.value = wanted.size
         queue.sweepPacks(wanted)
@@ -104,7 +112,7 @@ public class PackFetcher(
 
     /** Called by the composition root as packs land, so the nav bar can count them down. */
     public fun noteArrivals(held: Set<net.stho.photos.catalog.ObjectId>, albums: List<Album>) {
-        val packs = albums.mapNotNull { it.thumbsId }
+        val packs = albums.flatMap { it.packs }
         val landed = packs.count { it in held }
         _arrivals.value = landed
         _outstanding.value = (packs.size - landed).coerceAtLeast(0)
@@ -113,8 +121,9 @@ public class PackFetcher(
     /**
      * A pack's size is not stored anywhere — it is a blob, not a LISTed shard — so it is
      * estimated from the album's photo count at §5's measured 14.0 KiB per thumbnail. Validated
-     * against ten real packs: 9.7–16.6 KiB each, median 14.0.
+     * against ten real packs: 9.7–16.6 KiB each, median 14.0. An album with additions spreads its
+     * count over its packs, which is only an estimate either way.
      */
-    private fun Album.packRef(): BlobRef? =
-        thumbsId?.let { BlobRef(it, CacheQueue.packBytes(photoCount), id, BlobKind.Pack) }
+    private fun Album.packRefs(): List<BlobRef> =
+        packs.map { BlobRef(it, CacheQueue.packBytes(photoCount / packs.size), id, BlobKind.Pack) }
 }

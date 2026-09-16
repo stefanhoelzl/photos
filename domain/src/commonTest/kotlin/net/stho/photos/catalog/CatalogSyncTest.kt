@@ -36,7 +36,7 @@ class CatalogSyncTest {
         fun upload(shard: Shard, etag: String) {
             val scratch = Path(cacheRoot, "upload-${shard.info.id}.db")
             shard.writeTo(scratch, testDrivers)
-            zone.put(shard.info.id.shardKey, scratch.readBytes(), etag)
+            zone.put(shard.info.key, scratch.readBytes(), etag)
             SystemFileSystem.delete(scratch)
         }
 
@@ -44,6 +44,54 @@ class CatalogSyncTest {
     }
 
     private fun fixture(label: String = "sync") = Fixture(FakeZone(), temporaryDirectory(label))
+
+    // ------------------------------------------------------------------------------ additions
+
+    /** §8: an addition is listed under `addition/`, fetched from there, and handed back beside the albums. */
+    @Test
+    fun anAdditionIsListedFetchedAndFoldedIn() = runTest {
+        val fixture = fixture("addition")
+        val island = album("Island", photos = listOf(photo("a.jpg")))
+        val added = addition(island, listOf(photo("b.heic")))
+        fixture.upload(island, "i1")
+        fixture.upload(added, "a1")
+
+        val refreshed = fixture.sync.refresh()
+
+        assertEquals(setOf(island.info.id, added.info.id), refreshed.shards.map { it.info.id }.toSet())
+        assertEquals(island.info.id, refreshed.shards.single { it.info.isAddition }.info.addsTo)
+
+        val report = fixture.sync.sync(alwaysRebuild = true)
+        assertEquals(1, report.albums)
+        assertEquals(2, fixture.reader().use { it.photos(island.info.id).size })
+
+        fixture.zone.remove(added.info.key)
+        fixture.sync.sync(alwaysRebuild = true)
+        assertEquals(1, fixture.reader().use { it.photos(island.info.id).size }, "a merged addition's key is gone")
+    }
+
+    /**
+     * An addition the laptop turns into an album of its own is written to `meta/` under the same id
+     * before its `addition/` key goes (§7). Listed both ways for that moment, it is the album.
+     */
+    @Test
+    fun anAdditionAlsoListedAsAnAlbumIsTheAlbum() = runTest {
+        val fixture = fixture("adopted")
+        val gone = album("Island")
+        val added = addition(gone, listOf(photo("b.heic")))
+        val adopted = Shard(added.info.copy(addsTo = null), added.photos)
+        fixture.upload(added, "a1")
+        fixture.upload(adopted, "m1")
+
+        val refreshed = fixture.sync.refresh()
+
+        assertEquals(listOf(adopted.info), refreshed.shards.map { it.info })
+        assertTrue(added.info.key in refreshed.report.ignoredKeys)
+
+        // Deleting the stale `addition/` key must not take the album's local copy with it.
+        fixture.sync.deleteShard(added)
+        assertEquals(listOf(adopted.info), fixture.sync.refresh().shards.map { it.info })
+    }
 
     // ------------------------------------------------------------------------------ first run
 
@@ -64,11 +112,11 @@ class CatalogSyncTest {
     }
 
     /**
-     * §4 calls the single LIST "the sync plan". A run that changes nothing must cost that one
-     * request and no more — the hourly systemd unit depends on it.
+     * §4 calls the LISTs "the sync plan" — `meta/` and `addition/`. A run that changes nothing must
+     * cost those two requests and no more — the hourly systemd unit depends on it.
      */
     @Test
-    fun anUnchangedSecondSyncIsOneListAndNoFetches() = runTest {
+    fun anUnchangedSecondSyncIsTwoListsAndNoFetches() = runTest {
         val fixture = fixture("noop")
         fixture.upload(album("Sommer", photos = listOf(photo("a.jpg"))), "e1")
 
@@ -80,7 +128,7 @@ class CatalogSyncTest {
         assertTrue(report.fetchedShards.isEmpty())
         assertFalse(report.rebuilt)
         assertEquals(before, fixture.zone.requestedKeys.size) // no object GETs at all
-        assertEquals(2, fixture.zone.listCount)
+        assertEquals(4, fixture.zone.listCount)
     }
 
     @Test
@@ -325,7 +373,7 @@ class CatalogSyncTest {
         fixture.upload(shard, "s1")
         fixture.sync.sync()
 
-        fixture.sync.deleteShard(shard.info.id)
+        fixture.sync.deleteShard(shard)
 
         assertFalse(SystemFileSystem.exists(fixture.sync.shardPath(shard.info.id)))
         assertEquals(null, fixture.sync.etag(of = shard.info.id))

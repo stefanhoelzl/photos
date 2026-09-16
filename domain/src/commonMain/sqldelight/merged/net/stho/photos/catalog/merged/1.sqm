@@ -1,0 +1,6 @@
+import kotlin.collections.List;
+import net.stho.photos.catalog.ObjectId;
+
+-- The merged database is derived and rebuilt on every app sync (§4), so nothing here has to be
+-- carried across: the column only has to exist before the first rebuild writes it.
+ALTER TABLE album ADD COLUMN addition_packs TEXT AS List<ObjectId> NOT NULL DEFAULT '';

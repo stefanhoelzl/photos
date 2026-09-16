@@ -14,6 +14,8 @@ import kotlinx.coroutines.launch
 public data class PickerUi(
     val parent: Uuid? = null,
     val parentName: String = "",
+    /** The album the photos are added to, when the picker was opened from one (§8); its name is [parentName]. */
+    val addTo: Uuid? = null,
     /** Null until the platform has answered. */
     val access: GalleryAccess? = null,
     val albums: List<GalleryAlbum> = emptyList(),
@@ -28,6 +30,7 @@ public data class PickerUi(
 )
 
 public data class Naming(
+    /** The new album's name. Unused when adding to an album, which already has one. */
     val name: String,
     val assetIds: List<String>,
     /** The gallery album chosen whole, which deleting takes too; null for loose photos. */
@@ -56,10 +59,10 @@ public class UploadModel(
 
     private var loading: Job? = null
 
-    /** The upload icon. [parent] is where the new album goes. */
-    public fun open(parent: Uuid?, parentName: String) {
+    /** The upload icon. [parent] is where the new album goes, or [addTo] the album the photos go into. */
+    public fun open(parent: Uuid?, parentName: String, addTo: Uuid? = null) {
         loading?.cancel()
-        _picker.value = PickerUi(parent = parent, parentName = parentName)
+        _picker.value = PickerUi(parent = parent, parentName = parentName, addTo = addTo)
         loading = scope.launch {
             try {
                 val access = gallery.requestAccess()
@@ -114,14 +117,21 @@ public class UploadModel(
 
     public fun dismissNaming(): Unit = _picker.update { it.copy(naming = null) }
 
-    /** Upload. The new album's id, or null when there is no name or nothing to send. */
+    /**
+     * Upload. The upload's id, or null when there is nothing to send, or no name for a new album.
+     *
+     * Adding to an album sends that album's name and parent as the request's: the addition records
+     * both, so it can stand as an album of its own if its target is gone before the laptop merges it.
+     */
     public fun confirm(): Uuid? {
         val picker = _picker.value
         val naming = picker.naming ?: return null
-        if (naming.name.isBlank() || naming.assetIds.isEmpty()) return null
+        if (naming.assetIds.isEmpty()) return null
+        val name = if (picker.addTo != null) picker.parentName else naming.name.trim()
+        if (name.isBlank()) return null
         close()
         return uploads.start(
-            UploadRequest(naming.name.trim(), picker.parent, naming.assetIds, naming.galleryAlbum, naming.deleteFromGallery),
+            UploadRequest(name, picker.parent, naming.assetIds, naming.galleryAlbum, naming.deleteFromGallery, picker.addTo),
         )
     }
 

@@ -343,6 +343,34 @@ class ReconcilerTest {
     }
 
     /**
+     * An addition to an album whose shard is too new to read is not an addition to an album that is
+     * gone: adopting it would make a second album of photos that belong in the first. It waits.
+     */
+    @Test
+    fun anAdditionToATooNewAlbumIsNeitherMergedNorAdopted() {
+        val library = LibraryFixture()
+        library.file("Neuseeland/a.jpg")
+        val probe = ShardProbe(albumId = Uuid.random(), sourcePath = "Neuseeland", schemaVersion = SHARD_SCHEMA_VERSION + 1)
+        val addition = Shard(
+            AlbumInfo(
+                id = Uuid.random(),
+                name = "Neuseeland",
+                thumbsId = blobId(),
+                state = AlbumState.UPLOADED,
+                encodingVersion = 0,
+                addedAt = fixtureAddedAt,
+                addsTo = probe.albumId,
+            ),
+            listOf(library.row("b.jpg")),
+        )
+
+        val plan = library.plan(shards = listOf(addition), unreadable = listOf(probe))
+
+        assertTrue(plan.merges.isEmpty())
+        assertTrue(plan.pulls.isEmpty(), "not adopted as an album of its own")
+    }
+
+    /**
      * Two albums claiming one folder: picking either would upload into it and leave the other
      * lingering unseen, and neither run would ever say so. The folder is left alone and named.
      */

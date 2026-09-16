@@ -458,8 +458,8 @@ public class AppModel(
         // Tapping is what promotes an album's pack: the queue's order becomes what the person
         // is actually looking at (§6).
         thumbnails.prioritise(album)
-        album.thumbsId?.let { pack ->
-            queue.visiblePacks(listOf(BlobRef(pack, CacheQueue.packBytes(album.photoCount), album.id)))
+        if (album.packs.isNotEmpty()) {
+            queue.visiblePacks(album.packs.map { BlobRef(it, CacheQueue.packBytes(album.photoCount / album.packs.size), album.id) })
         }
         val screen =
             // §2: an album has sub-albums XOR photos, never both -- so the row it was tapped on
@@ -708,14 +708,22 @@ public class AppModel(
     // --------------------------------------------------------------------------- the upload
 
     /**
-     * The upload icon. The list on screen becomes the new album's parent (§8), so only the album
-     * list and a container offer it: an album of photos cannot hold a sub-album (§2). Null anywhere
-     * else, and nothing moves.
+     * The upload icon. On the album list or a container, the list on screen becomes the new album's
+     * parent (§8); on an album of photos, which cannot hold a sub-album (§2), the photos are added
+     * to that album instead. Null anywhere else, and nothing moves.
      */
     public fun openUpload(): Screen.Upload? {
         val upload = when (val here = state.value.screen) {
             Screen.Albums -> Screen.Upload(parent = null, parentName = "Albums")
             is Screen.Container -> Screen.Upload(parent = here.albumId, parentName = here.name)
+            // An album of photos takes photos rather than a sub-album (§8). Its parent rides along
+            // because the addition records it: an addition whose album is deleted before the laptop
+            // merges it becomes an album of its own, where this one was.
+            is Screen.Grid -> Screen.Upload(
+                parent = catalog.album(here.albumId)?.parent,
+                parentName = here.name,
+                addTo = here.albumId,
+            )
             else -> return null
         }
         navigate { it.push(upload) }
@@ -804,7 +812,7 @@ public class AppModel(
                 is Screen.Photo -> {
                     val photos = catalog.photos(screen.albumId)
                     val album = catalog.album(screen.albumId)
-                    if (album != null && this@AppModel.thumbnails.has(album) && current.thumbnails.isEmpty()) {
+                    if (album != null && this@AppModel.thumbnails.has(album) && current.lacksThumbnails(photos)) {
                         loadThumbnails(album)
                     }
                     if (current.preview == null) loadPreview(screen.index, photos)
@@ -813,11 +821,12 @@ public class AppModel(
 
                 is Screen.Grid -> {
                     val album = catalog.album(screen.albumId)
+                    val photos = catalog.photos(screen.albumId)
                     val ready = album != null && this@AppModel.thumbnails.has(album)
-                    if (ready && current.thumbnails.isEmpty()) loadThumbnails(album)
+                    if (ready && current.lacksThumbnails(photos)) loadThumbnails(album)
                     current.copy(
                         rows = emptyList(),
-                        photos = catalog.photos(screen.albumId),
+                        photos = photos,
                         packReady = ready,
                     )
                 }
@@ -852,6 +861,12 @@ public class AppModel(
      * off the thread that is drawing. The grid renders placeholders until this lands, which is
      * the same state it shows while the pack is still downloading.
      */
+    /**
+     * Whether a photo on screen has no thumbnail loaded. Not merely "none are": photos the phone
+     * adds to an open album arrive with a pack of their own (§8), after the album's own is showing.
+     */
+    private fun AppUi.lacksThumbnails(photos: List<PhotoRow>): Boolean = photos.any { it.id !in thumbnails }
+
     private fun loadThumbnails(album: net.stho.photos.catalog.Album) {
         scope.launch {
             val loaded = thumbnails.all(album)

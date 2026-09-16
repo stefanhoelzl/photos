@@ -29,6 +29,7 @@ private val albumInfoAdapter = Album_info.Adapter(
     encoding_versionAdapter = IntColumnAdapter,
     added_atAdapter = instantAdapter,
     schema_versionAdapter = IntColumnAdapter,
+    adds_toAdapter = uuidAdapter,
 )
 
 private val shardPhotoAdapter = ShardPhoto.Adapter(
@@ -56,7 +57,7 @@ public data class ShardProbe(
 )
 
 /**
- * Writes this shard to [path], ready to PUT at `meta/<album-uuid>.db`.
+ * Writes this shard to [path], ready to PUT at its [AlbumInfo.key].
  *
  * The whole shard is rewritten every time; there is no incremental path, which is what makes
  * stale rows impossible by construction (§2's single-owner rule). The file is removed first for
@@ -79,6 +80,7 @@ public fun Shard.writeTo(path: Path, drivers: SqlDrivers) {
                 encoding_version = info.encodingVersion,
                 added_at = info.addedAt,
                 schema_version = info.schemaVersion,
+                adds_to = info.addsTo,
             )
             for (photo in photos) database.shardQueries.insertPhoto(
                 id = photo.id,
@@ -111,8 +113,13 @@ public fun Path.readShard(drivers: SqlDrivers): Shard = withShard(drivers) { que
     if (version > SHARD_SCHEMA_VERSION) {
         throw ShardFailure.UnsupportedVersion(found = version, supported = SHARD_SCHEMA_VERSION)
     }
-    val info = queries.selectAlbumInfo(::AlbumInfo).executeAsOneOrNull()
-        ?: throw ShardFailure.MissingAlbumInfo()
+    val info = if (version >= SCHEMA_ADDS_TO) {
+        queries.selectAlbumInfo(::AlbumInfo).executeAsOneOrNull()
+    } else {
+        queries.selectAlbumInfoBeforeSchema5 { id, name, parent, sourcePath, cover, thumbs, state, encoding, added, schema ->
+            AlbumInfo(id, name, parent, sourcePath, cover, thumbs, state, encoding, added, schema)
+        }.executeAsOneOrNull()
+    } ?: throw ShardFailure.MissingAlbumInfo()
     // Reading an older shard is reading a file with fewer columns, and SQLite answers a
     // statement naming one it does not have with an error rather than a null. So the version
     // picks the statement — the cost of §3's promise to read anything at or below this build,

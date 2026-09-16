@@ -122,6 +122,14 @@ internal class ZoneExpectations {
         val declared = albums.mapValues { (_, album) -> album.files.keys.sorted() }
         val actual = state.byPath.mapValues { (_, shard) -> shard.photos.map(PhotoRow::filename).sorted() }
         if (declared != actual) throw ZoneMismatch(scenario.label, declared, actual)
+        // Closed-world for additions too: none is declared, so any left is one a run failed to merge.
+        if (state.additions.isNotEmpty()) {
+            throw ZoneMismatch(
+                scenario.label,
+                emptyMap(),
+                state.additions.associate { "addition/${it.info.id}" to it.photos.map(PhotoRow::filename).sorted() },
+            )
+        }
 
         for ((path, expected) in albums) {
             val shard = state.byPath.getValue(path)

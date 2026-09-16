@@ -53,13 +53,14 @@ public class MergedCatalogSource(
      */
     override fun blobs(): Map<Uuid, List<BlobRef>> = read(emptyMap()) { reader ->
         reader.allAlbums().associate { album ->
-            val pack = album.thumbsId?.let {
-                BlobRef(it, CacheQueue.packBytes(album.photoCount), album.id, BlobKind.Pack)
+            // An album with additions has a pack for each (§8); the photo count is spread over them.
+            val packs = album.packs.map {
+                BlobRef(it, CacheQueue.packBytes(album.photoCount / album.packs.size), album.id, BlobKind.Pack)
             }
             val media = reader.photos(album.id).flatMap { photo ->
                 photo.objectIds.map { BlobRef(it, photo.bytes ?: 0L, album.id, BlobKind.Media) }
             }
-            album.id to (listOfNotNull(pack) + media)
+            album.id to (packs + media)
         }
     }
 

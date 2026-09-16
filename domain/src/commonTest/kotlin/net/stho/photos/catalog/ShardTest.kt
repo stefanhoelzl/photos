@@ -47,6 +47,23 @@ class ShardTest {
         assertEquals(original.photos.toSet(), restored.photos.toSet())
     }
 
+    /** An addition keeps the album it adds to, and lives under its own prefix (§8). */
+    @Test
+    fun anAdditionRoundTripsItsTargetAndHasItsOwnKey() {
+        val target = album("Island", photos = listOf(photo("IMG_0001.heic")))
+        val original = addition(target, listOf(photo("IMG_0002.heic")))
+
+        val restored = roundTrip(original)
+
+        assertEquals(original.info, restored.info)
+        assertEquals(target.info.id, restored.info.addsTo)
+        assertEquals("addition/${original.info.id}.db", original.info.key)
+        assertEquals(original.info.id, original.info.key.asAdditionId())
+        assertNull(original.info.key.asShardAlbumId(), "an addition is not an album's shard")
+        assertEquals("meta/${target.info.id}.db", target.info.key)
+        assertNull(target.info.key.asAdditionId())
+    }
+
     /** Containers have none, by §2's XOR rule. */
     @Test
     fun anAlbumWithNoPhotosIsLegal() {

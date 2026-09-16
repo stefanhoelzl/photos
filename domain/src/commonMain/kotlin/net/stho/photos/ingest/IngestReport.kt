@@ -19,6 +19,8 @@ public data class IngestReport(
     public val albums: List<AlbumOutcome> = emptyList(),
     public val deletedAlbums: List<DeletedAlbum> = emptyList(),
     public val pulledAlbums: List<PulledAlbum> = emptyList(),
+    /** Photos the phone added to existing albums, now in their folders (§7). */
+    public val mergedAdditions: List<MergedAddition> = emptyList(),
     /**
      * Files the pipeline could not handle. Each keeps its album out of nothing: the album commits
      * without it and it is retried next run, because a file with no row reads as new (§7).
@@ -83,6 +85,8 @@ public data class IngestReport(
         public val files: Int,
         public val bytes: Long,
     )
+
+    public data class MergedAddition(public val path: String, public val photos: Int)
 
     public data class Failure(public val path: String, public val message: String)
 

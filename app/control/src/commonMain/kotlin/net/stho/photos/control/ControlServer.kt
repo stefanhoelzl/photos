@@ -60,7 +60,7 @@ import net.stho.photos.app.UploadModel
  *                         a row of the list of albums sharing one spot, or closing it
  *   POST /cache?album=<uuid>&action=download|pause|clear
  *                         the album row's cache controls, which are a swipe or a tap on the strip
- *   POST /upload/open     the upload icon, on the album list or a container (§8)
+ *   POST /upload/open     the upload icon, on the album list or a container (§8), or in an album to add to it
  *   POST /upload/album?id=<gallery album id>
  *                         pick a whole gallery album; the name dialog opens prefilled
  *   POST /upload/select?ids=<asset>,<asset>
@@ -249,8 +249,8 @@ public class ControlServer(
                     val model = model ?: return@post call.fail(HttpStatusCode.Conflict, "not set up")
                     val uploads = uploads ?: return@post call.fail(HttpStatusCode.NotFound, "this root has no gallery")
                     val upload = model.openUpload()
-                        ?: return@post call.fail(HttpStatusCode.Conflict, "upload starts from the album list or a container")
-                    uploads.open(upload.parent, upload.parentName)
+                        ?: return@post call.fail(HttpStatusCode.Conflict, "upload starts from the album list, a container or an album")
+                    uploads.open(upload.parent, upload.parentName, upload.addTo)
                     call.json(state())
                 }
 
@@ -281,7 +281,7 @@ public class ControlServer(
                 post("/upload/confirm") {
                     val model = model ?: return@post call.fail(HttpStatusCode.Conflict, "not set up")
                     val uploads = uploads ?: return@post call.fail(HttpStatusCode.NotFound, "this root has no gallery")
-                    uploads.confirm() ?: return@post call.fail(HttpStatusCode.UnprocessableEntity, "choose photos and name the album first")
+                    uploads.confirm() ?: return@post call.fail(HttpStatusCode.UnprocessableEntity, "choose photos, and name a new album, first")
                     if (model.state.value.screen is Screen.Upload) model.back()
                     call.json(state())
                 }
@@ -402,10 +402,11 @@ public class ControlServer(
             val statuses = model.statuses.value.joinToString(",") {
                 """{"album":"${it.albumId}","name":${it.name.json()},"stage":"${it.stage}",""" +
                     """"files":${it.files},"filesDone":${it.filesDone},"bytes":${it.bytes},"bytesDone":${it.bytesDone},""" +
-                    """"failure":${it.failure?.json() ?: "null"}}"""
+                    """"failure":${it.failure?.json() ?: "null"},"adding":${it.adding}}"""
             }
             listOf(
                 """"picker":{"access":${picker.access?.name?.json() ?: "null"},"albums":[$galleryAlbums],""" +
+                    """"addTo":${picker.addTo?.let { "\"$it\"" } ?: "null"},""" +
                     """"assets":[$assets],"selected":${picker.selected.size},"naming":$naming,""" +
                     """"failure":${picker.failure?.json() ?: "null"}}""",
                 "\"uploads\":[$statuses]",

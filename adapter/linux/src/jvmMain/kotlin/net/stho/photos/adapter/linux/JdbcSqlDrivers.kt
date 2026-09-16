@@ -18,8 +18,8 @@ import net.stho.photos.ports.SqlDrivers
  *
  * **The version rule is ours to implement here.** SQLiter's driver compares `user_version`
  * against the schema and creates or migrates by itself; the JDBC one does nothing unless asked.
- * So [creating] means *create the schema only if this file is empty* — re-opening an existing
- * database must not run the DDL a second time — and reading means never touching the version at
+ * So [creating] means *create the schema only if this file is empty, and migrate it if it is
+ * older* — re-opening an existing database must not run the DDL a second time — and reading means never touching the version at
  * all, because a shard may carry a `schema_version` this build has never seen (§3).
  */
 public class JdbcSqlDrivers : SqlDrivers {
@@ -32,9 +32,17 @@ public class JdbcSqlDrivers : SqlDrivers {
         val driver = JdbcSqliteDriver("jdbc:sqlite:$path")
         driver.execute(null, "PRAGMA page_size = $PAGE_SIZE", 0)
         driver.execute(null, "PRAGMA journal_mode = ${journal.name}", 0)
-        if (creating && driver.userVersion() == 0L) {
-            schema.create(driver).value
-            driver.execute(null, "PRAGMA user_version = ${schema.version}", 0)
+        if (creating) {
+            val version = driver.userVersion()
+            if (version == 0L) {
+                schema.create(driver).value
+                driver.execute(null, "PRAGMA user_version = ${schema.version}", 0)
+            } else if (version < schema.version) {
+                // What SQLiter does by itself: a database of ours from an older build is brought
+                // up to this one's schema, rather than read with columns it does not have.
+                schema.migrate(driver, version, schema.version).value
+                driver.execute(null, "PRAGMA user_version = ${schema.version}", 0)
+            }
         }
         return driver
     }

@@ -102,6 +102,7 @@ internal fun UploadScreen(uploads: UploadModel, onClose: () -> Unit) {
         NameDialog(
             naming,
             picker.parentName,
+            adding = picker.addTo != null,
             onName = uploads::rename,
             onDelete = uploads::deleteAfterUpload,
             onUpload = { if (uploads.confirm() != null) onClose() },
@@ -342,6 +343,8 @@ private fun AccessNeeded(access: GalleryAccess, onSettings: () -> Unit) {
 private fun NameDialog(
     naming: Naming,
     parentName: String,
+    /** Adding to the album [parentName] names: no name to give, so no field (§8). */
+    adding: Boolean,
     onName: (String) -> Unit,
     onDelete: (Boolean) -> Unit,
     onUpload: () -> Unit,
@@ -349,25 +352,29 @@ private fun NameDialog(
 ) {
     AlertDialog(
         onDismissRequest = onCancel,
-        title = { Text("New album") },
+        title = { Text(if (adding) "Add to $parentName" else "New album") },
         text = {
             Column {
-                Text("${naming.count} items · in $parentName", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                // The field owns its text and cursor; the model only hears about each change. Fed
-                // back from the model instead, the first keystroke's value arrived a recomposition
-                // late, and on iOS the cursor went back before that character — so a typed name came
-                // out with its first letter last. Opened fresh per dialog, so the prefill starts here.
-                var field by remember { mutableStateOf(TextFieldValue(naming.name, TextRange(naming.name.length))) }
-                TextField(
-                    value = field,
-                    onValueChange = {
-                        field = it
-                        onName(it.text)
-                    },
-                    singleLine = true,
-                    placeholder = { Text("Album name") },
-                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                )
+                if (adding) {
+                    Text("${naming.count} items", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    Text("${naming.count} items · in $parentName", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    // The field owns its text and cursor; the model only hears about each change. Fed
+                    // back from the model instead, the first keystroke's value arrived a recomposition
+                    // late, and on iOS the cursor went back before that character — so a typed name came
+                    // out with its first letter last. Opened fresh per dialog, so the prefill starts here.
+                    var field by remember { mutableStateOf(TextFieldValue(naming.name, TextRange(naming.name.length))) }
+                    TextField(
+                        value = field,
+                        onValueChange = {
+                            field = it
+                            onName(it.text)
+                        },
+                        singleLine = true,
+                        placeholder = { Text("Album name") },
+                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                    )
+                }
                 Row(
                     Modifier.fillMaxWidth().padding(top = 12.dp).clickable { onDelete(!naming.deleteFromGallery) },
                     verticalAlignment = Alignment.Top,
@@ -393,7 +400,7 @@ private fun NameDialog(
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onUpload, enabled = naming.name.isNotBlank()) { Text("Upload") } },
+        confirmButton = { TextButton(onClick = onUpload, enabled = adding || naming.name.isNotBlank()) { Text("Upload") } },
         dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
     )
 }
@@ -438,7 +445,7 @@ internal fun UploadProgress(uploads: UploadModel) {
                 Icon(Icons.upload, contentDescription = null, tint = scheme.onSurface, modifier = Modifier.size(18.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "Uploading “${current.name}”",
+                        if (current.adding) "Adding to “${current.name}”" else "Uploading “${current.name}”",
                         fontSize = 12.5.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = scheme.onSurface,
@@ -466,7 +473,10 @@ private fun UploadRow(status: UploadStatus, onCancel: () -> Unit, onRetry: () ->
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(status.name, fontSize = 14.sp, color = scheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    if (status.adding) "Adding to ${status.name}" else status.name,
+                    fontSize = 14.sp, color = scheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
                 Text(
                     status.caption(),
                     fontSize = 12.sp,

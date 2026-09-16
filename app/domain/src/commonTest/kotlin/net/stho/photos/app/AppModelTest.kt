@@ -183,6 +183,29 @@ class AppModelTest {
         assertEquals("1 matching", model.state.value.subtitle)
     }
 
+    /**
+     * §8: upload makes a new album from a list, and adds to the album from an album's own screen —
+     * carrying the album's parent, which the addition records in case the album is gone before the
+     * laptop merges it.
+     */
+    @Test
+    fun uploadingFromAnAlbumAddsToItAndFromAListMakesAnAlbum() = runTest {
+        val trips = container("Trips")
+        val iceland = album("Iceland", 2024).copy(parent = trips.id)
+        val model = model(this, albums = listOf(trips, iceland))
+        model.start()
+
+        assertEquals(Screen.Upload(parent = null, parentName = "Albums"), model.openUpload())
+        model.back()
+        model.open(trips)
+        assertEquals(Screen.Upload(parent = trips.id, parentName = "Trips"), model.openUpload())
+        model.back()
+        model.open(iceland)
+
+        assertEquals(Screen.Upload(parent = trips.id, parentName = "Iceland", addTo = iceland.id), model.openUpload())
+        assertEquals(Screen.Upload(parent = trips.id, parentName = "Iceland", addTo = iceland.id), model.state.value.screen)
+    }
+
     // ---------------------------------------------------------------------- containers on the list
 
     /**

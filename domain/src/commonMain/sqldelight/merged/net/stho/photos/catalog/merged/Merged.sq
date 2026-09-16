@@ -1,4 +1,5 @@
 import kotlin.Int;
+import kotlin.collections.List;
 import kotlin.time.Instant;
 import kotlin.uuid.Uuid;
 import net.stho.photos.catalog.ObjectId;
@@ -16,7 +17,10 @@ CREATE TABLE IF NOT EXISTS album (
   lat            REAL,
   lon            REAL,
   cover_photo_id TEXT AS Uuid,
-  thumbs_id      TEXT AS ObjectId
+  thumbs_id      TEXT AS ObjectId,
+  -- The packs of the additions folded into this album (§8), space-separated: the thumbnails of
+  -- the photos the phone added that the laptop has not merged yet. Added by 1.sqm.
+  addition_packs TEXT AS List<ObjectId> NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS ix_album_parent ON album(parent);
@@ -61,8 +65,8 @@ DELETE FROM album;
 insertAlbum:
 INSERT INTO album (
   album_id, name, name_folded, parent, photo_count, date_min, date_max, lat, lon,
-  cover_photo_id, thumbs_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?);
+  cover_photo_id, thumbs_id, addition_packs
+) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?);
 
 insertPhoto:
 INSERT INTO photo (
@@ -93,36 +97,36 @@ UPDATE album SET
 
 selectRootAlbums:
 SELECT album_id, name, name_folded, parent, photo_count, date_min, date_max, lat, lon,
-       cover_photo_id, thumbs_id
+       cover_photo_id, thumbs_id, addition_packs
 FROM album WHERE parent IS NULL ORDER BY date_max DESC, name;
 
 selectChildAlbums:
 SELECT album_id, name, name_folded, parent, photo_count, date_min, date_max, lat, lon,
-       cover_photo_id, thumbs_id
+       cover_photo_id, thumbs_id, addition_packs
 FROM album WHERE parent = ? ORDER BY date_max DESC, name;
 
 selectAllAlbums:
 SELECT album_id, name, name_folded, parent, photo_count, date_min, date_max, lat, lon,
-       cover_photo_id, thumbs_id
+       cover_photo_id, thumbs_id, addition_packs
 FROM album ORDER BY name;
 
 selectAlbum:
 SELECT album_id, name, name_folded, parent, photo_count, date_min, date_max, lat, lon,
-       cover_photo_id, thumbs_id
+       cover_photo_id, thumbs_id, addition_packs
 FROM album WHERE album_id = ?;
 
 -- Case- and diacritic-insensitive substring search over album names (§3). No fuzzy matching --
 -- too noisy on short names -- and no filename search.
 searchAlbums:
 SELECT album_id, name, name_folded, parent, photo_count, date_min, date_max, lat, lon,
-       cover_photo_id, thumbs_id
+       cover_photo_id, thumbs_id, addition_packs
 FROM album WHERE name_folded LIKE ? ESCAPE '\' ORDER BY name;
 
 -- The map's pins (§6): albums that own photos and have a location. Containers carry a centroid
 -- too, but it lands between their albums -- somewhere nobody went -- so they are not placed.
 selectPlacedAlbums:
 SELECT album_id, name, name_folded, parent, photo_count, date_min, date_max, lat, lon,
-       cover_photo_id, thumbs_id
+       cover_photo_id, thumbs_id, addition_packs
 FROM album WHERE lat IS NOT NULL AND photo_count > 0 ORDER BY name;
 
 -- Every album name that appears more than once under the same parent. Two devices creating one
@@ -163,7 +167,7 @@ ORDER BY p.taken_at IS NULL, p.taken_at, p.filename LIMIT 1;
 -- that holds it.
 selectAlbumOfPhoto:
 SELECT a.album_id, a.name, a.name_folded, a.parent, a.photo_count, a.date_min, a.date_max, a.lat, a.lon,
-       a.cover_photo_id, a.thumbs_id
+       a.cover_photo_id, a.thumbs_id, a.addition_packs
 FROM album a JOIN photo p ON p.album_id = a.album_id WHERE p.id = ? LIMIT 1;
 
 selectPlacedPhotos:
