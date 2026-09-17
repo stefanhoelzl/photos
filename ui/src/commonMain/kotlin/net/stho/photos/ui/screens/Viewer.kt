@@ -46,7 +46,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.uuid.Uuid
@@ -151,7 +150,9 @@ public fun Viewer(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (landscape) BarButton(Icons.back, "Back", onBack)
-            if (photo.mediaType == MediaType.LIVE_PHOTO) Badge("LIVE")
+            // A video's mark stands on its poster only: once the player is up, its own controls
+            // take this corner and it plainly is a video.
+            if (photo.mediaType != MediaType.VIDEO || videoPath == null) ViewerMark(photo.mediaType)
         }
 
         if (!landscape) {
@@ -315,17 +316,3 @@ private fun clampPan(pan: Offset, width: Int, height: Int, scale: Float): Offset
 /** §5's 3200px cap is ~2.4× on a 3× iPhone before pixels soften; 4× lets a detail be inspected. */
 private const val MAX_ZOOM = 4f
 private const val DOUBLE_TAP_ZOOM = 2.5f
-
-@Composable
-private fun Badge(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Medium,
-        color = MaterialTheme.colorScheme.onSurface,
-        modifier = modifier
-            .clip(RoundedCornerShape(20.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .padding(horizontal = 9.dp, vertical = 4.dp),
-    )
-}
