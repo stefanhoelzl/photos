@@ -13,6 +13,7 @@ import kotlin.test.assertEquals
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import net.stho.photos.app.Day
 import net.stho.photos.app.GalleryAccess
 import net.stho.photos.app.GalleryAsset
 import net.stho.photos.app.PickerUi
@@ -26,11 +27,19 @@ import net.stho.photos.model.MediaType
  * selection the picker hands back.
  *
  * At density 1 the grid is 400 px wide: four 100 px tiles a row, with two labels above the first
- * row. Points are aimed at tile centres, well inside their tiles.
+ * row and a 40 px year mark above each year's. Points are aimed at tile centres, well inside their
+ * tiles.
+ *
+ * Six photos in 2020 and six in 2019, newest first as the picker lists them (§8), so every year
+ * has a short last row and there is a boundary to drag across — and, in the one test that scrolls,
+ * a mark pinned over the photos it names.
  */
 class PickerDragTest {
 
-    private val assets = (0 until 12).map { GalleryAsset("a$it", "IMG_$it.heic", MediaType.PHOTO) }
+    private val assets = (0 until 12).map {
+        val day = Day.of(if (it < 6) 2020 else 2019, 6, 1 + it % 6)
+        GalleryAsset("a$it", "IMG_$it.heic", MediaType.PHOTO, day.midnight)
+    }
 
     @Test
     fun aSidewaysDragSelectsEveryPhotoItCrosses() = picker {
@@ -71,9 +80,43 @@ class PickerDragTest {
     fun aVerticalDragWithoutHoldingSelectsNothing() = picker {
         press(tile(0))
         move(tile(4))
-        move(tile(8))
-        release(tile(8))
+        move(tile(10))
+        release(tile(10))
         assertEquals(emptySet(), selected)
+    }
+
+    @Test
+    fun aDragCarriesOnAcrossAYearMark() = picker {
+        press(tile(4))
+        move(tile(5))
+        move(tile(6))
+        release(tile(6))
+        assertEquals(setOf("a4", "a5", "a6"), selected)
+    }
+
+    /** A mark between two years is no photo: the gesture never starts, and the mark has no tap of its own. */
+    @Test
+    fun aDragFromAYearMarkSelectsNothing() = picker {
+        press(INLINE_YEAR_MARK)
+        move(INLINE_YEAR_MARK + Offset(100f, 0f))
+        release(INLINE_YEAR_MARK + Offset(100f, 0f))
+        assertEquals(emptySet(), selected)
+    }
+
+    /**
+     * Scrolled to the end in a 300 px window, 2020's mark is pinned over 2020's last row — and the
+     * finger in that band is on those photos, which is what keeps selecting-while-scrolling working.
+     *
+     * The window is bottom-aligned once the list is at its end, so where that row sits is fixed by
+     * the rows and marks below it, not by the section labels above.
+     */
+    @Test
+    fun theFingerIsOnThePhotosUnderAPinnedYearMark() = picker(height = 300) {
+        scrollToTheEnd()
+        press(PINNED_BAND)
+        move(PINNED_BAND + Offset(100f, 0f))
+        release(PINNED_BAND + Offset(100f, 0f))
+        assertEquals(setOf("a4", "a5"), selected)
     }
 
     @Test
@@ -100,6 +143,13 @@ class PickerDragTest {
 
         fun release(at: Offset) = send(PointerEventType.Release, at)
 
+        /** Vertical drags, which the picker leaves to the list; far more than it can scroll, so it ends at its end. */
+        fun scrollToTheEnd() = repeat(3) {
+            press(Offset(200f, 280f))
+            move(Offset(200f, 20f))
+            release(Offset(200f, 20f))
+        }
+
         /** Past the long-press timeout, with the finger still. */
         fun hold() {
             time += 1_000
@@ -121,12 +171,16 @@ class PickerDragTest {
 
     private var current: androidx.compose.runtime.MutableState<PickerUi>? = null
 
-    private fun picker(initially: Set<String> = emptySet(), body: Touches.() -> Unit) = runTest {
+    private fun picker(
+        initially: Set<String> = emptySet(),
+        height: Int = 800,
+        body: Touches.() -> Unit,
+    ) = runTest {
         val state = mutableStateOf(PickerUi(access = GalleryAccess.Full, assets = assets, selected = initially))
         current = state
         val scene = ImageComposeScene(
             width = 400,
-            height = 800,
+            height = height,
             density = Density(1f),
             coroutineContext = StandardTestDispatcher(testScheduler),
         ) {
@@ -154,14 +208,33 @@ class PickerDragTest {
         }
     }
 
-    /** The centre of the [index]th photo tile: 100 px columns, rows of 100 px below the two labels. */
-    private fun tile(index: Int): Offset =
-        Offset(x = 50f + (index % 4) * 100f, y = FIRST_ROW_TOP + 50f + (index / 4) * 99.5f)
+    /**
+     * The centre of the [index]th photo tile: 100 px columns, rows of 100 px below the two labels and
+     * the year marks above it — one for 2020's photos, two for 2019's, whose rows start afresh.
+     */
+    private fun tile(index: Int): Offset {
+        val within = if (index < 6) index else index - 6
+        val row = within / 4 + if (index < 6) 0 else 2
+        val marks = if (index < 6) 1 else 2
+        return Offset(
+            x = 50f + (within % 4) * 100f,
+            y = FIRST_ROW_TOP + marks * YEAR_MARK + 50f + row * 99.5f,
+        )
+    }
 
     private companion object {
         const val STEPS = 6
 
         /** Two section labels, each 13 sp of text with 22 px of padding: about 40 px apiece. */
         const val FIRST_ROW_TOP = 80f
+
+        /** [YEAR_MARK_HEIGHT] in pixels, at this scene's density of 1. */
+        val YEAR_MARK = YEAR_MARK_HEIGHT.value
+
+        /** The middle of 2019's mark where the list draws it, between 2020's last row and 2019's first. */
+        val INLINE_YEAR_MARK = Offset(200f, FIRST_ROW_TOP + YEAR_MARK + 2 * 99.5f + YEAR_MARK / 2)
+
+        /** The first column of the band a pinned mark covers. */
+        val PINNED_BAND = Offset(50f, 20f)
     }
 }

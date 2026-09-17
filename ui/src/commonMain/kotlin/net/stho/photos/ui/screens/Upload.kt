@@ -1,5 +1,6 @@
 package net.stho.photos.ui.screens
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -73,6 +74,7 @@ import kotlin.math.min
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import net.stho.photos.app.Day
 import net.stho.photos.app.GalleryAccess
 import net.stho.photos.app.GalleryAlbum
 import net.stho.photos.app.GalleryAsset
@@ -133,6 +135,14 @@ internal fun UploadScreen(uploads: UploadModel, onClose: () -> Unit) {
 /**
  * The library's albums, then its photos to pick loosely (§8).
  *
+ * **The photos are marked by year.** A heading is drawn wherever the year changes from the row
+ * before, so it follows whichever way the port runs — newest first, as §8 has it — rather than
+ * assuming one, and a list in no order shows a year twice rather than filing photos under a year
+ * they were not taken in. The heading stays pinned while any of its year is on screen, which is
+ * the only way to know where you are in a library of thousands. Photos the library has no date for
+ * are one *Undated* group, left where the platform put them; on iOS that is the end, since
+ * `NSSortDescriptor` sorts a nil date first and the fetch runs descending.
+ *
  * **Dragging across the photos selects a range**, the way the Photos app does: a drag that starts
  * sideways — or a press held still — selects every photo from the one it started on to the one
  * under the finger, in reading order, and dragging back shrinks the range again. Starting on a
@@ -145,9 +155,17 @@ internal fun UploadScreen(uploads: UploadModel, onClose: () -> Unit) {
  * scroll first, and matched tiles by bounds that went stale as rows were recycled. Which photo is
  * under the finger now comes from the list's own layout.
  *
+ * **The year headings are transparent to that gesture**: the layout is searched for rows alone, so
+ * the photo beneath the pinned heading is still what the finger is on. Anything else would break
+ * selecting while scrolling, since the pinned heading and [AUTOSCROLL_EDGE] cover the same band.
+ * A finger on a heading scrolled *inline*, between two years, is on no photo and extends nothing.
+ *
  * **It opens where it was last left** (§8): [scroll] names the first item that was on screen, by
  * key, so an upload that took photos out of the library still comes back to the one after them.
+ * A heading is an item like any other, so it is named among the keys too — a position remembered
+ * against rows alone would sit one mark short for every year above it.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun GalleryPicker(
     picker: PickerUi,
@@ -162,14 +180,16 @@ internal fun GalleryPicker(
     modifier: Modifier = Modifier,
 ) {
     val list = rememberLazyListState()
-    val rows = remember(picker.assets) { picker.assets.chunked(COLUMNS) }
+    val entries = remember(picker.assets) { entriesOf(picker.assets) }
     val ids = remember(picker.assets) { picker.assets.map(GalleryAsset::id) }
-    val rowByKey = remember(rows) { rows.withIndex().associate { (index, row) -> photoRowKey(row.first().id) to index } }
-    // The list's items, in its own order: what a remembered [Scroll] names one of.
+    val rowByKey = remember(entries) { entries.filterIsInstance<PickerEntry.Row>().associateBy { it.key } }
+    // The list's items, in its own order: what a remembered [Scroll] names one of. Year marks are
+    // items too, so they are counted here — against the rows alone every mark above a position
+    // would shift it by one.
     val keys = rememberUpdatedState(
-        remember(picker.albums, rows) {
+        remember(picker.albums, entries) {
             listOf(ALBUMS_LABEL) + picker.albums.map { "album:${it.id}" } + PHOTOS_LABEL +
-                rows.map { photoRowKey(it.first().id) }
+                entries.map { it.key }
         },
     )
     val report by rememberUpdatedState(onScrolled)
@@ -195,11 +215,15 @@ internal fun GalleryPicker(
 
     fun indexAt(at: Offset): Int? {
         val layout = list.layoutInfo
-        val item = layout.visibleItemsInfo.firstOrNull { at.y >= it.offset && at.y < it.offset + it.size }
-            ?: return null
+        // Rows only, so the pinned heading does not hide the photo it is drawn over.
+        val item = layout.visibleItemsInfo.firstOrNull {
+            at.y >= it.offset && at.y < it.offset + it.size && it.key in latestRows
+        } ?: return null
         val row = latestRows[item.key] ?: return null
         val column = (at.x / (layout.viewportSize.width.toFloat() / COLUMNS)).toInt().coerceIn(0, COLUMNS - 1)
-        return (row * COLUMNS + column).takeIf { it < latestIds.size }
+        // Bounded by the row rather than the whole list: a row ends where its year does, so the
+        // empty cells beside a short one are no photo at all, not the first photo of the next year.
+        return (row.first + column).takeIf { column < row.assets.size }
     }
 
     fun extendTo(index: Int) {
@@ -270,18 +294,24 @@ internal fun GalleryPicker(
             item(key = ALBUMS_LABEL) { SectionLabel("Albums") }
             items(picker.albums, key = { "album:${it.id}" }) { album -> GalleryAlbumRow(album) { onAlbum(album) } }
             item(key = PHOTOS_LABEL) { SectionLabel("Or pick individual photos · ${picker.selected.size} selected") }
-            items(rows, key = { photoRowKey(it.first().id) }) { row ->
-                Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp)) {
-                    for (asset in row) {
-                        AssetTile(
-                            asset,
-                            picker.thumbnails[asset.id],
-                            selected = asset.id in picker.selected,
-                            modifier = Modifier.weight(1f).aspectRatio(1f).padding(1.dp),
-                            onClick = { onToggle(asset.id) },
-                        )
+            // In [entries]' order, so the heading a photo is drawn under is the year it was taken in.
+            for (entry in entries) {
+                when (entry) {
+                    is PickerEntry.Year -> stickyHeader(key = entry.key) { YearMark(entry.year) }
+                    is PickerEntry.Row -> item(key = entry.key) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp)) {
+                            for (asset in entry.assets) {
+                                AssetTile(
+                                    asset,
+                                    picker.thumbnails[asset.id],
+                                    selected = asset.id in picker.selected,
+                                    modifier = Modifier.weight(1f).aspectRatio(1f).padding(1.dp),
+                                    onClick = { onToggle(asset.id) },
+                                )
+                            }
+                            repeat(COLUMNS - entry.assets.size) { Spacer(Modifier.weight(1f)) }
+                        }
                     }
-                    repeat(COLUMNS - row.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
         }
@@ -291,6 +321,76 @@ internal fun GalleryPicker(
                 Text("Upload ${picker.selected.size} selected", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             }
         }
+    }
+}
+
+/** One item of the picker's photo list: a year's heading, or a row of up to [COLUMNS] photos. */
+private sealed interface PickerEntry {
+    val key: String
+
+    /** Null for photos the library has no date for, which the heading calls *Undated*. */
+    data class Year(val year: Int?) : PickerEntry {
+        override val key: String get() = "year:${year ?: "none"}"
+    }
+
+    /** [first] is where [assets] start in the picker's own list, which is what a range is taken over. */
+    data class Row(val first: Int, val assets: List<GalleryAsset>) : PickerEntry {
+        // The model's key, so a remembered scroll and the thumbnails it fetches first agree with it.
+        override val key: String get() = photoRowKey(assets.first().id)
+    }
+}
+
+/**
+ * The photos, cut into years and then into rows.
+ *
+ * A run at a time, so a heading is drawn wherever the year changes rather than once per year: this
+ * then holds for a list read either way — the picker's runs newest first (§8) — and a list in no
+ * order at all shows a year twice instead of drawing photos under a year they were not taken in.
+ * Cutting the rows per run is what keeps that honest — a row never spans two years, so no photo is
+ * drawn under the wrong heading.
+ */
+private fun entriesOf(assets: List<GalleryAsset>): List<PickerEntry> = buildList {
+    var index = 0
+    while (index < assets.size) {
+        val year = assets[index].year
+        var end = index
+        while (end < assets.size && assets[end].year == year) end++
+        add(PickerEntry.Year(year))
+        for (start in index until end step COLUMNS) {
+            add(PickerEntry.Row(start, assets.subList(start, min(start + COLUMNS, end))))
+        }
+        index = end
+    }
+}
+
+/**
+ * §3's calendar, so a photo's year here is the year it has everywhere else in the app: no time zone
+ * is applied, since the date a photo carries is the one its camera's clock read.
+ */
+private val GalleryAsset.year: Int? get() = takenAt?.let { Day.of(it).year }
+
+/**
+ * The year a run of photos was taken in, pinned over them while any of it is on screen.
+ *
+ * Drawn like the calendar's year heading, because it is the same thing said in another place — but
+ * the year alone: a whole year is nobody's album, so there is nothing here to tap, which also
+ * leaves the drag the only gesture reading the list.
+ */
+@Composable
+private fun YearMark(year: Int?) {
+    Row(
+        Modifier.fillMaxWidth().height(YEAR_MARK_HEIGHT)
+            // Opaque: it is drawn over the tiles it names, not beside them.
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            year?.toString() ?: "Undated",
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
 
@@ -672,6 +772,9 @@ private const val COLUMNS = 4
 /** The section labels' keys: every item is named, so a remembered scroll can name any of them. */
 private const val ALBUMS_LABEL = "albums"
 private const val PHOTOS_LABEL = "photos"
+
+/** The calendar's heading height: the same element, so it is drawn the same size. */
+internal val YEAR_MARK_HEIGHT = 40.dp
 
 /** How close to the list's top or bottom a selecting finger has to be for the grid to scroll. */
 private val AUTOSCROLL_EDGE = 56.dp

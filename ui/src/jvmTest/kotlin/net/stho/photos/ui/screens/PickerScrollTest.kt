@@ -12,6 +12,7 @@ import kotlin.test.assertNull
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import net.stho.photos.app.Day
 import net.stho.photos.app.GalleryAccess
 import net.stho.photos.app.GalleryAlbum
 import net.stho.photos.app.GalleryAsset
@@ -28,16 +29,17 @@ import net.stho.photos.model.MediaType
  * the access grant before it has read the albums and the assets. A restore that did not wait for
  * the rows would land at the top and report that, which is the failure these tests are here for.
  *
- * At density 1 the list is 400 px wide: rows of four 99 px tiles, under two section labels and
- * two album rows.
+ * At density 1 the list is 400 px wide: rows of four 99 px tiles, under two section labels, two
+ * album rows and the year mark the photos are grouped by — these assets carry no date, so there is
+ * one, reading *Undated*.
  */
 class PickerScrollTest {
 
     private val albums = listOf(GalleryAlbum("g1", "Weekend", 3), GalleryAlbum("g2", "Iceland", 9))
     private val assets = (0 until 120).map { GalleryAsset("a$it", "IMG_$it.heic", MediaType.PHOTO) }
 
-    /** Two labels and two album rows, so the 10th row of photos — `a40` — is the list's 14th item. */
-    private val rowOfA40 = 14
+    /** Two labels, two album rows and one year mark, so `a40`'s row — the 10th — is item 15. */
+    private val rowOfA40 = 15
 
     @Test
     fun theRememberedRowComesBackOnceTheLibraryHasArrived() =
@@ -60,6 +62,25 @@ class PickerScrollTest {
             assertEquals(Triple(photoRowKey("a40"), rowOfA40, 0), reported)
         }
 
+    /**
+     * Two years, so the remembered row sits below two marks — which the key list has to count, or
+     * the fallback position would be a mark short per year and land on the wrong photo.
+     */
+    @Test
+    fun aRowUnderASecondYearMarkComesBackToo() {
+        // 60 photos in 2026, then 60 in 2025: `a80`'s row is the 6th of the second year.
+        val dated = assets.mapIndexed { index, asset ->
+            asset.copy(takenAt = Day.of(if (index < 60) 2026 else 2025, 6, 1).midnight)
+        }
+        // Two labels, two album rows, the first mark, 2026's 15 rows, the second mark, then 5 rows.
+        val rowOfA80 = 2 + 2 + 1 + 15 + 1 + 5
+        picker(Scroll(photoRowKey("a80"), rowOfA80, 0), assets = dated) {
+            libraryArrives()
+            frames()
+            assertEquals(Triple(photoRowKey("a80"), rowOfA80, 0), reported)
+        }
+    }
+
     @Test
     fun theAlbumsSectionIsRememberedTheSameWay() =
         picker(Scroll("album:g2", 2, 0)) {
@@ -79,13 +100,17 @@ class PickerScrollTest {
 
     // ------------------------------------------------------------------------------ harness
 
-    private inner class Run(private val scope: TestScope, private val scene: ImageComposeScene) {
+    private inner class Run(
+        private val scope: TestScope,
+        private val scene: ImageComposeScene,
+        val arriving: List<GalleryAsset>,
+    ) {
         val reported: Triple<String?, Int, Int>? get() = this@PickerScrollTest.reported
 
         /** What `open()`'s second update does: the albums and the assets, once the platform answers. */
         fun libraryArrives() {
             val state = requireNotNull(current)
-            state.value = state.value.copy(albums = albums, assets = assets)
+            state.value = state.value.copy(albums = albums, assets = arriving)
         }
 
         fun frames(count: Int = FRAMES) {
@@ -102,7 +127,11 @@ class PickerScrollTest {
     private var current: MutableState<PickerUi>? = null
     private var reported: Triple<String?, Int, Int>? = null
 
-    private fun picker(scroll: Scroll?, body: Run.() -> Unit) = runTest {
+    private fun picker(
+        scroll: Scroll?,
+        assets: List<GalleryAsset> = this.assets,
+        body: Run.() -> Unit,
+    ) = runTest {
         // Access granted, the library not yet read: the state the picker is first composed in.
         val state = mutableStateOf(PickerUi(access = GalleryAccess.Full))
         current = state
@@ -125,7 +154,7 @@ class PickerScrollTest {
             )
         }
         try {
-            Run(this, scene).body()
+            Run(this, scene, assets).body()
         } finally {
             scene.close()
         }

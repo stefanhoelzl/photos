@@ -1897,7 +1897,8 @@ Settings. There is no reduced mode: it would be a second picker to build and to 
 
 ```
 upload icon               on the album list, a container, or inside an album
-  → gallery picker        album, or loose photos with drag-across-to-select;
+  → gallery picker        album, or loose photos with drag-across-to-select,
+                          under a pinned year heading;
                           Live Photos and videos carry the tile mark (§6)
   → album dialog          one field: an album's path, picked from a list or typed,
                           pre-filled from where you started,
@@ -1932,6 +1933,25 @@ remembered position outward — from the newest end would leave a restored scree
 loop reached it. Photos uploaded and deleted from the device take their row's key with them; the
 position then falls back to the same place in the list, which the rows below it — the older
 photos — moving up make the next photo the upload did not take.
+
+**The loose photos are marked by year.** A heading is drawn wherever the year changes from the row
+above — so it follows the grid's order rather than assuming one — and stays pinned while any of
+that year is on screen: the calendar's year heading (§6), for the same reason, since in a library
+of thousands there is otherwise no way to tell where you are. **The year alone**, and nothing to
+tap: a whole year is nobody's album, and an inert heading leaves the drag the one gesture reading
+the list. It is also transparent to that drag — what is under the finger is looked up among the
+rows alone, so the photo *beneath* the pinned heading is still what a selecting finger is on,
+which is what keeps selecting-while-scrolling working where the pinned band and the autoscroll
+band overlap.
+
+The date is PhotoKit's `creationDate`, a property of the fetch the picker already makes — unlike
+an asset's filename, which is a query apiece and is why the picker shows none. Photos the library
+has no date for are one *Undated* group, left where PhotoKit puts them, which under the newest-first
+fetch is last. **§3's calendar decides the year**, with no time zone applied, so a photo's year here
+is its year everywhere else in the app; a photo taken in the first hours of 1 January local time can
+therefore sit under the year before, which is a price worth one date rule rather than two. On the
+harness the date is the file's modification time — enough to head a year with, and deliberately not
+what the stand-in orders by, since a modification time is whatever last copied the file.
 
 **No prompt appears during the upload flow.** The password was read from the Keychain when the
 app launched (§1) and is already in memory; tapping Upload uses it to pre-sign every PUT for
