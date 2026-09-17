@@ -1,0 +1,137 @@
+package net.stho.photos.ui.screens
+
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.Density
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runTest
+import net.stho.photos.app.GalleryAccess
+import net.stho.photos.app.GalleryAlbum
+import net.stho.photos.app.GalleryAsset
+import net.stho.photos.app.PickerUi
+import net.stho.photos.app.Scroll
+import net.stho.photos.app.photoRowKey
+import net.stho.photos.model.MediaType
+
+/**
+ * The picker opening where the last upload left it (§8), rendered offscreen: it is asserted on
+ * where the picker reports it came to rest, which is the position it really restored to.
+ *
+ * The library arrives *after* the picker is composed, as it does on the phone — `open()` publishes
+ * the access grant before it has read the albums and the assets. A restore that did not wait for
+ * the rows would land at the top and report that, which is the failure these tests are here for.
+ *
+ * At density 1 the list is 400 px wide: rows of four 99 px tiles, under two section labels and
+ * two album rows.
+ */
+class PickerScrollTest {
+
+    private val albums = listOf(GalleryAlbum("g1", "Weekend", 3), GalleryAlbum("g2", "Iceland", 9))
+    private val assets = (0 until 120).map { GalleryAsset("a$it", "IMG_$it.heic", MediaType.PHOTO) }
+
+    /** Two labels and two album rows, so the 10th row of photos — `a40` — is the list's 14th item. */
+    private val rowOfA40 = 14
+
+    @Test
+    fun theRememberedRowComesBackOnceTheLibraryHasArrived() =
+        picker(Scroll(photoRowKey("a40"), rowOfA40, 7)) {
+            frames()
+            assertNull(reported, "no rows to restore into yet, and nothing reported over the saved position")
+
+            libraryArrives()
+            frames()
+            assertEquals(Triple(photoRowKey("a40"), rowOfA40, 7), reported)
+        }
+
+    @Test
+    fun aRowWhosePhotosAreGoneComesBackAtItsOldPosition() =
+        // What an upload that deleted its photos from the device leaves behind: the key is gone,
+        // the rows below have moved up, and the position is the first photo it did not take.
+        picker(Scroll(photoRowKey("gone"), rowOfA40, 30)) {
+            libraryArrives()
+            frames()
+            assertEquals(Triple(photoRowKey("a40"), rowOfA40, 0), reported)
+        }
+
+    @Test
+    fun theAlbumsSectionIsRememberedTheSameWay() =
+        picker(Scroll("album:g2", 2, 0)) {
+            libraryArrives()
+            frames()
+            assertEquals(Triple("album:g2", 2, 0), reported)
+        }
+
+    @Test
+    fun nothingRememberedOpensAtTheTop() =
+        picker(scroll = null) {
+            libraryArrives()
+            frames()
+            // The "Albums" label's own key: the list's first item.
+            assertEquals(Triple("albums", 0, 0), reported)
+        }
+
+    // ------------------------------------------------------------------------------ harness
+
+    private inner class Run(private val scope: TestScope, private val scene: ImageComposeScene) {
+        val reported: Triple<String?, Int, Int>? get() = this@PickerScrollTest.reported
+
+        /** What `open()`'s second update does: the albums and the assets, once the platform answers. */
+        fun libraryArrives() {
+            val state = requireNotNull(current)
+            state.value = state.value.copy(albums = albums, assets = assets)
+        }
+
+        fun frames(count: Int = FRAMES) {
+            repeat(count) {
+                scene.render(frame * 16_000_000L)
+                scope.testScheduler.runCurrent()
+                frame++
+            }
+        }
+
+        private var frame = 0L
+    }
+
+    private var current: MutableState<PickerUi>? = null
+    private var reported: Triple<String?, Int, Int>? = null
+
+    private fun picker(scroll: Scroll?, body: Run.() -> Unit) = runTest {
+        // Access granted, the library not yet read: the state the picker is first composed in.
+        val state = mutableStateOf(PickerUi(access = GalleryAccess.Full))
+        current = state
+        reported = null
+        val scene = ImageComposeScene(
+            width = 400,
+            height = 400,
+            density = Density(1f),
+            coroutineContext = StandardTestDispatcher(testScheduler),
+        ) {
+            GalleryPicker(
+                picker = state.value,
+                onAlbum = {},
+                onToggle = {},
+                onSelection = {},
+                onUseSelection = {},
+                scroll = scroll,
+                onScrolled = { key, at, by -> reported = Triple(key, at, by) },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        try {
+            Run(this, scene).body()
+        } finally {
+            scene.close()
+        }
+    }
+
+    private companion object {
+        const val FRAMES = 8
+    }
+}

@@ -12,9 +12,11 @@ import kotlinx.coroutines.runBlocking
 import net.stho.photos.app.Naming
 import net.stho.photos.app.Resolution
 import net.stho.photos.app.Screen
+import net.stho.photos.app.Scroll
 import net.stho.photos.app.UploadModel
 import net.stho.photos.app.UploadTarget
 import net.stho.photos.app.UploadStage
+import net.stho.photos.app.photoRowKey
 import net.stho.photos.catalog.AlbumState
 import net.stho.photos.model.MediaType
 
@@ -174,6 +176,38 @@ class UploadTest {
             }
 
             assertEquals(listOf("IMG_0004.heic"), folder.list().orEmpty().toList(), "the uploaded photos went, the album stayed")
+        }
+    }
+
+    /**
+     * §8's remembered position: the picker opens where it was left, so a second upload carries on
+     * through the library where the first one stopped — and the thumbnails are fetched from there
+     * rather than from the library's head, which would leave that screen grey until the loop
+     * reached it.
+     */
+    @Test
+    fun thePickerComesBackWhereItWasLeftAndLoadsThatPartFirst() = runBlocking {
+        scenario("upload-position") {
+            zone.galleryAlbum(gallery, "Weekend")
+            launch(withGallery = true)
+
+            uploads.open(parent = null)
+            awaitTrue("the gallery's assets") { uploads.picker.value.assets.isNotEmpty() }
+            val last = uploads.picker.value.assets.last().id
+
+            // What the picker reports as a scroll comes to rest on that photo's row.
+            uploads.scrolled(photoRowKey(last), index = 4, offset = 12)
+            uploads.close()
+            assertEquals(Scroll(photoRowKey(last), 4, 12), uploads.pickerScroll, "kept when the picker closes")
+
+            uploads.open(parent = null)
+            assertEquals(Scroll(photoRowKey(last), 4, 12), uploads.pickerScroll, "and when it opens again")
+            awaitTrue("the first thumbnail of the reopened picker") { uploads.picker.value.thumbnails.isNotEmpty() }
+            assertEquals(
+                last,
+                uploads.picker.value.thumbnails.keys.first(),
+                "the thumbnails start at the remembered row, not at the library's first photo",
+            )
         }
     }
 

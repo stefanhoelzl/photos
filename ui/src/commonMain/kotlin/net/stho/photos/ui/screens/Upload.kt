@@ -52,6 +52,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -70,15 +71,18 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import net.stho.photos.app.GalleryAccess
 import net.stho.photos.app.GalleryAlbum
 import net.stho.photos.app.GalleryAsset
 import net.stho.photos.app.Naming
 import net.stho.photos.app.PickerUi
+import net.stho.photos.app.Scroll
 import net.stho.photos.app.UploadModel
 import net.stho.photos.app.UploadStage
 import net.stho.photos.app.UploadStatus
+import net.stho.photos.app.photoRowKey
 
 /**
  * §8's gallery picker and album dialog: a gallery album whole, or loose photos.
@@ -104,6 +108,10 @@ internal fun UploadScreen(uploads: UploadModel, onClose: () -> Unit) {
                 onToggle = uploads::toggle,
                 onSelection = uploads::setSelection,
                 onUseSelection = uploads::chooseSelected,
+                // Plainly, not as state: the picker restores this once and then reports over it,
+                // and a recomposition on every report would be a recomposition per scrolled row.
+                scroll = uploads.pickerScroll,
+                onScrolled = uploads::scrolled,
                 modifier = Modifier.weight(1f),
             )
             else -> AccessNeeded(access, onSettings = uploads::openSettings)
@@ -136,6 +144,9 @@ internal fun UploadScreen(uploads: UploadModel, onClose: () -> Unit) {
  * first version did not: it waited for a long press behind the list, which claimed the drag as a
  * scroll first, and matched tiles by bounds that went stale as rows were recycled. Which photo is
  * under the finger now comes from the list's own layout.
+ *
+ * **It opens where it was last left** (§8): [scroll] names the first item that was on screen, by
+ * key, so an upload that took photos out of the library still comes back to the one after them.
  */
 @Composable
 internal fun GalleryPicker(
@@ -144,12 +155,24 @@ internal fun GalleryPicker(
     onToggle: (String) -> Unit,
     onSelection: (Set<String>) -> Unit,
     onUseSelection: () -> Unit,
+    /** Where the picker was left last time it was open, or null for the top. */
+    scroll: Scroll?,
+    /** Where a scroll came to rest: the first item on screen, by key and position, and how far past it. */
+    onScrolled: (key: String?, index: Int, offset: Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val list = rememberLazyListState()
     val rows = remember(picker.assets) { picker.assets.chunked(COLUMNS) }
     val ids = remember(picker.assets) { picker.assets.map(GalleryAsset::id) }
-    val rowByKey = remember(rows) { rows.withIndex().associate { (index, row) -> "row:${row.first().id}" to index } }
+    val rowByKey = remember(rows) { rows.withIndex().associate { (index, row) -> photoRowKey(row.first().id) to index } }
+    // The list's items, in its own order: what a remembered [Scroll] names one of.
+    val keys = rememberUpdatedState(
+        remember(picker.albums, rows) {
+            listOf(ALBUMS_LABEL) + picker.albums.map { "album:${it.id}" } + PHOTOS_LABEL +
+                rows.map { photoRowKey(it.first().id) }
+        },
+    )
+    val report by rememberUpdatedState(onScrolled)
     // The gesture outlives a composition, so it reads these afresh on every event.
     val latestIds by rememberUpdatedState(ids)
     val latestRows by rememberUpdatedState(rowByKey)
@@ -157,6 +180,18 @@ internal fun GalleryPicker(
     val latestOnSelection by rememberUpdatedState(onSelection)
     val drag = remember { DragSelection() }
     val edge = with(LocalDensity.current) { AUTOSCROLL_EDGE.toPx() }
+
+    // Back where the last upload left it, once there is a list to go back into: the picker is
+    // composed the moment access is granted, while the library is still being read, and restoring
+    // against the two section labels alone would land at the top — and then report that over the
+    // very position being restored. So it waits for the photo rows to be laid out. Nothing
+    // remembered has nothing to wait for, and reports from the start.
+    LaunchedEffect(Unit) {
+        if (scroll != null) {
+            snapshotFlow { latestIds.isNotEmpty() && list.layoutInfo.totalItemsCount >= keys.value.size }.first { it }
+        }
+        list.follow(scroll, keys) { key, index, offset -> report(key, index, offset) }
+    }
 
     fun indexAt(at: Offset): Int? {
         val layout = list.layoutInfo
@@ -232,10 +267,10 @@ internal fun GalleryPicker(
                 }
             },
         ) {
-            item { SectionLabel("Albums") }
+            item(key = ALBUMS_LABEL) { SectionLabel("Albums") }
             items(picker.albums, key = { "album:${it.id}" }) { album -> GalleryAlbumRow(album) { onAlbum(album) } }
-            item { SectionLabel("Or pick individual photos · ${picker.selected.size} selected") }
-            items(rows, key = { "row:${it.first().id}" }) { row ->
+            item(key = PHOTOS_LABEL) { SectionLabel("Or pick individual photos · ${picker.selected.size} selected") }
+            items(rows, key = { photoRowKey(it.first().id) }) { row ->
                 Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp)) {
                     for (asset in row) {
                         AssetTile(
@@ -633,6 +668,10 @@ private fun Long.megabytes(): String {
 }
 
 private const val COLUMNS = 4
+
+/** The section labels' keys: every item is named, so a remembered scroll can name any of them. */
+private const val ALBUMS_LABEL = "albums"
+private const val PHOTOS_LABEL = "photos"
 
 /** How close to the list's top or bottom a selecting finger has to be for the grid to scroll. */
 private val AUTOSCROLL_EDGE = 56.dp
