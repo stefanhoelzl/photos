@@ -1,5 +1,5 @@
 {
-  "timeout.total": 20,
-  "timeout.ci": 15,
+  "timeout.total": 40,
+  "timeout.ci": 30,
   "timeout.gates": 10
 }
