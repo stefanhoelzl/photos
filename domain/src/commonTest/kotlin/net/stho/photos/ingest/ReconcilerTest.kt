@@ -452,6 +452,63 @@ class ReconcilerTest {
         assertEquals(1, plan.pulls.size)
     }
 
+    /**
+     * A run stopped in the middle of a pull: the album is claimed, still `uploaded`, and its folder
+     * holds some of its files. Those files are the pull's to finish, not a new album to upload —
+     * walking them as one is how `Transdinarica` became two albums of 400 and 70 photos.
+     */
+    @Test
+    fun aFolderAStoppedPullHalfFilledIsResumedRatherThanUploaded() {
+        val library = LibraryFixture()
+        library.file("Transdinarica/a.jpg")
+        val phone = library.shard(
+            "Transdinarica",
+            photos = listOf("a.jpg", "b.jpg"),
+            state = AlbumState.UPLOADED,
+            encodingVersion = 0,
+        )
+
+        val plan = library.plan(shards = listOf(phone))
+
+        assertTrue(plan.albums.isEmpty(), "no album of its own: ${plan.albums.map(AlbumPlan::sourcePath)}")
+        assertTrue(plan.deletions.isEmpty())
+        assertTrue(plan.doublyClaimed.isEmpty())
+        val pull = plan.pulls.single()
+        assertEquals(phone.info.id, pull.shard.info.id)
+        assertEquals("Transdinarica", pull.sourcePath)
+        assertTrue(pull.claimed)
+    }
+
+    /**
+     * A folder a stopped pull claims *and* an encoded album claims — what that bug left behind. It
+     * is a double claim like any other: nothing uploaded into it, and the pull does not resume into
+     * a folder another album owns.
+     */
+    @Test
+    fun aFolderClaimedByAStoppedPullAndAnAlbumIsLeftAloneAndNamed() {
+        val library = LibraryFixture()
+        library.file("Transdinarica/a.jpg")
+        library.file("Transdinarica/c.jpg")
+        val mine = library.shard("Transdinarica", photos = listOf("a.jpg"))
+        val phone = library.shard(
+            "Transdinarica",
+            photos = listOf("a.jpg", "b.jpg"),
+            state = AlbumState.UPLOADED,
+            encodingVersion = 0,
+        )
+
+        val plan = library.plan(shards = listOf(mine, phone))
+
+        assertTrue(plan.albums.isEmpty())
+        assertTrue(plan.deletions.isEmpty())
+        assertTrue(plan.pulls.isEmpty())
+        assertEquals(
+            listOf(DoubleClaim("Transdinarica", listOf(mine.info.id, phone.info.id).sortedBy(Uuid::toString))),
+            plan.doublyClaimed,
+        )
+        assertFalse(plan.hasWork)
+    }
+
     @Test
     fun thePlanIsTheSameTwiceOverForAnUnchangedLibrary() {
         val library = LibraryFixture()
