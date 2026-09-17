@@ -751,16 +751,10 @@ public class AppModel(
      */
     public fun openUpload(): Screen.Upload? {
         val upload = when (val here = state.value.screen) {
-            Screen.Albums -> Screen.Upload(parent = null, parentName = "Albums")
-            is Screen.Container -> Screen.Upload(parent = here.albumId, parentName = here.name)
-            // An album of photos takes photos rather than a sub-album (§8). Its parent rides along
-            // because the addition records it: an addition whose album is deleted before the laptop
-            // merges it becomes an album of its own, where this one was.
-            is Screen.Grid -> Screen.Upload(
-                parent = catalog.album(here.albumId)?.parent,
-                parentName = here.name,
-                addTo = here.albumId,
-            )
+            Screen.Albums -> Screen.Upload(parent = null)
+            is Screen.Container -> Screen.Upload(parent = here.albumId)
+            // An album of photos takes photos rather than a sub-album (§8), so the dialog starts on it.
+            is Screen.Grid -> Screen.Upload(parent = catalog.album(here.albumId)?.parent, addTo = here.albumId)
             else -> return null
         }
         navigate { it.push(upload) }

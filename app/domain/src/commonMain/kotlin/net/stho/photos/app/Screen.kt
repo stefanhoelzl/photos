@@ -25,13 +25,14 @@ public sealed interface Screen {
     public data object Settings : Screen
 
     /**
-     * §8's gallery picker. [parent] is where the new album goes: the list it was opened from, the
-     * root when null. Never an album of photos, which cannot hold a sub-album (§2).
+     * §8's gallery picker, and where it was opened from — which is only where the album dialog starts:
+     * the dialog chooses the album. [parent] is the list it was opened on, the root when null, and
+     * the dialog pre-fills that container's path.
      *
-     * Opened from an album of photos instead, [addTo] is that album: the photos go into it rather
-     * than into a new one, [parentName] is its name, and [parent] its parent.
+     * Opened from an album of photos instead, [addTo] is that album, which the dialog pre-selects, and
+     * [parent] its parent.
      */
-    public data class Upload(val parent: Uuid?, val parentName: String, val addTo: Uuid? = null) : Screen
+    public data class Upload(val parent: Uuid?, val addTo: Uuid? = null) : Screen
 }
 
 /**

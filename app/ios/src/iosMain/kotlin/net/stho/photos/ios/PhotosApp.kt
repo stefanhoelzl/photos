@@ -79,7 +79,7 @@ public class PhotosApp(
     /** §8's upload: PhotoKit to read from, a background `URLSession` to send through. */
     private val upload = Uploads(gallery, UrlSessionUploader, sync, drivers, cacheRoot, scope, onLanded = { model.refresh() })
 
-    override val uploads: UploadModel = UploadModel(gallery, upload, scope)
+    override val uploads: UploadModel = UploadModel(gallery, upload, catalog, scope)
 
     init {
         // Playback used to reach blobs through symbolic links here; blobs now carry their own

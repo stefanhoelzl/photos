@@ -85,25 +85,41 @@ public data class AlbumDeletion(
 )
 
 /**
- * A shard the phone made and finished uploading: [AlbumState.UPLOADED].
+ * A new album the phone finished uploading: the earliest [AlbumState.UPLOADED] addition naming an
+ * album no shard is (§8), pulled straight from `addition/`.
  *
- * The pull claims it, copies it into the library, re-encodes it and only then writes
- * [AlbumState.ENCODED]. A shard that already carries a `source_path` was claimed by a run that
- * did not finish, and [sourcePath] is that same path, so the retry resumes into the directory
- * it half-filled rather than starting a second copy beside it (§7).
+ * The pull claims the addition — `source_path` and the names its files will have — downloads its
+ * files, derives them into `meta/<adds_to>` and only then deletes the addition. The album's other
+ * additions merge into it afterwards, in the same run. An addition that already carries a
+ * `source_path` was claimed by a run that did not finish, and [sourcePath] is that same path, so
+ * the retry resumes into the directory it half-filled rather than starting a second copy beside it.
  */
 public data class PullPlan(
     public val shard: Shard,
-    /** Where it will land, relative to `$LIBRARY_ROOT`. */
+    /** Where it will land, relative to `$LIBRARY_ROOT`: under its parent's folder. */
     public val sourcePath: String,
-    /** Whether a previous run already wrote `source_path`, so this is a resume. */
+    /** Whether a previous run already claimed it, so this is a resume. */
     public val claimed: Boolean = false,
-    /**
-     * An addition whose album is gone (§8), still at `addition/`. The pull first makes it the album
-     * it reads as — `meta/` under the same id, then the `addition/` key goes — and then pulls that.
-     */
-    public val adopting: Boolean = false,
+) {
+    /** The album it becomes: the id the phone minted and every one of its additions names. */
+    public val albumId: Uuid get() = requireNotNull(shard.info.addsTo)
+}
+
+/**
+ * A new phone album the pull leaves in the zone because a sibling already has its name, compared
+ * ignoring case (§2). It stays shown on every device and is pulled once the other is renamed.
+ */
+public data class HeldBack(
+    /** Where it would land, relative to `$LIBRARY_ROOT`. */
+    public val sourcePath: String,
+    public val albumId: Uuid,
 )
+
+/**
+ * Sibling folders whose names differ only in case. Names are unique per parent ignoring case (§2),
+ * so none of them is ingested — nor anything beneath them — until all but one are renamed.
+ */
+public data class NameClash(public val sourcePaths: List<String>)
 
 /**
  * An addition the phone finished uploading, and the album it goes into (§7).
@@ -157,6 +173,10 @@ public data class IngestPlan(
     public val blockedByUnreadable: List<ShardProbe> = emptyList(),
     /** Directories two or more albums claim. Left alone exactly like [blockedByUnreadable]. */
     public val doublyClaimed: List<DoubleClaim> = emptyList(),
+    /** Sibling folders named alike but for case. Left alone, with everything beneath them. */
+    public val nameClashes: List<NameClash> = emptyList(),
+    /** New phone albums whose name a sibling already has. Left in the zone. */
+    public val heldBack: List<HeldBack> = emptyList(),
     /**
      * Loose files directly in `$LIBRARY_ROOT`. The library is a directory of albums, so these are
      * reported and never ingested.
@@ -209,9 +229,9 @@ public class Reconciler(
             .mapValues { (_, pending) -> pending.flatMap { it.photos }.flatMapTo(mutableSetOf()) { it.claimedFilenames } }
 
         // Shards a *previous* run of this tool wrote, keyed by the folder they claim.
-        // Only albums the laptop owns. A shard still `uploading` or `uploaded` may carry a
-        // `source_path` — the pull claims before it downloads — but it is not an ordinary album
-        // yet, and treating it as one would read its half-filled directory as deletions (§7).
+        // Only albums the laptop owns: an addition a pull has claimed carries a `source_path` too,
+        // but it is not an album yet, and treating it as one would read its half-filled directory
+        // as deletions (§7).
         val claims = shards
             .filter { it.info.state == AlbumState.ENCODED }
             .groupBy { it.info.sourcePath?.normalisedPath().orEmpty() }
@@ -219,8 +239,10 @@ public class Reconciler(
         // Folders a pull claimed and a stopped run left half-filled. They are that pull's, not the
         // walk's: read as an album of their own, the files already downloaded would go up as a
         // second album beside the one the pull finishes into the same folder (§7).
-        val resuming = shards
-            .filter { it.info.state == AlbumState.UPLOADED }
+        // An addition claimed by a merge names its album's folder instead, and that album is encoded.
+        val encodedIds = shards.filter { it.info.state == AlbumState.ENCODED }.mapTo(mutableSetOf()) { it.info.id }
+        val resuming = additions
+            .filter { it.info.state == AlbumState.UPLOADED && it.info.addsTo !in encodedIds }
             .groupBy { it.info.sourcePath?.normalisedPath().orEmpty() }
             .filterKeys(String::isNotEmpty)
         // One folder, one album. Two claiming it is a duplicate this tool made — an interrupted pull
@@ -257,6 +279,18 @@ public class Reconciler(
             albumPaths += path
             albumPaths += path.ancestors().filter(::directoryExists)
         }
+        // Names are unique per parent, ignoring case (§2), and a library on a case-sensitive disk
+        // can still hold `Spain` beside `spain`. Neither is the album: picking one would be a guess,
+        // so both are left alone with everything beneath them — their children would otherwise
+        // lose their parent and surface at the root — until a person renames one.
+        val nameClashes = albumPaths
+            .groupBy { it.parentPath() to it.lastComponent().lowercase() }
+            .values.filter { it.size > 1 }
+            .map { NameClash(it.sorted()) }
+            .sortedBy { it.sourcePaths.first() }
+        val clashing = nameClashes.flatMap(NameClash::sourcePaths)
+        val underClash = albumPaths.filter { path -> clashing.any { path == it || path.startsWith("$it/") } }
+        blockedPaths += underClash
         albumPaths -= blockedPaths
         albumPaths -= resuming.keys
 
@@ -349,50 +383,78 @@ public class Reconciler(
             }
             .map { (path, shard) -> AlbumDeletion(shard, path) }
 
-        // `uploaded` means the phone has finished and nothing has encoded it yet — the only
-        // state the CLI pulls from. `uploading` is skipped: it is still in flight. A shard that
-        // already names a path was claimed by a run that did not finish, so it resumes there.
-        val reserved = (albumPaths + byPath.keys + resuming.keys + blockedPaths).toMutableSet()
-        val pulls = mutableListOf<PullPlan>()
-        for (shard in shards.filter { it.info.state == AlbumState.UPLOADED }
-            .sortedBy { it.info.id.toString() }) {
-            val claimed = shard.info.sourcePath?.normalisedPath()?.ifEmpty { null }
-            if (claimed != null && claimed in blockedPaths) continue
-            val path = claimed ?: availablePath(shard, reserved)
-            if (!matchesFilter(path)) continue
-            reserved += path
-            pulls += PullPlan(shard, path, claimed = claimed != null)
-        }
-
-        // An addition merges once its album is there to take it: `encoded`, or `uploaded` and pulled
-        // earlier in this same run. One whose album is gone — or is being deleted by this very run —
-        // is adopted instead, and pulled as the album it records being added to (§8). One still
-        // `uploading` waits, and past the sweep's floor it is abandoned like any other upload.
+        // A new album is photos the phone added to an album no shard is yet (§8): every addition
+        // naming it carries the id the phone minted. `uploaded` means the phone has finished and
+        // nothing has encoded it yet; `uploading` is skipped, still in flight. An addition whose album
+        // was deleted — by an earlier run, or by this very run, which deletes before it pulls — reads
+        // the same way, and is pulled as the album it records being added to.
+        //
+        // Each such album is pulled once, from its earliest addition, or from the one a stopped run
+        // already claimed, which resumes into the folder it half-filled. The rest merge into it
+        // afterwards, like additions to any album.
         val deleted = deletions.mapTo(mutableSetOf()) { it.shard.info.id }
-        // An album this build cannot read is not an album that is gone: adopting its additions would
+        val deletedPaths = deletions.map(AlbumDeletion::sourcePath)
+        // An album this build cannot read is not an album that is gone: pulling its additions would
         // make a second album of photos that belong in it (§3's unreadable-not-absent rule).
         val unreadableIds = unreadable.mapTo(mutableSetOf(), ShardProbe::albumId)
         val albumsById = shards.associateBy { it.info.id }
-        val pulledPaths = pulls.associate { it.shard.info.id to it.sourcePath }
+        val landed = additions.filter { it.info.state == AlbumState.UPLOADED }
+            .sortedWith(compareBy({ it.info.addedAt }, { it.info.id.toString() }))
+        val absent = landed.filter { addition ->
+            val target = requireNotNull(addition.info.addsTo)
+            target !in unreadableIds && albumsById[target]?.takeIf { it.info.id !in deleted } == null
+        }
+
+        // Every folder already spoken for, including a deleted album's: a pull never puts a deleted
+        // folder back in the run that deleted it.
+        val reserved = (albumPaths + byPath.keys + resuming.keys + blockedPaths).toMutableSet()
+        val pulls = mutableListOf<PullPlan>()
+        val heldBack = mutableListOf<HeldBack>()
+        val pulledPaths = mutableMapOf<Uuid, String>()
+        for ((albumId, group) in absent.groupBy { requireNotNull(it.info.addsTo) }.entries.sortedBy { it.key.toString() }) {
+            val resume = group.firstNotNullOfOrNull { addition ->
+                addition.info.sourcePath?.normalisedPath()?.takeIf(resuming::containsKey)?.let { addition to it }
+            }
+            if (resume != null) {
+                val (addition, path) = resume
+                if (path in blockedPaths || !matchesFilter(path)) continue
+                pulls += PullPlan(addition, path, claimed = true)
+                pulledPaths[albumId] = path
+                continue
+            }
+            val first = group.first()
+            val path = destination(first, albumsById, deleted, unreadableIds) ?: continue
+            if (path.ancestors().any(blockedPaths::contains) || !matchesFilter(path)) continue
+            // Names are unique per parent, ignoring case (§2). One taken since the phone chose it —
+            // by another device, or a folder made on the laptop — is not renamed: the album waits,
+            // shown everywhere and named in the report, until a person renames one of the two.
+            if (clashes(path, reserved)) {
+                // Its album's own folder, deleted this run, is not a name someone else has: it waits
+                // for the next run quietly, since a pull never puts back a folder the run deleted.
+                if (deletedPaths.none { it.equals(path, ignoreCase = true) }) heldBack += HeldBack(path, albumId)
+                continue
+            }
+            reserved += path
+            pulls += PullPlan(first, path)
+            pulledPaths[albumId] = path
+        }
+
+        // An addition merges once its album is there to take it: `encoded`, or pulled earlier in
+        // this same run. One still `uploading` waits, and past the sweep's floor it is abandoned like
+        // any other upload.
+        val pulling = pulls.mapTo(mutableSetOf()) { it.shard.info.id }
         val merges = mutableListOf<MergePlan>()
-        for (addition in additions.filter { it.info.state == AlbumState.UPLOADED }
-            .sortedWith(compareBy({ it.info.addedAt }, { it.info.id.toString() }))) {
+        for (addition in landed) {
+            if (addition.info.id in pulling) continue
             val targetId = requireNotNull(addition.info.addsTo)
             if (targetId in unreadableIds) continue
             val target = albumsById[targetId]?.takeIf { it.info.id !in deleted }
             val path = when (target?.info?.state) {
                 AlbumState.ENCODED -> target.info.sourcePath?.normalisedPath()?.ifEmpty { null }
-                AlbumState.UPLOADED -> pulledPaths[targetId]
-                // Still uploading: an album cannot be chosen before it is shown, so this is the
-                // phone being ahead of the zone. It waits.
-                AlbumState.UPLOADING -> continue
-                null -> {
-                    val adopted = availablePath(addition, reserved)
-                    if (!matchesFilter(adopted)) continue
-                    reserved += adopted
-                    pulls += PullPlan(addition, adopted, claimed = false, adopting = true)
-                    continue
-                }
+                // A new album: pulled earlier in this run, or held back, or left for a later run.
+                null -> pulledPaths[targetId]
+                // An album an older app wrote under `meta/` itself, which this build does not pull.
+                else -> null
             }
             // A target left alone this run — too new to read beside it, claimed twice, filtered out,
             // or a pull that never planned — is merged into by a later run instead.
@@ -407,6 +469,8 @@ public class Reconciler(
             merges = merges,
             blockedByUnreadable = unreadable,
             doublyClaimed = doublyClaimed,
+            nameClashes = nameClashes,
+            heldBack = heldBack,
             looseRootFiles = looseRootFiles,
             mismatches = mismatches,
         )
@@ -424,14 +488,35 @@ public class Reconciler(
         albumFilter.isNullOrEmpty() || path.contains(albumFilter, ignoreCase = true)
 
     /**
-     * Where a phone-owned album lands. Its name is not guaranteed unique (§2 permits duplicates),
-     * so a taken directory gets the album id appended rather than merged into.
+     * Where a new phone album lands: under its parent's folder, named as the album is. Null while
+     * that parent is a shard this build cannot read — it is not gone, so landing elsewhere would put
+     * the album in the wrong place for good. A parent that *is* gone surfaces the album at the root,
+     * as every reader shows it (§2).
      */
-    private fun availablePath(shard: Shard, taken: Set<String>): String {
-        val base = shard.info.name.replace("/", "-").normalisedPath()
-        val candidate = base.ifEmpty { shard.info.id.toString() }
-        if (candidate !in taken && !directoryExists(candidate)) return candidate
-        return "$candidate (${shard.info.id.toString().take(8)})"
+    private fun destination(
+        addition: Shard,
+        albumsById: Map<Uuid, Shard>,
+        deleted: Set<Uuid>,
+        unreadableIds: Set<Uuid>,
+    ): String? {
+        val name = addition.info.name.replace("/", "-").normalisedPath()
+            .ifEmpty { requireNotNull(addition.info.addsTo).toString() }
+        val parentId = addition.info.parent ?: return name
+        if (parentId in unreadableIds) return null
+        val parent = albumsById[parentId]
+            ?.takeIf { it.info.id !in deleted && it.info.state == AlbumState.ENCODED }
+            ?: return name
+        val parentPath = parent.info.sourcePath?.normalisedPath()?.ifEmpty { null } ?: return name
+        return "$parentPath/$name"
+    }
+
+    /** Whether a sibling of [path] — a folder on disk, or one this run plans — has its name, ignoring case. */
+    private fun clashes(path: String, taken: Set<String>): Boolean {
+        val parent = path.parentPath()
+        val name = path.lastComponent().lowercase()
+        if (taken.any { it.parentPath() == parent && it.lastComponent().lowercase() == name }) return true
+        val siblings = runCatching { SystemFileSystem.list(pathOf(parent)) }.getOrDefault(emptyList())
+        return siblings.any { it.name.lowercase() == name }
     }
 }
 
@@ -451,3 +536,6 @@ private fun String.ancestors(): List<String> {
 }
 
 private fun String.lastComponent(): String = substringAfterLast('/')
+
+/** `a/b/c` → `a/b`; the root's children → the empty string. */
+private fun String.parentPath(): String = substringBeforeLast('/', "")

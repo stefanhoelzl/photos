@@ -24,7 +24,7 @@ import net.stho.photos.model.MediaType
 class UploadTest {
 
     @Test
-    fun photosFromTheLibraryLandAsAnUploadedAlbum() = iosScenario("upload-library") {
+    fun photosFromTheLibraryLandAsANewAlbum() = iosScenario("upload-library") {
         install()
         allowPhotos()
         addToLibrary(STILL, VIDEO)
@@ -38,8 +38,10 @@ class UploadTest {
         val ids = picker.getValue("assets").jsonArray.map { it.jsonObject.string("id") }
 
         post("/upload/select?ids=${ids.joinToString(",").encoded()}")
-        post("/upload/name?name=${NAME.encoded()}")
-        val albumId = Uuid.parse(post("/upload/confirm").uploads().single().string("album"))
+        post("/upload/name?album=${NAME.encoded()}&new=true")
+        val upload = post("/upload/confirm").uploads().single()
+        val uploadId = Uuid.parse(upload.string("album"))
+        val albumId = Uuid.parse(upload.string("target"))
         screenshot("upload-progress")
 
         awaitState("the upload to land") { state ->
@@ -47,14 +49,16 @@ class UploadTest {
             check(upload.string("stage") != "Failed") { "the upload failed: ${upload.nullableString("failure")}" }
             upload.string("stage") == "Done"
         }
-        awaitState("the album in the list") { state -> state.albums().any { it.string("name") == NAME } }
+        awaitState("the album in the list") { state -> state.albums().any { it.string("id") == albumId.toString() && it.string("name") == NAME } }
 
-        val shard = assertNotNull(zone.shard(albumId))
+        // Every upload is an addition (§8): a new album is one no shard is yet, made by the laptop's pull.
+        val shard = assertNotNull(zone.shard(uploadId))
+        assertEquals(albumId, shard.info.addsTo)
+        assertEquals(NAME, shard.info.name)
         assertEquals(AlbumState.UPLOADED, shard.info.state)
         assertEquals(0, shard.info.encodingVersion)
         assertEquals(ids.size, shard.photos.size, "one row per asset picked")
         assertTrue(shard.objectIds.none { it.isContentAddressed }, "the phone never hashes (§2)")
-        assertEquals(shard.photos.size, shard.photos.map { it.filename.lowercase() }.toSet().size, "no two rows claim a name")
         for (row in shard.photos) {
             val sent = when (row.mediaType) {
                 MediaType.VIDEO -> {
@@ -97,6 +101,9 @@ class UploadTest {
         val ids = picker.assets().map { it.string("id") }
 
         post("/upload/select?ids=${ids.joinToString(",").encoded()}")
+        assertEquals(alps.toString(), awaitState("the album pre-selected") { state ->
+            state.picker()["naming"] is JsonObject
+        }.picker().getValue("naming").jsonObject.getValue("selected").jsonObject.string("id"))
         val additionId = confirmAndLand()
 
         val addition = assertNotNull(zone.shard(additionId))
@@ -147,7 +154,7 @@ class UploadTest {
         }.picker().assets().map { it.string("id") }.filterNot { it in before }
 
         post("/upload/select?ids=${added.joinToString(",").encoded()}")
-        post("/upload/name?name=${NAME.encoded()}&delete=true")
+        post("/upload/name?album=${NAME.encoded()}&new=true&delete=true")
         val albumId = confirmAndLand()
         assertTrue("PHOTOS_TAPPED Delete" in tapper.awaitSuccess(), "iOS asked, and Delete was tapped")
 
@@ -190,9 +197,9 @@ class UploadTest {
         post("/upload/open")
         awaitState("the seeded album in the picker") { state -> state.picker().albums().any { it.string("id") == galleryAlbum } }
         val naming = post("/upload/album?id=${galleryAlbum.encoded()}").picker().getValue("naming").jsonObject
-        assertEquals(GALLERY_ALBUM, naming.string("name"), "the name is prefilled from the gallery album")
+        assertEquals(GALLERY_ALBUM, naming.string("text"), "the path is pre-filled from the gallery album")
         assertEquals(galleryAlbum, naming.string("album"))
-        post("/upload/name?delete=true")
+        post("/upload/name?new=true&delete=true")
         val albumId = confirmAndLand()
         val taps = Regex("PHOTOS_TAPPED Delete").findAll(tapper.awaitSuccess()).count()
         assertEquals(2, taps, "iOS asked for the album and for its photos, and Delete was tapped on both")
@@ -243,10 +250,12 @@ class UploadTest {
         }.picker().assets().single { it.string("id") == assetId }
         assertEquals("LIVE_PHOTO", asset.string("type"))
         post("/upload/select?ids=${assetId.encoded()}")
-        post("/upload/name?name=${NAME.encoded()}")
-        val albumId = confirmAndLand()
+        post("/upload/name?album=${NAME.encoded()}&new=true")
+        val uploadId = confirmAndLand()
 
-        val row = assertNotNull(zone.shard(albumId)).photos.single()
+        val addition = assertNotNull(zone.shard(uploadId))
+        val albumId = assertNotNull(addition.info.addsTo)
+        val row = addition.photos.single()
         assertEquals(MediaType.LIVE_PHOTO, row.mediaType)
         assertNotNull(row.liveVideoId, "the paired video went up with the still")
 
@@ -266,7 +275,7 @@ class UploadTest {
         }.picker().assets().map { it.string("id") }.toSet()
     }
 
-    /** Upload, and wait for the album to land — failing with the upload's own reason if it does not. */
+    /** Upload, and wait for it to land — failing with the upload's own reason if it does not. The upload's id, its addition's. */
     private suspend fun IosScenario.confirmAndLand(): Uuid {
         val albumId = Uuid.parse(post("/upload/confirm").uploads().last().string("album"))
         awaitState("the upload to land") { state ->

@@ -9,13 +9,17 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
+import net.stho.photos.app.Naming
+import net.stho.photos.app.Resolution
 import net.stho.photos.app.Screen
+import net.stho.photos.app.UploadTarget
 import net.stho.photos.app.UploadStage
 import net.stho.photos.catalog.AlbumState
 import net.stho.photos.model.MediaType
 
 /**
- * §8 on the harness: a gallery album goes up as a new album, lands `uploaded`, and appears.
+ * §8 on the harness: a gallery album goes up as an addition — to a new album or to one that exists —
+ * lands `uploaded`, and appears.
  *
  * The zone is asserted exhaustively for the rows, because those are the contract §7's pull reads
  * back — which file it archives under which name — and a mistake there costs a photograph rather
@@ -24,20 +28,28 @@ import net.stho.photos.model.MediaType
 class UploadTest {
 
     @Test
-    fun aGalleryAlbumLandsAsAnUploadedAlbumAndAppears() = runBlocking {
+    fun aGalleryAlbumLandsAsANewAlbumAndAppears() = runBlocking {
         scenario("upload") {
             val folder = zone.galleryAlbum(gallery, "Weekend")
             launch(withGallery = true)
 
-            val albumId = uploadWholeGalleryAlbum(expectedParent = null, screenshots = "upload")
-            await("the new album in the list") { ui -> ui.albums.any { it.id == albumId } }
+            val uploadId = uploadWholeGalleryAlbum(expectedParent = null, screenshots = "upload") { naming ->
+                assertEquals("Weekend", naming.text, "the path is pre-filled from the gallery album")
+                assertNull(naming.selected, "a path no album has is nothing to upload to yet")
+                assertTrue(uploads.addNew())
+                assertEquals(UploadTarget.Kind.New, uploads.picker.value.naming?.selected?.kind)
+            }
 
-            val shard = assertNotNull(zone.shard(albumId))
-            assertEquals(AlbumState.UPLOADED, shard.info.state)
-            assertEquals(0, shard.info.encodingVersion, "as uploaded, never encoded here")
-            assertNull(shard.info.parent, "from the root, a top-level album")
-            assertEquals("Weekend", shard.info.name)
-            val rows = shard.photos.associateBy { it.filename }
+            val addition = assertNotNull(zone.shard(uploadId))
+            val albumId = assertNotNull(addition.info.addsTo, "every upload is an addition (§8)")
+            assertNull(zone.shard(albumId), "a new album is made by the laptop's pull, not by the phone")
+            await("the new album in the list") { ui -> ui.albums.any { it.id == albumId && it.name == "Weekend" } }
+
+            assertEquals(AlbumState.UPLOADED, addition.info.state)
+            assertEquals(0, addition.info.encodingVersion, "as uploaded, never encoded here")
+            assertNull(addition.info.parent, "from the root, a top-level album")
+            assertEquals("Weekend", addition.info.name)
+            val rows = addition.photos.associateBy { it.filename }
             assertEquals(setOf("IMG_0001.heic", "IMG_0002.mp4", "IMG_0003.heic"), rows.keys)
 
             val still = rows.getValue("IMG_0001.heic")
@@ -56,16 +68,16 @@ class UploadTest {
             assertContentEquals(File(folder, "IMG_0003.heic").readBytes(), zone.bytes(assertNotNull(live.liveStillId)))
             assertContentEquals(File(folder, "IMG_0003.mov").readBytes(), zone.bytes(assertNotNull(live.liveVideoId)))
 
-            assertTrue(shard.objectIds.none { it.isContentAddressed }, "the phone never hashes (§2)")
-            assertNotNull(zone.bytes(assertNotNull(shard.info.thumbsId)), "the pack went up with the album")
+            assertTrue(addition.objectIds.none { it.isContentAddressed }, "the phone never hashes (§2)")
+            assertNotNull(zone.bytes(assertNotNull(addition.info.thumbsId)), "the pack went up with the photos")
             assertTrue(File(folder, "IMG_0001.heic").isFile, "nothing leaves the gallery unless asked")
-            assertFalse(File(cacheRoot.toString(), "uploads/$albumId").exists(), "a finished upload leaves no state behind")
+            assertFalse(File(cacheRoot.toString(), "uploads/$uploadId").exists(), "a finished upload leaves no state behind")
             screenshot("upload-landed")
         }
     }
 
     @Test
-    fun anUploadStartedInAContainerBecomesItsSubAlbum() = runBlocking {
+    fun anUploadStartedInAContainerMakesANewAlbumInsideIt() = runBlocking {
         scenario("upload-container") {
             zone.galleryAlbum(gallery, "Glacier")
             val trips = zone.album("Trips", photos = 0, thumbnails = false)
@@ -74,10 +86,60 @@ class UploadTest {
 
             model.open(ui.albums.single { it.id == trips })
             assertTrue(model.state.value.screen is Screen.Container, "Trips holds an album, so it is a container")
-            val albumId = uploadWholeGalleryAlbum(expectedParent = trips)
+            val uploadId = uploadWholeGalleryAlbum(expectedParent = trips) { naming ->
+                assertEquals("Trips / Glacier", naming.text, "the container's path, then the gallery album's name")
+                assertTrue(uploads.addNew())
+            }
 
-            assertEquals(trips, assertNotNull(zone.shard(albumId)).info.parent)
-            await("the new album inside the container") { it.albums.any { album -> album.id == albumId } }
+            val addition = assertNotNull(zone.shard(uploadId))
+            assertEquals(trips, addition.info.parent)
+            val albumId = assertNotNull(addition.info.addsTo)
+            await("the new album inside the container") { it.albums.any { album -> album.id == albumId && album.parent == trips } }
+        }
+    }
+
+    /**
+     * A second upload into a new album the laptop has not pulled: the dialog lists it, typing its path
+     * picks it, and the photos go into that one album rather than a second of the same name.
+     */
+    @Test
+    fun aSecondUploadIntoANewAlbumGoesIntoTheSameAlbum() = runBlocking {
+        scenario("upload-twice") {
+            zone.galleryAlbum(gallery, "Weekend")
+            launch(withGallery = true)
+
+            val first = uploadWholeGalleryAlbum(expectedParent = null) { assertTrue(uploads.addNew()) }
+            val albumId = assertNotNull(assertNotNull(zone.shard(first)).info.addsTo)
+            await("the new album in the list") { ui -> ui.albums.any { it.id == albumId } }
+
+            val second = uploadWholeGalleryAlbum(expectedParent = null) { naming ->
+                assertEquals(albumId, naming.selected?.id, "its path picks the album, not a new one")
+            }
+
+            assertEquals(albumId, assertNotNull(zone.shard(second)).info.addsTo)
+            val listed = await("both uploads in the one album") { ui -> ui.albums.any { it.id == albumId && it.photoCount == 6 } }
+            assertEquals(1, listed.albums.count { it.name == "Weekend" })
+        }
+    }
+
+    /** A path the phone cannot make an album at says why, and nothing can be uploaded to it. */
+    @Test
+    fun aPathThroughAPhotoAlbumIsRefused() = runBlocking {
+        scenario("upload-refused") {
+            zone.galleryAlbum(gallery, "Weekend")
+            zone.album("Alps", photos = 2)
+            launch(withGallery = true)
+
+            val screen = assertNotNull(model.openUpload())
+            uploads.open(screen.parent, screen.addTo)
+            awaitTrue("the gallery's albums") { uploads.picker.value.albums.isNotEmpty() }
+            uploads.chooseAlbum(uploads.picker.value.albums.single())
+
+            uploads.type("Alps / Weekend")
+            val naming = assertNotNull(uploads.picker.value.naming)
+            assertEquals(Resolution.Refused("\"Alps\" holds photos, not albums"), naming.resolution)
+            assertFalse(uploads.addNew())
+            assertNull(uploads.confirm())
         }
     }
 
@@ -87,7 +149,10 @@ class UploadTest {
             val folder = zone.galleryAlbum(gallery, "Weekend")
             launch(withGallery = true)
 
-            uploadWholeGalleryAlbum(expectedParent = null) { uploads.deleteAfterUpload(true) }
+            uploadWholeGalleryAlbum(expectedParent = null) {
+                assertTrue(uploads.addNew())
+                uploads.deleteAfterUpload(true)
+            }
 
             // The still, the video and both halves of the pair — and then the album they left empty.
             assertFalse(folder.exists(), "a gallery album chosen whole goes with its photos")
@@ -102,6 +167,7 @@ class UploadTest {
             launch(withGallery = true)
 
             uploadWholeGalleryAlbum(expectedParent = null) {
+                assertTrue(uploads.addNew())
                 uploads.deleteAfterUpload(true)
                 File(folder, "IMG_0001.heic").copyTo(File(folder, "IMG_0004.heic"))
             }
@@ -124,10 +190,10 @@ class UploadTest {
     }
 
     /**
-     * §8's addition, on the harness: upload from inside an album puts the photos into it. They go up
-     * as an addition naming the album — not as an album of their own, and not by rewriting the
-     * album's shard — under the camera's own names, and the album's grid shows them, thumbnails
-     * and all, from the addition's pack beside its own.
+     * §8's addition, on the harness: upload from inside an album pre-selects it, and the photos go
+     * into it. They go up as an addition naming the album — not by rewriting the album's shard —
+     * under the camera's own names, and the album's grid shows them, thumbnails and all, from the
+     * addition's pack beside its own.
      */
     @Test
     fun aGalleryAlbumAddedToAnAlbumLandsAsAnAdditionAndShowsInItsGrid() = runBlocking {
@@ -139,7 +205,9 @@ class UploadTest {
             val ui = launch(withGallery = true)
 
             model.open(ui.albums.single { it.id == alps })
-            val additionId = uploadWholeGalleryAlbum(expectedParent = trips, addTo = alps, screenshots = "upload-add") {
+            val additionId = uploadWholeGalleryAlbum(expectedParent = trips, addTo = alps, screenshots = "upload-add") { naming ->
+                assertEquals("Trips / Alps", naming.text)
+                assertEquals(alps, naming.selected?.id, "the album the upload started in is pre-selected")
                 uploads.deleteAfterUpload(true)
             }
 
@@ -159,54 +227,58 @@ class UploadTest {
         }
     }
 
-    /** An addition whose album is gone before the laptop merges it is shown as that album, where it was. */
+    /**
+     * Additions naming an album no shard is — gone before the laptop merged them, or a new one not
+     * pulled yet — are listed as that one album, where they said it is.
+     */
     @Test
-    fun anAdditionWhoseAlbumIsGoneIsListedAsThatAlbum() = runBlocking {
+    fun additionsWhoseAlbumIsNotThereAreListedAsThatAlbum() = runBlocking {
         scenario("upload-add-orphan") {
             val trips = zone.album("Trips", photos = 0, thumbnails = false)
             zone.album("Rome", photos = 1, parent = trips)
-            zone.addition(to = kotlin.uuid.Uuid.random(), name = "Alps", photos = 2, parent = trips)
+            val albumId = kotlin.uuid.Uuid.random()
+            zone.addition(to = albumId, name = "Alps", photos = 2, parent = trips)
+            zone.addition(to = albumId, name = "Alps", photos = 1, parent = trips)
 
             val ui = launch()
 
             val alps = ui.albums.single { it.name == "Alps" }
+            assertEquals(albumId, alps.id)
             assertEquals(trips, alps.parent)
-            assertEquals(2, alps.photoCount)
+            assertEquals(3, alps.photoCount)
         }
     }
 
     /**
-     * Picks the gallery's one album whole, names it as prefilled — or, adding to [addTo], names
-     * nothing — uploads, and waits for it to land.
+     * Picks the gallery's one album whole, lets [choose] settle where it goes — the dialog as
+     * pre-filled — uploads, and waits for it to land. The upload's id, which is its addition's.
      */
     private suspend fun Scenario.uploadWholeGalleryAlbum(
         expectedParent: kotlin.uuid.Uuid?,
         addTo: kotlin.uuid.Uuid? = null,
-        /** A name prefix for frames of the picker and the name dialog, for a person to look at. */
+        /** A name prefix for frames of the picker and the album dialog, for a person to look at. */
         screenshots: String? = null,
-        beforeConfirm: () -> Unit = {},
+        choose: (Naming) -> Unit = {},
     ): kotlin.uuid.Uuid {
         val screen = assertNotNull(model.openUpload())
         assertEquals(expectedParent, screen.parent)
         assertEquals(addTo, screen.addTo)
-        uploads.open(screen.parent, screen.parentName, screen.addTo)
+        uploads.open(screen.parent, screen.addTo)
         awaitTrue("the gallery's albums and thumbnails") {
             val picker = uploads.picker.value
             picker.albums.isNotEmpty() && picker.thumbnails.size == picker.assets.size
         }
         screenshots?.let { screenshot("$it-picker") }
-        val galleryAlbum = uploads.picker.value.albums.single()
-        uploads.chooseAlbum(galleryAlbum)
-        assertEquals(galleryAlbum.name, uploads.picker.value.naming?.name, "the name is prefilled from the gallery album")
-        screenshots?.let { screenshot("$it-name") }
-        beforeConfirm()
-        val albumId = assertNotNull(uploads.confirm())
+        uploads.chooseAlbum(uploads.picker.value.albums.single())
+        choose(assertNotNull(uploads.picker.value.naming))
+        screenshots?.let { screenshot("$it-album") }
+        val uploadId = assertNotNull(uploads.confirm())
         model.back()
         awaitTrue("the upload to land") {
-            val status = uploads.statuses.value.single { it.albumId == albumId }
+            val status = uploads.statuses.value.single { it.albumId == uploadId }
             check(status.stage != UploadStage.Failed) { "upload failed: ${status.failure}" }
             status.stage == UploadStage.Done
         }
-        return albumId
+        return uploadId
     }
 }

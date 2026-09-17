@@ -36,6 +36,10 @@ public data class IngestReport(
     public val blockedByUnreadable: List<ShardProbe> = emptyList(),
     /** Folders left alone because more than one album claims them. */
     public val doublyClaimed: List<DoubleClaim> = emptyList(),
+    /** Sibling folders named alike but for case, left alone with everything beneath them (§2). */
+    public val nameClashes: List<NameClash> = emptyList(),
+    /** New phone albums left in the zone because a sibling already has their name (§2). */
+    public val heldBack: List<HeldBack> = emptyList(),
     /** Albums that could not be written because another device wrote them twice running. */
     public val contendedAlbums: List<String> = emptyList(),
     /** Two albums under one parent with the same name. Both shown, never merged (§2). */
@@ -105,5 +109,7 @@ public data class IngestReport(
             mixedFolders.isNotEmpty() ||
             blockedByUnreadable.isNotEmpty() ||
             doublyClaimed.isNotEmpty() ||
+            nameClashes.isNotEmpty() ||
+            heldBack.isNotEmpty() ||
             looseRootFiles > 0
 }

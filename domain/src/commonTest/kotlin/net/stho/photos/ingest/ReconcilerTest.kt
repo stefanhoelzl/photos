@@ -9,6 +9,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Instant
 import kotlin.uuid.Uuid
 import kotlinx.io.files.Path
 import net.stho.photos.catalog.AlbumInfo
@@ -425,58 +426,127 @@ class ReconcilerTest {
     // --------------------------------------------------------------- pulling the phone's albums down
 
     @Test
-    fun anAlbumWithNoSourcePathIsPulledIntoANameThatIsFree() {
-        val library = LibraryFixture()
-        library.file("Wochenende/a.jpg")
-        val mine = library.shard("Wochenende", photos = listOf("a.jpg"))
-        val phone = phoneAlbum(library, "Wochenende")
-
-        val plan = library.plan(shards = listOf(mine, phone))
-
-        val pull = assertNotNull(plan.pulls.firstOrNull())
-        assertEquals(phone.info.id, pull.shard.info.id)
-        // §2 permits duplicate names, so the phone's album cannot simply land on top of the
-        // laptop's directory of the same name.
-        assertNotEquals("Wochenende", pull.sourcePath)
-        assertTrue(pull.sourcePath.startsWith("Wochenende ("))
-    }
-
-    @Test
-    fun aPhoneAlbumIsNeverADeletionCandidateHavingNeverHadADirectory() {
+    fun aNewPhoneAlbumIsPulledFromItsAdditionUnderTheIdThePhoneMinted() {
         val library = LibraryFixture()
         val phone = phoneAlbum(library, "Garten")
 
         val plan = library.plan(shards = listOf(phone))
 
         assertTrue(plan.deletions.isEmpty())
-        assertEquals(1, plan.pulls.size)
+        val pull = plan.pulls.single()
+        assertEquals(phone.info.id, pull.shard.info.id)
+        assertEquals(phone.info.addsTo, pull.albumId)
+        assertEquals("Garten", pull.sourcePath)
+        assertFalse(pull.claimed)
+    }
+
+    /** The parent the phone chose is a folder on the laptop, so the album lands inside it. */
+    @Test
+    fun aNewPhoneAlbumLandsInItsParentsFolder() {
+        val library = LibraryFixture()
+        library.file("Reisen/Italien/a.jpg")
+        val container = library.shard("Reisen", photos = emptyList())
+        val italy = library.shard("Reisen/Italien", photos = listOf("a.jpg"), parent = container.info.id)
+        val phone = phoneAlbum(library, "Kroatien", parent = container.info.id)
+
+        val plan = library.plan(shards = listOf(container, italy, phone))
+
+        assertEquals("Reisen/Kroatien", plan.pulls.single().sourcePath)
+    }
+
+    /** One album, however many uploads went into it before the laptop saw any: pulled once, merged after. */
+    @Test
+    fun theSecondAdditionToANewAlbumMergesIntoTheOneThePullMakes() {
+        val library = LibraryFixture()
+        val albumId = Uuid.random()
+        val first = phoneAlbum(library, "Garten", albumId = albumId, addedAt = fixtureAddedAt)
+        val second = phoneAlbum(library, "Garten", albumId = albumId, addedAt = Instant.fromEpochSeconds(fixtureAddedAt.epochSeconds + 60))
+
+        val plan = library.plan(shards = listOf(second, first))
+
+        val pull = plan.pulls.single()
+        assertEquals(first.info.id, pull.shard.info.id)
+        val merge = plan.merges.single()
+        assertEquals(second.info.id, merge.addition.info.id)
+        assertEquals(albumId, merge.target)
+        assertEquals("Garten", merge.sourcePath)
     }
 
     /**
-     * A run stopped in the middle of a pull: the album is claimed, still `uploaded`, and its folder
-     * holds some of its files. Those files are the pull's to finish, not a new album to upload —
-     * walking them as one is how `Transdinarica` became two albums of 400 and 70 photos.
+     * Names are unique per parent, ignoring case (§2). A name taken after the phone chose it is not
+     * renamed and not landed beside: the album waits in the zone, named, until one is renamed.
+     */
+    @Test
+    fun aNewPhoneAlbumWhoseNameIsTakenIsHeldBack() {
+        val library = LibraryFixture()
+        library.file("Wochenende/a.jpg")
+        val mine = library.shard("Wochenende", photos = listOf("a.jpg"))
+        val phone = phoneAlbum(library, "wochenende")
+        val later = phoneAlbum(library, "wochenende", albumId = requireNotNull(phone.info.addsTo))
+
+        val plan = library.plan(shards = listOf(mine, phone, later))
+
+        assertTrue(plan.pulls.isEmpty())
+        assertTrue(plan.merges.isEmpty(), "nothing to merge into while it waits")
+        assertEquals(listOf(HeldBack("wochenende", requireNotNull(phone.info.addsTo))), plan.heldBack)
+        assertEquals(listOf(mine.info.id), plan.albums.map(AlbumPlan::id))
+    }
+
+    /** A folder on the laptop no shard claims yet takes the name just the same. */
+    @Test
+    fun aFolderNoShardClaimsYetAlsoHoldsANewPhoneAlbumBack() {
+        val library = LibraryFixture()
+        library.file("Garten/a.jpg")
+        val phone = phoneAlbum(library, "GARTEN")
+
+        val plan = library.plan(shards = listOf(phone))
+
+        assertTrue(plan.pulls.isEmpty())
+        assertEquals("GARTEN", plan.heldBack.single().sourcePath)
+    }
+
+    /**
+     * A run stopped in the middle of a pull: the addition is claimed, still `uploaded`, and its
+     * folder holds some of its files. Those files are the pull's to finish, not a new album to
+     * upload — walking them as one is how `Transdinarica` became two albums of 400 and 70 photos.
      */
     @Test
     fun aFolderAStoppedPullHalfFilledIsResumedRatherThanUploaded() {
         val library = LibraryFixture()
         library.file("Transdinarica/a.jpg")
-        val phone = library.shard(
-            "Transdinarica",
-            photos = listOf("a.jpg", "b.jpg"),
-            state = AlbumState.UPLOADED,
-            encodingVersion = 0,
-        )
+        val phone = phoneAlbum(library, "Transdinarica", sourcePath = "Transdinarica", photos = listOf("a.jpg", "b.jpg"))
 
         val plan = library.plan(shards = listOf(phone))
 
         assertTrue(plan.albums.isEmpty(), "no album of its own: ${plan.albums.map(AlbumPlan::sourcePath)}")
         assertTrue(plan.deletions.isEmpty())
         assertTrue(plan.doublyClaimed.isEmpty())
+        assertTrue(plan.heldBack.isEmpty(), "its own half-filled folder does not take its name")
         val pull = plan.pulls.single()
         assertEquals(phone.info.id, pull.shard.info.id)
         assertEquals("Transdinarica", pull.sourcePath)
         assertTrue(pull.claimed)
+    }
+
+    /**
+     * A run stopped after the pull committed the album but before it deleted the addition. The album
+     * is there and the addition names its folder: an ordinary merge, with nothing left to upload.
+     */
+    @Test
+    fun aPullStoppedAfterItsCommitIsFinishedAsAMerge() {
+        val library = LibraryFixture()
+        library.file("Transdinarica/a.jpg")
+        val album = library.shard("Transdinarica", photos = listOf("a.jpg"))
+        val phone = phoneAlbum(
+            library, "Transdinarica", albumId = album.info.id, sourcePath = "Transdinarica", photos = listOf("a.jpg"),
+        )
+
+        val plan = library.plan(shards = listOf(album, phone))
+
+        assertTrue(plan.pulls.isEmpty())
+        assertTrue(plan.doublyClaimed.isEmpty())
+        assertEquals(phone.info.id, plan.merges.single().addition.info.id)
+        assertTrue(plan.albums.single().uploads.isEmpty())
     }
 
     /**
@@ -490,12 +560,7 @@ class ReconcilerTest {
         library.file("Transdinarica/a.jpg")
         library.file("Transdinarica/c.jpg")
         val mine = library.shard("Transdinarica", photos = listOf("a.jpg"))
-        val phone = library.shard(
-            "Transdinarica",
-            photos = listOf("a.jpg", "b.jpg"),
-            state = AlbumState.UPLOADED,
-            encodingVersion = 0,
-        )
+        val phone = phoneAlbum(library, "Transdinarica", sourcePath = "Transdinarica", photos = listOf("a.jpg", "b.jpg"))
 
         val plan = library.plan(shards = listOf(mine, phone))
 
@@ -507,6 +572,27 @@ class ReconcilerTest {
             plan.doublyClaimed,
         )
         assertFalse(plan.hasWork)
+    }
+
+    /**
+     * `Reisen` and `reisen` side by side on a case-sensitive disk. Either could be the album, so
+     * neither is — nor anything beneath them, which would otherwise lose its parent — and nothing
+     * is deleted.
+     */
+    @Test
+    fun siblingFoldersNamedAlikeButForCaseAreLeftAloneWithTheirChildren() {
+        val library = LibraryFixture()
+        library.file("Reisen/Italien/a.jpg")
+        library.file("reisen/Kroatien/b.jpg")
+        library.file("Garten/c.jpg")
+        val container = library.shard("Reisen", photos = emptyList())
+        val italy = library.shard("Reisen/Italien", photos = listOf("a.jpg"), parent = container.info.id)
+
+        val plan = library.plan(shards = listOf(container, italy))
+
+        assertEquals(listOf(NameClash(listOf("Reisen", "reisen"))), plan.nameClashes)
+        assertEquals(listOf("Garten"), plan.albums.map(AlbumPlan::sourcePath))
+        assertTrue(plan.deletions.isEmpty())
     }
 
     @Test
@@ -527,24 +613,30 @@ class ReconcilerTest {
     }
 
     /**
-     * A phone album that has finished uploading: `uploaded`, at encoding version 0, with no
-     * `source_path` because nothing has claimed it yet. The only state the CLI pulls from.
+     * A new album the phone finished uploading: an `uploaded` addition naming an album no shard is
+     * yet, with no `source_path` because nothing has claimed it.
      */
     private fun phoneAlbum(
         library: LibraryFixture,
         name: String,
+        albumId: Uuid = Uuid.random(),
+        parent: Uuid? = null,
         state: AlbumState = AlbumState.UPLOADED,
         sourcePath: String? = null,
+        photos: List<String> = listOf("p.jpg"),
+        addedAt: Instant = fixtureAddedAt,
     ): Shard = Shard(
         info = AlbumInfo(
             id = Uuid.random(),
             name = name,
+            parent = parent,
             sourcePath = sourcePath,
             thumbsId = blobId(),
             state = state,
             encodingVersion = 0,
-            addedAt = fixtureAddedAt,
+            addedAt = addedAt,
+            addsTo = albumId,
         ),
-        photos = listOf(library.row("p.jpg")),
+        photos = photos.map { library.row(it) },
     )
 }

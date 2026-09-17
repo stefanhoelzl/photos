@@ -22,6 +22,16 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import kotlin.uuid.Uuid
+import net.stho.photos.app.UploadTarget
+import net.stho.photos.app.Resolution
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -68,18 +78,18 @@ import net.stho.photos.app.UploadStage
 import net.stho.photos.app.UploadStatus
 
 /**
- * §8's gallery picker and name dialog: a gallery album whole, or loose photos.
+ * §8's gallery picker and album dialog: a gallery album whole, or loose photos.
  *
- * A pushed screen for choosing, and a dialog for naming — the name is prefilled from the gallery
- * album, the parent is the list the upload icon was on, and deleting from the device is decided
- * here, up front, rather than asked once the upload is done.
+ * A pushed screen for choosing, and a dialog for where they go — one field that picks an album or
+ * names a new one, pre-filled from where the upload started — and deleting from the device is
+ * decided here, up front, rather than asked once the upload is done.
  */
 @Composable
 internal fun UploadScreen(uploads: UploadModel, onClose: () -> Unit) {
     val picker by uploads.picker.collectAsState()
     val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxSize()) {
-        NavBar("Choose photos", "into ${picker.parentName}", onBack = { uploads.close(); onClose() }) {}
+        NavBar("Choose photos", if (picker.selected.isEmpty()) "" else "${picker.selected.size} selected", onBack = { uploads.close(); onClose() }) {}
         val failure = picker.failure
         val access = picker.access
         when {
@@ -97,11 +107,11 @@ internal fun UploadScreen(uploads: UploadModel, onClose: () -> Unit) {
         }
     }
     picker.naming?.let { naming ->
-        NameDialog(
+        AlbumDialog(
             naming,
-            picker.parentName,
-            adding = picker.addTo != null,
-            onName = uploads::rename,
+            onType = uploads::type,
+            onAddNew = { uploads.addNew() },
+            onTarget = { uploads.target(it) },
             onDelete = uploads::deleteAfterUpload,
             onUpload = { if (uploads.confirm() != null) onClose() },
             onCancel = uploads::dismissNaming,
@@ -329,42 +339,118 @@ private fun AccessNeeded(access: GalleryAccess, onSettings: () -> Unit) {
     }
 }
 
+/**
+ * Where the photos go (§8): one field that is a path from the library root and a list of the albums
+ * it matches. Picking an album adds to it; a path no album has offers `+`, which only adds it to the
+ * list — nothing is created until Upload.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun NameDialog(
+private fun AlbumDialog(
     naming: Naming,
-    parentName: String,
-    /** Adding to the album [parentName] names: no name to give, so no field (§8). */
-    adding: Boolean,
-    onName: (String) -> Unit,
+    onType: (String) -> Unit,
+    onAddNew: () -> Unit,
+    onTarget: (Uuid) -> Unit,
     onDelete: (Boolean) -> Unit,
     onUpload: () -> Unit,
     onCancel: () -> Unit,
 ) {
+    val scheme = MaterialTheme.colorScheme
+    // The field owns its text and cursor; the model only hears about each change. Fed back from the
+    // model instead, the first keystroke's value arrived a recomposition late, and on iOS the cursor
+    // went back before that character — so a typed name came out with its first letter last. Opened
+    // fresh per dialog, so the pre-fill starts here; a pick or a `+` replaces the text wholesale.
+    var field by remember { mutableStateOf(TextFieldValue(naming.text, TextRange(naming.text.length))) }
+    if (field.text != naming.text && naming.selected?.path == naming.text) {
+        field = TextFieldValue(naming.text, TextRange(naming.text.length))
+    }
+    var expanded by remember { mutableStateOf(false) }
+    // Until the text is edited the list is the whole list, with the pre-selection ticked; the first
+    // edit starts filtering it.
+    var edited by remember { mutableStateOf(false) }
+    val resolution = naming.resolution
+
     AlertDialog(
         onDismissRequest = onCancel,
-        title = { Text(if (adding) "Add to $parentName" else "New album") },
+        title = { Text("Upload ${naming.count} items") },
         text = {
             Column {
-                if (adding) {
-                    Text("${naming.count} items", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    Text("${naming.count} items · in $parentName", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    // The field owns its text and cursor; the model only hears about each change. Fed
-                    // back from the model instead, the first keystroke's value arrived a recomposition
-                    // late, and on iOS the cursor went back before that character — so a typed name came
-                    // out with its first letter last. Opened fresh per dialog, so the prefill starts here.
-                    var field by remember { mutableStateOf(TextFieldValue(naming.name, TextRange(naming.name.length))) }
+                ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
                     TextField(
                         value = field,
                         onValueChange = {
+                            if (it.text != field.text) edited = true
                             field = it
-                            onName(it.text)
+                            expanded = true
+                            onType(it.text)
                         },
                         singleLine = true,
-                        placeholder = { Text("Album name") },
-                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                        label = { Text("Album") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                        modifier = Modifier.fillMaxWidth().menuAnchor(ExposedDropdownMenuAnchorType.PrimaryEditable),
                     )
+                    val query = if (edited) field.text.split('/').joinToString(" / ") { it.trim() }.trim() else ""
+                    val shown = naming.entries.filter { query.isEmpty() || it.path.contains(query, ignoreCase = true) }
+                    val offerNew = edited && resolution is Resolution.New
+                    if (shown.isNotEmpty() || offerNew) {
+                        ExposedDropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false },
+                            modifier = Modifier.heightIn(max = 260.dp),
+                        ) {
+                            for (entry in shown) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(entry.path, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                                            if (entry.kind == UploadTarget.Kind.New) Tag("new")
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Text(if (entry.id == naming.selected?.id) "✓" else "", color = scheme.primary, modifier = Modifier.width(16.dp))
+                                    },
+                                    onClick = {
+                                        onTarget(entry.id)
+                                        field = TextFieldValue(entry.path, TextRange(entry.path.length))
+                                        edited = false
+                                        expanded = false
+                                    },
+                                )
+                            }
+                            if (offerNew) {
+                                DropdownMenuItem(
+                                    text = { Text("New album “${resolution.path}”", color = scheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                    leadingIcon = { Text("+", color = scheme.primary, modifier = Modifier.width(16.dp)) },
+                                    onClick = {
+                                        onAddNew()
+                                        field = TextFieldValue(resolution.path, TextRange(resolution.path.length))
+                                        edited = false
+                                        expanded = false
+                                    },
+                                )
+                            }
+                        }
+                    }
                 }
+                val selected = naming.selected
+                val (helper, isError) = when {
+                    selected != null && selected.kind == UploadTarget.Kind.New ->
+                        "New album in ${naming.targets.pathOf(selected.parent).ifEmpty { "Albums" }}" to false
+                    selected != null -> "Adds to ${selected.path}" to false
+                    resolution is Resolution.Refused -> resolution.reason to true
+                    resolution is Resolution.New -> "Tap + to add it as a new album" to false
+                    else -> "Pick an album or type a new one" to false
+                }
+                Text(
+                    helper,
+                    fontSize = 12.sp,
+                    color = when {
+                        isError -> scheme.error
+                        selected != null -> scheme.onSurface
+                        else -> scheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(start = 16.dp, top = 6.dp),
+                )
                 Row(
                     Modifier.fillMaxWidth().padding(top = 12.dp).clickable { onDelete(!naming.deleteFromGallery) },
                     verticalAlignment = Alignment.Top,
@@ -378,20 +464,34 @@ private fun NameDialog(
                                 "Delete them from this device after upload"
                             },
                             fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            color = scheme.onSurface,
                         )
                         // §8's accepted risk, said where it is accepted.
                         Text(
                             "You will be asked to confirm. Until the laptop syncs, the storage zone holds the only copy.",
                             fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = scheme.onSurfaceVariant,
                         )
                     }
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onUpload, enabled = adding || naming.name.isNotBlank()) { Text("Upload") } },
+        confirmButton = { TextButton(onClick = onUpload, enabled = naming.selected != null) { Text("Upload") } },
         dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+    )
+}
+
+/** The `new` beside an album the dialog added and nothing has created yet. */
+@Composable
+private fun Tag(text: String) {
+    Text(
+        text,
+        fontSize = 11.sp,
+        color = MaterialTheme.colorScheme.onPrimaryContainer,
+        modifier = Modifier.padding(start = 8.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.primaryContainer)
+            .padding(horizontal = 6.dp, vertical = 1.dp),
     )
 }
 
@@ -435,7 +535,7 @@ internal fun UploadProgress(uploads: UploadModel) {
                 Icon(Icons.upload, contentDescription = null, tint = scheme.onSurface, modifier = Modifier.size(18.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        if (current.adding) "Adding to “${current.name}”" else "Uploading “${current.name}”",
+                        "Uploading to ${current.path}",
                         fontSize = 12.5.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = scheme.onSurface,
@@ -464,7 +564,7 @@ private fun UploadRow(status: UploadStatus, onCancel: () -> Unit, onRetry: () ->
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    if (status.adding) "Adding to ${status.name}" else status.name,
+                    "Uploading to ${status.path}",
                     fontSize = 14.sp, color = scheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 Text(

@@ -73,13 +73,14 @@ class AdditionTest {
         }
     }
 
-    /** An album the phone made and the laptop has not pulled yet takes additions too: pulled, then merged, in one run. */
+    /** Two uploads into a new album the laptop has not pulled yet: pulled from the first, the second merged, in one run. */
     @Test
-    fun anAdditionToAnAlbumNotYetPulledIsMergedAfterThePull() = scenario("addition-after-pull") {
+    fun aSecondAdditionToANewAlbumIsMergedAfterThePull() = scenario("addition-after-pull") {
         library { photosignore() }
         zone {
-            val fromPhone = album("FromPhone") { photo("0001.jpg") }
-            addition(fromPhone.id, "FromPhone") { photo("0002.jpg") }
+            val fromPhone = anId()
+            addition(fromPhone, "FromPhone") { photo("0001.jpg") }
+            addition(fromPhone, "FromPhone") { photo("0002.jpg") }
         }
 
         run("sync")
@@ -101,9 +102,9 @@ class AdditionTest {
         }
     }
 
-    /** An addition whose album is not in the zone becomes the album it records, pulled like any phone album. */
+    /** An addition whose album is not in the zone becomes the album it records, pulled like any new phone album. */
     @Test
-    fun anAdditionWhoseAlbumIsGoneBecomesAnAlbumOfItsOwn() = scenario("addition-orphan") {
+    fun anAdditionWhoseAlbumIsGoneBecomesThatAlbum() = scenario("addition-orphan") {
         library { photosignore() }
         zone { addition(anId(), "Gone") { photo("0001.jpg") } }
 
@@ -123,31 +124,31 @@ class AdditionTest {
     }
 
     /**
-     * The album's folder deleted before the merge: the album goes, and its addition becomes an album
-     * of its own — in a folder beside the one that was deleted, never that folder brought back.
+     * The album's folder deleted before the merge: the album goes, and its addition becomes that album
+     * again — not in the run that deleted the folder, which never brings a folder back, but on the next.
      */
     @Test
-    fun anAdditionToADeletedAlbumDoesNotBringItsFolderBack() = scenario("addition-deleted") {
+    fun anAdditionToADeletedAlbumLandsOnTheRunAfter() = scenario("addition-deleted") {
         library {
             photosignore()
             album("Alps") { jpeg("0001.jpg") }
         }
         run("sync")
-        val added = zoneAddition("Alps") { photo("0002.jpg") }
+        zoneAddition("Alps") { photo("0002.jpg") }
         library { removeTree("Alps") }
 
         run("sync")
+        run("sync")
 
-        val kept = "Alps (${added.id.toString().take(8)})"
         expect {
             exit(ExitCode.CLEAN)
             library {
-                absent("Alps")
-                exists("$kept/0002.jpg")
+                absent("Alps/0001.jpg")
+                exists("Alps/0002.jpg")
             }
             zone {
-                album(kept) {
-                    sourcePath(kept)
+                album("Alps") {
+                    sourcePath("Alps")
                     encoded()
                     photo("0002.jpg")
                 }

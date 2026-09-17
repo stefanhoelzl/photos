@@ -31,7 +31,6 @@ import net.stho.photos.catalog.Shard
 import net.stho.photos.catalog.ShardProbe
 import net.stho.photos.catalog.ShardWriteResult
 import net.stho.photos.catalog.ThumbPack
-import net.stho.photos.catalog.asAdditionId
 import net.stho.photos.catalog.asBlobObjectId
 import net.stho.photos.catalog.ObjectId
 import net.stho.photos.catalog.blobKey
@@ -162,6 +161,8 @@ public class Ingest(
 
         report.blockedByUnreadable = plan.blockedByUnreadable
         report.doublyClaimed = plan.doublyClaimed
+        report.nameClashes = plan.nameClashes
+        report.heldBack = plan.heldBack
         report.looseRootFiles = plan.looseRootFiles.size
         for (album in plan.albums) {
             if (album.mixedFileCount > 0) {
@@ -180,13 +181,7 @@ public class Ingest(
         // neither the zone nor the library moved cannot have produced any. The phone's crash
         // debris waits for the next run that does something, which costs nothing but a week of
         // $0.01/GB.
-        // An adoption that stopped between writing `meta/` and deleting `addition/` leaves the old
-        // key listed beside the album it became (§8). The album is what the LIST keeps; the key is
-        // only in the way.
-        val albumIds = refreshed.shards.mapTo(mutableSetOf()) { it.info.id }
-        val superseded = refreshed.report.ignoredKeys.filter { key -> key.asAdditionId()?.let(albumIds::contains) == true }
-
-        if (!refreshed.changed && !plan.hasWork && superseded.isEmpty()) return report.build()
+        if (!refreshed.changed && !plan.hasWork) return report.build()
 
         // Said before anything is uploaded, because the first album's line cannot appear until
         // that album is derived *and* uploaded — minutes, on a link that manages 0.85 MB/s. A
@@ -219,11 +214,10 @@ public class Ingest(
         try {
             for (album in work) commit(album, refreshed.etags, report)
             for (deletion in plan.deletions) delete(deletion, report)
-            for (pull in plan.pulls) archive(pull, refreshed.etags, report)
+            for (pull in plan.pulls) archive(pull, report)
             // Last: an addition goes into its album as that album stands after everything above,
             // including a pull of the album itself earlier in this run.
             for (merge in plan.merges) merge(merge, report)
-            deleteAll(superseded, swallowing = true)
 
             // The sweep reads every shard now on disk, so it must run after the writes above.
             val after = catalog.refresh()
@@ -690,90 +684,81 @@ public class Ingest(
     // ------------------------------------------------------------------ pulling a phone album down
 
     /**
-     * §7's pull: claim the album, copy it into `$LIBRARY_ROOT`, and leave it for the next run
-     * to encode.
+     * §7's pull: a new phone album, straight from its earliest addition into `$LIBRARY_ROOT` and
+     * `meta/<adds_to>`.
      *
-     * **Claim first, download second.** The claim writes `source_path` and leaves the state at
-     * [AlbumState.UPLOADED], which is what makes a retry safe: the path is recorded before any
-     * file exists, so a run interrupted mid-download resumes into the same directory instead of
-     * choosing a fresh name beside it — and because the deletion rule is gated on
-     * [AlbumState.ENCODED], the half-filled directory it leaves behind can never be read as
-     * photos someone deleted.
+     * ```
+     * claim     If-Match on the addition: source_path, and every row's final name
+     * download  into that folder, skipping files already there
+     * commit    meta/<adds_to>, derived from those files, at encoded
+     * delete    the addition — its full-quality blobs are then the sweep's
+     * ```
      *
-     * The album stays [AlbumState.UPLOADED] until it has been encoded. That is deliberate: the
-     * phone's full-quality blobs are the only copy until the library copy is durable, so
-     * nothing deletes them here. The next run sees an ordinary album below the current profile
-     * and re-encodes it through the path that already exists for that.
+     * **Claim first, download second.** The path is recorded before any file exists, so a run
+     * interrupted mid-download resumes into the same directory instead of choosing a fresh name
+     * beside it — and the walk leaves a folder a claimed addition names alone, so the files already
+     * there are never read as an album of their own. A run that stopped after the commit finds the
+     * album there and the claimed addition beside it, which is an ordinary merge with only the
+     * delete left.
+     *
+     * The phone's full-quality blobs stay referenced by the addition until the album is committed,
+     * because until then they are the only copy.
      *
      * `.photosignore` is not consulted: the rules govern what goes up (§7).
      */
-    private suspend fun archive(pull: PullPlan, etags: Map<Uuid, ETag>, report: ReportBuilder) {
+    private suspend fun archive(pull: PullPlan, report: ReportBuilder) {
         val directory = libraryPath(pull.sourcePath)
         try {
-            var shard = pull.shard
-            var etag = etags[shard.info.id]
-            if (pull.adopting) {
-                // The album it records being added to is gone, so it becomes that album: `meta/`
-                // first, then the `addition/` key, so at no instant does the zone hold neither (§8).
-                val adopted = Shard(shard.info.copy(addsTo = null, sourcePath = null), shard.photos)
-                when (val write = catalog.writeShard(adopted, ifMatch = null)) {
-                    is ShardWriteResult.Written -> etag = write.etag
-                    ShardWriteResult.StaleETag -> {
-                        report.contendedAlbums += pull.sourcePath
-                        return
-                    }
-                }
-                catalog.deleteShard(pull.shard)
-                shard = adopted
-            }
+            var addition = pull.shard
             if (!pull.claimed) {
                 // The names are fixed here, before any file exists, for the same reason the path
                 // is: a resumed download skips a file already on disk, which is only safe once
-                // nothing else can be called that (§7).
+                // nothing else can be called that (§7). Only the laptop names files: the phone sends
+                // the camera's names as they are.
                 val claimed = Shard(
-                    shard.info.copy(sourcePath = pull.sourcePath),
-                    shard.photos.namedAgainst(directory.fileNames()),
+                    addition.info.copy(sourcePath = pull.sourcePath),
+                    addition.photos.namedAgainst(directory.fileNames()),
                 )
-                when (val write = catalog.writeShard(claimed, ifMatch = etag)) {
-                    is ShardWriteResult.Written -> etag = write.etag
+                when (catalog.writeShard(claimed, ifMatch = catalog.etag(addition.info.id))) {
+                    is ShardWriteResult.Written -> addition = claimed
                     ShardWriteResult.StaleETag -> {
                         report.contendedAlbums += pull.sourcePath
                         return
                     }
                 }
-                shard = claimed
             }
 
-            val (downloaded, bytes) = download(shard.photos, directory)
+            val (downloaded, bytes) = download(addition.photos, directory)
             report.pulledAlbums += IngestReport.PulledAlbum(pull.sourcePath, downloaded.size, bytes)
             emit(IngestEvent.Line("v ${pull.sourcePath}  ${downloaded.size} files pulled"))
 
-            commit(
+            // Every file is now on disk, so the album is derived like any other — under the id the
+            // phone minted, which every device already shows it by, with the name, parent and date
+            // the addition recorded, and the phone's row identities carried onto the derived rows.
+            val written = commit(
                 AlbumPlan(
-                    id = shard.info.id,
-                    name = shard.info.name,
+                    id = pull.albumId,
+                    name = addition.info.name,
                     sourcePath = pull.sourcePath,
-                    parent = shard.info.parent,
+                    parent = addition.info.parent,
                     directory = directory,
-                    existing = shard,
+                    existing = Shard(
+                        addition.info.copy(id = pull.albumId, addsTo = null, thumbsId = null),
+                        emptyList(),
+                    ),
                     uploads = downloaded,
                     files = downloaded,
                     keep = emptyList(),
-                    // The rows the phone wrote, and the full-quality blobs they own. Deleting
-                    // them is the ordinary drop path, and it runs only now that the library
-                    // holds the files they were the only copy of.
-                    drop = shard.photos,
+                    drop = emptyList(),
                     mixedFileCount = 0,
-                    reencoding = true,
+                    carried = addition.photos,
                 ),
-                etags = etag?.let { mapOf(shard.info.id to it) } ?: emptyMap(),
+                // Unconditional: no shard is at this key, or the one that was is deleted this run.
+                etags = emptyMap(),
                 report = report,
             )
-            // Every file is now on disk, so the album can be derived like any other — which is
-            // what finally moves it to `encoded` and deletes the phone's full-quality blobs. It
-            // happens here rather than on a later run because only this code knows the download
-            // completed: a run that stopped halfway leaves the state at `uploaded`, and the next
-            // one resumes into the same directory and skips what is already there.
+            if (!written) return
+            catalog.deleteShard(addition)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
@@ -1021,6 +1006,8 @@ private class ReportBuilder {
     var looseRootFiles = 0
     var blockedByUnreadable: List<ShardProbe> = emptyList()
     var doublyClaimed: List<DoubleClaim> = emptyList()
+    var nameClashes: List<NameClash> = emptyList()
+    var heldBack: List<HeldBack> = emptyList()
     var duplicateNames: List<String> = emptyList()
     var orphanedAlbums: List<Uuid> = emptyList()
     var blobsInZone = 0
@@ -1047,6 +1034,8 @@ private class ReportBuilder {
         looseRootFiles = looseRootFiles,
         blockedByUnreadable = blockedByUnreadable,
         doublyClaimed = doublyClaimed,
+        nameClashes = nameClashes,
+        heldBack = heldBack,
         contendedAlbums = contendedAlbums.toList(),
         duplicateNames = duplicateNames,
         orphanedAlbums = orphanedAlbums,

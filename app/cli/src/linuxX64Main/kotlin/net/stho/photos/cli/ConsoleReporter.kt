@@ -98,6 +98,19 @@ internal class ConsoleReporter(private val console: Console) {
                     "left untouched until all but one are removed",
             )
         }
+        for (clash in report.nameClashes) {
+            unresolved(
+                clash.sourcePaths.joinToString(" / "),
+                "are named alike but for case — left untouched, with everything beneath them, " +
+                    "until all but one are renamed",
+            )
+        }
+        for (held in report.heldBack) {
+            unresolved(
+                held.sourcePath,
+                "is taken, so the phone's new album of that name waits in the zone until one of them is renamed",
+            )
+        }
         for (path in report.contendedAlbums) {
             unresolved(path, "was written by another device — skipped, retried next run")
         }
