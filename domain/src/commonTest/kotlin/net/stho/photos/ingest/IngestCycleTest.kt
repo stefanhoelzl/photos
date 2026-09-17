@@ -212,6 +212,48 @@ class IngestCycleTest {
         }
     }
 
+    /**
+     * A run stopped halfway through a pull (§7): the album claimed, still `uploaded`, some of its
+     * files already in the folder. The next run finishes that album into that folder — it does not
+     * first upload the files already there as an album of their own, which is how `Transdinarica`
+     * became two albums claiming one folder.
+     */
+    @Test
+    fun aPullInterruptedAfterPartOfItsDownloadResumesWithoutADuplicateAlbum() = runTest {
+        val cycle = Cycle("pull-resume")
+        val photos = listOf(cycle.library.row("a.jpg"), cycle.library.row("b.jpg"))
+        val phone = Shard(
+            info = AlbumInfo(
+                id = Uuid.random(),
+                name = "FromPhone",
+                sourcePath = "FromPhone",
+                thumbsId = null,
+                state = AlbumState.UPLOADED,
+                encodingVersion = 0,
+                addedAt = fixtureAddedAt,
+            ),
+            photos = photos,
+        )
+        for (row in photos) {
+            cycle.zone.put(assertNotNull(row.imageId).blobKey, ByteArray(64) { 0x41 }, "e")
+        }
+        cycle.writeShard(phone)
+        cycle.library.file("FromPhone/a.jpg")
+
+        val report = cycle.run()
+
+        assertTrue(report.failures.isEmpty(), report.failures.toString())
+        assertEquals(1, cycle.metaKeys().size, "one album for the folder, not a second beside it")
+        val after = cycle.shard("FromPhone")
+        assertEquals(phone.info.id, after.info.id)
+        assertEquals(AlbumState.ENCODED, after.info.state)
+        assertEquals(photos.map(PhotoRow::id).toSet(), after.photos.map(PhotoRow::id).toSet())
+
+        val again = cycle.run()
+        assertTrue(again.doublyClaimed.isEmpty())
+        assertEquals(0, again.uploadedFiles)
+    }
+
     // ---------------------------------------------------------------------------------- additions
 
     /**
@@ -322,6 +364,43 @@ class IngestCycleTest {
         assertEquals(added.photos.map(PhotoRow::id).toSet(), adopted.photos.map(PhotoRow::id).toSet())
         assertTrue(cycle.additionKeys().isEmpty())
         assertEquals(2, cycle.metaKeys().size)
+    }
+
+    /**
+     * An adoption a run stopped partway through (§8): the addition already written to `meta/` as the
+     * album it records, its `addition/` key gone, the folder claimed and some of its files already
+     * there. The next run finishes pulling it into that folder rather than uploading those files as
+     * another album.
+     */
+    @Test
+    fun anAdoptionInterruptedAfterPartOfItsDownloadResumesWithoutADuplicateAlbum() = runTest {
+        val cycle = cycle("merge-adopt-resume")
+        cycle.run()
+        val neuseeland = cycle.shard("Neuseeland")
+        val added = cycle.addTo(neuseeland, "x.jpg", "y.jpg")
+        // What the stopped run had done: deleted the album, adopted the addition and claimed a folder
+        // for it, and downloaded one of its two files.
+        cycle.library.remove("Neuseeland")
+        cycle.zone.remove(neuseeland.info.id.shardKey)
+        cycle.zone.remove(added.info.key)
+        val folder = "Neuseeland (${added.info.id.toString().take(8)})"
+        cycle.writeShard(Shard(added.info.copy(addsTo = null, sourcePath = folder), added.photos))
+        cycle.library.file("$folder/x.jpg")
+
+        val report = cycle.run()
+
+        assertTrue(report.failures.isEmpty(), report.failures.toString())
+        assertEquals(2, cycle.metaKeys().size, "Rauhöd and the adopted album, nothing beside it")
+        val adopted = cycle.shard("Neuseeland")
+        assertEquals(added.info.id, adopted.info.id)
+        assertEquals(AlbumState.ENCODED, adopted.info.state)
+        assertEquals(folder, adopted.info.sourcePath)
+        assertEquals(added.photos.map(PhotoRow::id).toSet(), adopted.photos.map(PhotoRow::id).toSet())
+        assertTrue(cycle.library.exists("$folder/y.jpg"))
+
+        val again = cycle.run()
+        assertTrue(again.doublyClaimed.isEmpty())
+        assertEquals(0, again.uploadedFiles)
     }
 
     /** Still uploading: nothing merges it, and the album it adds to is left exactly as it was. */

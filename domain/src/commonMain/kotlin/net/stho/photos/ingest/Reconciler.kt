@@ -123,7 +123,10 @@ public data class MergePlan(
     public val claimed: Boolean get() = addition.info.sourcePath != null
 }
 
-/** A directory more than one encoded album claims — a duplicate left for a person to remove. */
+/**
+ * A directory more than one album claims — encoded, or pulled by a run that stopped — a duplicate
+ * left for a person to remove.
+ */
 public data class DoubleClaim(
     public val sourcePath: String,
     public val albumIds: List<Uuid>,
@@ -213,11 +216,21 @@ public class Reconciler(
             .filter { it.info.state == AlbumState.ENCODED }
             .groupBy { it.info.sourcePath?.normalisedPath().orEmpty() }
             .filterKeys(String::isNotEmpty)
-        // Two albums claiming one folder is a duplicate this tool made — the zone never mints one
-        // on purpose. Picking either would upload into it and leave the other to linger unseen,
-        // so the folder is left alone, like one a too-new shard claims, until a person removes one.
-        val doublyClaimed = claims.filterValues { it.size > 1 }.entries
-            .sortedBy { it.key }
+        // Folders a pull claimed and a stopped run left half-filled. They are that pull's, not the
+        // walk's: read as an album of their own, the files already downloaded would go up as a
+        // second album beside the one the pull finishes into the same folder (§7).
+        val resuming = shards
+            .filter { it.info.state == AlbumState.UPLOADED }
+            .groupBy { it.info.sourcePath?.normalisedPath().orEmpty() }
+            .filterKeys(String::isNotEmpty)
+        // One folder, one album. Two claiming it is a duplicate this tool made — an interrupted pull
+        // walked as a new album did it before the walk left such folders alone. Picking either would
+        // upload into it and leave the other to linger unseen, so the folder is left alone, like one
+        // a too-new shard claims, and neither pulled nor uploaded until a person removes one.
+        val doublyClaimed = (claims.keys + resuming.keys)
+            .map { path -> path to claims[path].orEmpty() + resuming[path].orEmpty() }
+            .filter { (_, claimants) -> claimants.size > 1 }
+            .sortedBy { (path, _) -> path }
             .map { (path, claimants) -> DoubleClaim(path, claimants.map { it.info.id }.sortedBy(Uuid::toString)) }
         val byPath = claims.filterValues { it.size == 1 }.mapValues { it.value.single() }
         val blockedPaths = unreadable.mapNotNullTo(mutableSetOf()) { it.sourcePath?.normalisedPath() }
@@ -245,6 +258,7 @@ public class Reconciler(
             albumPaths += path.ancestors().filter(::directoryExists)
         }
         albumPaths -= blockedPaths
+        albumPaths -= resuming.keys
 
         // Identity is assigned before anything is planned, so a child can name its parent whether
         // or not that parent already exists in the zone.
@@ -338,11 +352,12 @@ public class Reconciler(
         // `uploaded` means the phone has finished and nothing has encoded it yet — the only
         // state the CLI pulls from. `uploading` is skipped: it is still in flight. A shard that
         // already names a path was claimed by a run that did not finish, so it resumes there.
-        val reserved = (albumPaths + byPath.keys).toMutableSet()
+        val reserved = (albumPaths + byPath.keys + resuming.keys + blockedPaths).toMutableSet()
         val pulls = mutableListOf<PullPlan>()
         for (shard in shards.filter { it.info.state == AlbumState.UPLOADED }
             .sortedBy { it.info.id.toString() }) {
             val claimed = shard.info.sourcePath?.normalisedPath()?.ifEmpty { null }
+            if (claimed != null && claimed in blockedPaths) continue
             val path = claimed ?: availablePath(shard, reserved)
             if (!matchesFilter(path)) continue
             reserved += path

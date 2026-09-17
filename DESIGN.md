@@ -1678,6 +1678,13 @@ what the zone contains; the other two decide nothing at all.
   otherwise read as photos someone deleted. And the full-quality blobs — the only copy until
   the library copy is on disk — are dropped last, in the same commit that replaces them.
 
+  **A claimed folder is the pull's until it lands.** The walk leaves a folder that an `uploaded`
+  album claims alone — no album of its own, nothing uploaded from it — because the files a stopped
+  run already downloaded belong to that pull. Walked as a new folder they once went up as a second
+  album beside the one the pull then finished into the same folder: `Transdinarica`, 70 photos
+  beside 400. A folder claimed by more than one album, in either state, is left alone and named on
+  every run, and a pull does not resume into it.
+
   An album at `uploading` is skipped entirely: it is still in flight, and its shard is what
   keeps its blobs safe from the sweep.
 
