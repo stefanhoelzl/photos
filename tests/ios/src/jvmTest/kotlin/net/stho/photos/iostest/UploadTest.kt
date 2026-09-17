@@ -162,8 +162,9 @@ class UploadTest {
 
     /**
      * §8's delete-from-gallery for an album chosen whole: its photos and the album go in one PhotoKit
-     * change, so iOS asks once and `SystemAlerts` taps that one alert. `AlbumSeed` makes the album,
-     * since `simctl` can add photos but not group them.
+     * change, for which iOS asks twice — once for the album, once for its photos — so `SystemAlerts`
+     * taps Delete on both. `AlbumSeed` makes the album, since `simctl` can add photos but not group
+     * them.
      */
     @Test
     fun deletingAWholeGalleryAlbumRemovesTheAlbumToo() = iosScenario("upload-delete-album") {
@@ -181,7 +182,7 @@ class UploadTest {
         val assetIds = assetList.split(',')
         val tapper = startUiTest(
             "SystemAlerts/testTapAlerts",
-            mapOf("PHOTOS_TAP" to "Allow Full Access,Delete"),
+            mapOf("PHOTOS_TAP" to "Allow Full Access,Delete,Delete"),
             ready = "PHOTOS_TAPPER_READY",
         )
         launch(); setUp()
@@ -193,7 +194,8 @@ class UploadTest {
         assertEquals(galleryAlbum, naming.string("album"))
         post("/upload/name?delete=true")
         val albumId = confirmAndLand()
-        assertTrue("PHOTOS_TAPPED Delete" in tapper.awaitSuccess(), "iOS asked, and Delete was tapped")
+        val taps = Regex("PHOTOS_TAPPED Delete").findAll(tapper.awaitSuccess()).count()
+        assertEquals(2, taps, "iOS asked for the album and for its photos, and Delete was tapped on both")
 
         assertEquals(assetIds.size, assertNotNull(zone.shard(albumId)).photos.size, "the album landed first")
         // Opening the picker empties it until the library has been read, and an empty album list would

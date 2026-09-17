@@ -7,10 +7,13 @@ import XCTest
 /// a scenario starts this test beside itself with `xcodebuild test-without-building` and carries on.
 ///
 /// It looks for the named buttons on Springboard and on the app, taps each one it finds, and returns
-/// once the button named last has been tapped. It launches nothing: the app under test is the
-/// scenario's, installed and launched by the scenario.
+/// once the button named last has been tapped as many times as it is named: deleting an album with
+/// its photos raises two alerts, one for each, so that scenario names `Delete` twice. A tapped
+/// button is waited out before looking again, so one alert on its way out never counts twice. It
+/// launches nothing: the app under test is the scenario's, installed and launched by the scenario.
 ///
-///   TEST_RUNNER_PHOTOS_TAP         labels to tap, comma-separated; the last one ends the test
+///   TEST_RUNNER_PHOTOS_TAP         labels to tap, comma-separated; the last one, as often as it
+///                                  appears, ends the test
 ///   TEST_RUNNER_PHOTOS_TAP_SECONDS how long to wait for it (default 300)
 final class SystemAlerts: XCTestCase {
 
@@ -18,6 +21,7 @@ final class SystemAlerts: XCTestCase {
         let environment = ProcessInfo.processInfo.environment
         let labels = (environment["PHOTOS_TAP"] ?? "Delete").split(separator: ",").map(String.init)
         let last = try XCTUnwrap(labels.last)
+        var remaining = labels.filter { $0 == last }.count
         let seconds = Double(environment["PHOTOS_TAP_SECONDS"] ?? "") ?? 300
         let owners = [
             XCUIApplication(bundleIdentifier: "com.apple.springboard"),
@@ -29,16 +33,20 @@ final class SystemAlerts: XCTestCase {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {
             for owner in owners where owner.state != .notRunning {
-                for label in labels {
+                for label in Set(labels) {
                     let button = owner.buttons[label]
                     guard button.exists, button.isHittable else { continue }
                     button.tap()
                     print("PHOTOS_TAPPED", label)
-                    if label == last { return }
+                    _ = button.waitForNonExistence(timeout: 10)
+                    if label == last {
+                        remaining -= 1
+                        if remaining == 0 { return }
+                    }
                 }
             }
             Thread.sleep(forTimeInterval: 0.5)
         }
-        XCTFail("no \"\(last)\" button appeared within \(Int(seconds)) s")
+        XCTFail("\(remaining) more \"\(last)\" button(s) did not appear within \(Int(seconds)) s")
     }
 }
