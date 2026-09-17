@@ -1208,8 +1208,18 @@ worth knowing — `simctl` forwards an environment variable only when it is name
 ### Fullscreen viewer
 
 One screen, two states. Chrome is identical in both — back, then gear/share/set-cover, a
-filmstrip, and a bottom line carrying the date. A **LIVE badge appears once**, top-left, and is
-the only thing that differs.
+filmstrip, and a bottom line carrying the date. A **Live or video mark appears once**, top-left,
+and is the only thing that differs.
+
+**A Live Photo or a video is marked by a glyph, not a word** — a ring (`MotionPhotosOn`) for Live, a
+play triangle for video. On grid and picker tiles it is
+16pt, white, bottom-left, with a soft shadow and no backdrop, as iOS Photos does; the same at
+either grid density. The filmstrip carries none: at 48pt it crowds the tile, and the open photo is
+marked already. In the viewer the mark sits at the screen's corner, not the photograph's, so it
+takes the surface's text colour at 20pt and no shadow — a letterboxed photo leaves that corner on
+the light ground, where white would vanish. A video's mark stands on its poster only and goes
+once the player is mounted, whose own controls take that corner. Each mark tells VoiceOver "Live
+Photo" or "Video".
 
 **Swiping pages through the album**, and the filmstrip follows: 48pt tiles, the open photo
 outlined and kept in view. Once the open photo is showing, the model decodes the photo either
@@ -1218,7 +1228,7 @@ so a swipe draws a photograph rather than a placeholder. The ±3 blobs are still
 
 **The viewer is the only screen that rotates.** Everywhere else is a phone column, so the app
 is portrait until a photo opens and turns back when it closes. Sideways, the photograph has the
-whole screen: no nav bar, no filmstrip, no date — only a back button and the LIVE badge. iOS asks
+whole screen: no nav bar, no filmstrip, no date — only a back button and the mark. iOS asks
 the *app delegate* which orientations are allowed, not the Compose view controller inside
 SwiftUI's hosting controller, so that is the one line of Swift the rule costs.
 
@@ -1226,7 +1236,7 @@ SwiftUI's hosting controller, so that is the one line of Swift the rule costs.
 `AVPlayerViewController` once the transcode is on disk, playing as it appears and pausing when
 a swipe leaves it. A Live Photo plays in `PHLivePhotoView` from the two files the queue already
 fetched — the untouched still and its MOV — with Photos' own press-and-hold, and plays a brief
-hint once when it arrives so the motion is discoverable before the badge has to announce it.
+hint once when it arrives so the motion is discoverable before the mark has to announce it.
 
 > **A pair iOS will not assemble still shows its still.** `PHLivePhoto` answers twice: a degraded
 > photo built from the still, then the full one — or, when the pair cannot be assembled, *no
@@ -1245,7 +1255,7 @@ hint once when it arrives so the motion is discoverable before the badge has to 
 > in Apple's maker note, which ImageIO reads only **big-endian**. The synthetic pair the app suites
 > sync is written that way, and the iOS suite asserts the app's own view gets a full Live Photo
 > from it. A real library's MOV and still are uploaded as-is (§5), so genuine pairs keep both.
-The desktop harness installs no Live Photo view: the still stays and the badge says what the
+The desktop harness installs no Live Photo view: the still stays and the mark says what the
 phone would do with it.
 
 Swiping loads the 3200px image, and deep zoom needs nothing further: at 424 KiB one blob serves
@@ -1842,7 +1852,8 @@ Settings. There is no reduced mode: it would be a second picker to build and to 
 
 ```
 upload icon               on the album list or a container — or inside an album, to add to it
-  → gallery picker        album, or loose photos with drag-across-to-select
+  → gallery picker        album, or loose photos with drag-across-to-select;
+                          Live Photos and videos carry the tile mark (§6)
   → name dialog           name prefilled from the gallery album,
                           parent = the list you started from,
                           delete-from-gallery checkbox

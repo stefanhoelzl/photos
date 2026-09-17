@@ -34,7 +34,7 @@ public val LocalVideoSurface: androidx.compose.runtime.ProvidableCompositionLoca
  *
  * A UI-interop port exactly like [VideoSurface]. On iOS it is `PHLivePhotoView`, the system view
  * §6 says there is nothing to reimplement; the desktop installs none, so the still §5 already
- * put on screen stays and the LIVE badge says what the phone would do with it.
+ * put on screen stays and the Live mark says what the phone would do with it.
  */
 public fun interface LivePhotoSurface {
     @Composable

@@ -43,7 +43,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -67,7 +66,6 @@ import net.stho.photos.app.PickerUi
 import net.stho.photos.app.UploadModel
 import net.stho.photos.app.UploadStage
 import net.stho.photos.app.UploadStatus
-import net.stho.photos.model.MediaType
 
 /**
  * §8's gallery picker and name dialog: a gallery album whole, or loose photos.
@@ -289,15 +287,7 @@ private fun AssetTile(
 ) {
     Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh).clickable(onClick = onClick)) {
         if (jpeg != null) Thumbnail(jpeg, Modifier.fillMaxSize())
-        if (asset.mediaType != MediaType.PHOTO) {
-            Text(
-                if (asset.mediaType == MediaType.VIDEO) "VIDEO" else "LIVE",
-                fontSize = 9.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = Color.White,
-                modifier = Modifier.align(Alignment.BottomStart).padding(4.dp),
-            )
-        }
+        TileMark(asset.mediaType, Modifier.align(Alignment.BottomStart).padding(4.dp))
         // Blue: an active state, which is what §6's colour table gives blue to.
         if (selected) {
             Box(

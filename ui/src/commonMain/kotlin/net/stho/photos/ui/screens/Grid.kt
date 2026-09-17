@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isCtrlPressed
@@ -49,7 +50,7 @@ public fun PhotoGrid(
         modifier = Modifier.fillMaxSize().padding(horizontal = 2.dp).densityGesture(onDensity),
     ) {
         itemsIndexed(photos, key = { _, photo -> photo.id.toString() }) { index, photo ->
-            Tile(thumbnails[photo.id]) { onOpen(index) }
+            Tile(photo, thumbnails[photo.id]) { onOpen(index) }
         }
     }
 }
@@ -81,7 +82,7 @@ private fun Modifier.densityGesture(onDensity: (Boolean) -> Unit): Modifier = th
  * grid, the 54pt album cover, the map pin, the filmstrip. Nothing here fits or letterboxes.
  */
 @Composable
-private fun Tile(jpeg: ByteArray?, onOpen: () -> Unit) {
+private fun Tile(photo: PhotoRow, jpeg: ByteArray?, onOpen: () -> Unit) {
     Box(
         Modifier.padding(1.dp)
             .aspectRatio(1f)
@@ -89,5 +90,6 @@ private fun Tile(jpeg: ByteArray?, onOpen: () -> Unit) {
             .clickable(onClick = onOpen),
     ) {
         if (jpeg != null) Thumbnail(jpeg, Modifier.fillMaxSize())
+        TileMark(photo.mediaType, Modifier.align(Alignment.BottomStart).padding(4.dp))
     }
 }

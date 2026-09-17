@@ -13,7 +13,9 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.MotionPhotosOn
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SwapVert
@@ -48,6 +50,10 @@ internal object Icons {
     val pause: ImageVector = MaterialIcons.Filled.Pause
     val trash: ImageVector = MaterialIcons.Filled.Delete
     val image: ImageVector = MaterialIcons.Filled.Image
+
+    /** The marks a Live Photo and a video carry on a tile and in the viewer. */
+    val live: ImageVector = MaterialIcons.Filled.MotionPhotosOn
+    val video: ImageVector = MaterialIcons.Filled.PlayArrow
 
     /** G's: the bar icon, the picker's tick and disclosure, and the sheet's expand and collapse. */
     val upload: ImageVector = MaterialIcons.Filled.Upload
