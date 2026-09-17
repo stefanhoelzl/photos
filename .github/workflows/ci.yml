@@ -77,17 +77,6 @@ jobs:
       - name: Build and test
         run: ./gradlew build
 
-      # The media the app suites sync, written by the linuxX64 generator during `build` (the
-      # desktop suite depends on it). No Mac can run that generator, so the iOS suite below gets
-      # these exact files from here -- one generator, byte-identical media on both platforms.
-      - name: Upload the app suites' fixture media
-        uses: actions/upload-artifact@v7
-        with:
-          name: fixture-media
-          path: tests/fixtures/build/fixture-media
-          retention-days: 1
-          if-no-files-found: error
-
       # Excluded from `build` on purpose, so it is asked for by name.
       - name: End-to-end scenarios
         run: ./gradlew :tests:cli:e2e
@@ -108,6 +97,60 @@ jobs:
           retention-days: 7
           # By here the run is green, so the binary provably exists. No file means the path is
           # wrong, and that should be loud rather than a warning nobody reads.
+          if-no-files-found: error
+
+  # The media the app suites sync, and nothing else -- so the iOS scenarios wait minutes for it
+  # rather than for the whole of `build`, which writes the same files for the desktop suite. No
+  # Mac can run the linuxX64 generator, so the iOS suite gets these exact files from here: one
+  # generator, byte-identical media on both platforms. The generator links against the imaging
+  # prefix, so this job needs the same toolchain and prefix `build` does, from the same caches.
+  fixtures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Cache the Kotlin/Native distribution
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: konan-${{ runner.os }}-
+
+      # The same paths and key as `build`'s, for the reasons given there.
+      - name: Cache the native imaging prefix
+        uses: actions/cache@v4
+        with:
+          path: |
+            .tools/bin
+            .tools/cmake
+            .tools/nasm
+            .tools/native/konan
+            .tools/s3mock-*-exec.jar
+          key: native-${{ runner.os }}-${{ hashFiles('Scripts/build-native.sh') }}
+
+      # See `build`: compiling a linuxX64 target is what fetches the toolchain the prefix needs.
+      - name: Fetch konan's gcc toolchain
+        run: ./gradlew :domain:compileKotlinLinuxX64
+
+      - name: Build the native imaging prefix
+        run: Scripts/build-native.sh
+
+      - name: Write the fixture media
+        run: ./gradlew :tests:fixtures:fixtureMedia
+
+      - name: Upload the app suites' fixture media
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-media
+          path: tests/fixtures/build/fixture-media
+          retention-days: 1
           if-no-files-found: error
 
   # The phone (DESIGN §6). A second job rather than more steps on the first: nothing here needs
@@ -165,13 +208,13 @@ jobs:
 
   # The app's scenarios against the signed Debug app on a simulator (`:tests:ios`). Its own job,
   # so the compile and simulator unit tests above still run beside the Linux job rather than
-  # waiting for it; only this one waits, because it needs the Linux job's fixture media.
+  # waiting for it. This one waits only for `fixtures`, and then runs beside `build` too.
   #
   # Safe on every branch for the same reason the job above is: the app is signed ad-hoc
   # for the simulator, which needs no certificate, and nothing here reads a secret.
   ios-e2e:
     runs-on: macos-26
-    needs: build
+    needs: fixtures
     steps:
       - uses: actions/checkout@v5
 

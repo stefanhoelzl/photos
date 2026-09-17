@@ -65,7 +65,7 @@ tasks.named<Test>("jvmTest") {
     systemProperty("photos.ios.device", providers.environmentVariable("PHOTOS_SIM_DEVICE").getOrElse("iPhone 17 Pro"))
     systemProperty("photos.test.scratch", layout.buildDirectory.dir("scenarios").get().asFile.absolutePath)
     // Written on Linux by `:tests:fixtures:fixtureMedia` -- a Mac cannot run that generator -- and
-    // handed over: CI downloads the Linux job's artifact, and by hand it is rsynced. Required.
+    // handed over: CI downloads the `fixtures` job's artifact, and by hand it is rsynced. Required.
     systemProperty(
         "photos.fixture.media",
         providers.gradleProperty("photos.fixtureMedia")
