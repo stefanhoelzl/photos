@@ -44,6 +44,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,6 +66,7 @@ import net.stho.photos.app.AlbumCache
 import net.stho.photos.app.CacheAction
 import net.stho.photos.app.DateRange
 import net.stho.photos.app.ListEntry
+import net.stho.photos.app.Scroll
 import net.stho.photos.app.Thumbnails
 
 /**
@@ -102,6 +104,13 @@ public fun AlbumList(
      * a re-sort that row stayed put and everything now ahead of it sat scrolled away above.
      */
     order: Any?,
+    /**
+     * Where this level's list was left, which it stands at again when it comes back into view. The
+     * model forgets it when [order] changes, so a new order still starts at the top.
+     */
+    scroll: Scroll?,
+    /** Where a scroll came to rest: the first row on screen, by key and position, and how far past it. */
+    onScrolled: (key: String?, index: Int, offset: Int) -> Unit,
     onSearch: (String) -> Unit,
     /** The field's calendar icon, or a tap on the range it shows. */
     onCalendar: () -> Unit,
@@ -125,7 +134,7 @@ public fun AlbumList(
             onRefresh = { pulled = true; onRefresh() },
             modifier = Modifier.fillMaxSize(),
         ) {
-            ListBody(rows, query, range, thumbnails, arrivals, loading, cache, actions, order, onOpen, onAction)
+            ListBody(rows, query, range, thumbnails, arrivals, loading, cache, actions, order, scroll, onScrolled, onOpen, onAction)
         }
     }
 }
@@ -141,6 +150,8 @@ private fun ListBody(
     cache: (ListEntry.Row) -> AlbumCache,
     actions: (ListEntry.Row) -> List<CacheAction>,
     order: Any?,
+    scroll: Scroll?,
+    onScrolled: (key: String?, index: Int, offset: Int) -> Unit,
     onOpen: (Album) -> Unit,
     onAction: (ListEntry.Row, CacheAction) -> Unit,
 ) {
@@ -162,7 +173,10 @@ private fun ListBody(
             // No side padding on the list itself: the strip is a screen-edge mark and has to
             // reach the edge. The row's content carries the inset instead.
             val list = rememberLazyListState()
-            LaunchedEffect(order) { list.scrollToItem(0) }
+            val current by rememberUpdatedState(rows)
+            val keys = remember { derivedStateOf { current.map { it.key } } }
+            val report by rememberUpdatedState(onScrolled)
+            LaunchedEffect(order, scroll?.moves) { list.follow(scroll, keys) { key, index, offset -> report(key, index, offset) } }
             // The one row whose actions are showing, held here rather than per row: while any row
             // is open, a tap anywhere in the list closes it instead of opening an album. Per row,
             // tapping the open row itself opened the album the person was about to act on.

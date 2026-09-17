@@ -149,6 +149,10 @@ public data class AppUi(
      */
     public val filtering: Boolean get() = screen == Screen.Albums && (query.isNotEmpty() || range != null)
 
+    /** A list or a grid is on screen, rather than its map or any other screen. */
+    public val scrollable: Boolean
+        get() = (screen is Screen.Albums || screen is Screen.Container || screen is Screen.Grid) && !showingMap
+
     /** The current level is drawn as its map rather than as its list or grid (§6). */
     public val showingMap: Boolean get() = stack.map?.showing == true
 
@@ -410,15 +414,22 @@ public class AppModel(
         _state.update { it.copy(columns = if (closer) 2 else 4) }
     }
 
-    public fun cycleSort() {
-        _state.update { it.copy(sort = it.sort.next()) }
-        reload()
-    }
+    /**
+     * A new order, and so no remembered place in any list: the row a list was left on is somewhere
+     * else now. Cleared in the same update as the rows it no longer fits, so the screen never sees
+     * the one without the other.
+     */
+    public fun cycleSort(): Unit =
+        reorder { it.copy(sort = it.sort.next(), stack = it.stack.withoutListScrolls()) }
 
     /** Typing into the field. One filter at a time: text replaces a date range, as a range replaces text. */
-    public fun search(text: String) {
-        _state.update { it.copy(query = text, range = if (text.isEmpty()) it.range else null) }
-        reload()
+    public fun search(text: String): Unit = reorder {
+        it.copy(query = text, range = if (text.isEmpty()) it.range else null, stack = it.stack.withoutRootScroll())
+    }
+
+    private fun reorder(change: (AppUi) -> AppUi) {
+        _state.update { change(it).reloaded() }
+        refreshMap()
     }
 
     /**
@@ -440,16 +451,12 @@ public class AppModel(
      */
     public fun applyRange(range: DateRange): Boolean {
         if (photosPerDay().none { (day, photos) -> day in range && photos > 0 }) return false
-        _state.update { it.copy(range = range, query = "", calendar = null) }
-        reload()
+        reorder { it.copy(range = range, query = "", calendar = null, stack = it.stack.withoutRootScroll()) }
         return true
     }
 
     /** The ✕ on a field showing a range. */
-    public fun clearRange() {
-        _state.update { it.copy(range = null) }
-        reload()
-    }
+    public fun clearRange(): Unit = reorder { it.copy(range = null, stack = it.stack.withoutRootScroll()) }
 
     /** One `GROUP BY` over an index, kept until the catalog changes. */
     private fun photosPerDay(): Map<Day, Int> = days ?: catalog.photosPerDay().also { days = it }
@@ -501,6 +508,36 @@ public class AppModel(
     public fun back(): Unit = navigate { it.pop() }
 
     public fun openSettings(): Unit = navigate { it.push(Screen.Settings) }
+
+    // ------------------------------------------------------------------------ the scroll
+
+    /**
+     * Where a scroll left the list or grid on screen: remembered on its level, never scrolled to —
+     * the screen is already there. The grid reports once it has restored and shown the photo it
+     * was asked to reveal, so that request is spent.
+     */
+    public fun scrolled(key: String?, index: Int, offset: Int) {
+        _state.update { ui ->
+            if (!ui.scrollable) return@update ui
+            val was = ui.stack.scroll ?: Scroll()
+            val now = was.copy(key = key, index = index, offset = offset, reveal = null)
+            if (now == was) ui else ui.copy(stack = ui.stack.withScroll(now))
+        }
+    }
+
+    /** Scrolls the list or grid on screen to its [index]th item, and has the screen follow: the control server. */
+    public fun scrollTo(index: Int) {
+        _state.update { ui ->
+            if (!ui.scrollable) return@update ui
+            val key = ui.scrollKeys().getOrNull(index) ?: return@update ui
+            val moves = (ui.stack.scroll?.moves ?: 0) + 1
+            ui.copy(stack = ui.stack.withScroll(Scroll(key, index, 0, moves = moves)))
+        }
+    }
+
+    /** What the screen keys its items by — the same keys a [Scroll] names. */
+    private fun AppUi.scrollKeys(): List<String> =
+        if (screen is Screen.Grid) photos.map { it.id.toString() } else rows.map { it.key }
 
     // ------------------------------------------------------------------------------ the map
 

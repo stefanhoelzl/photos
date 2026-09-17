@@ -196,6 +196,15 @@ public class ControlServer(
 
                 post("/map") { model?.toggleMap(); call.json(state()) }
 
+                // The list or grid on screen, to its index-th item -- what a flick would leave it at.
+                post("/scroll") {
+                    val model = model ?: return@post call.fail(HttpStatusCode.Conflict, "not set up")
+                    val index = call.request.queryParameters["index"]?.toIntOrNull()
+                        ?: return@post call.fail(HttpStatusCode.BadRequest, "expected index")
+                    model.scrollTo(index)
+                    call.json(state())
+                }
+
                 post("/map/camera") {
                     val model = model ?: return@post call.fail(HttpStatusCode.Conflict, "not set up")
                     val parameters = call.request.queryParameters
@@ -414,6 +423,7 @@ public class ControlServer(
         }.orEmpty()
         return body(listOf(
             "\"map\":${mapState(ui)}",
+            "\"scroll\":${scrollState(ui)}",
             "\"screen\":\"$screen\"",
             "\"sort\":\"${ui.sort}\"",
             "\"query\":${ui.query.json()}",
@@ -456,6 +466,13 @@ public class ControlServer(
         val sheet = map?.sheet?.joinToString(",", "[", "]") { "\"${it.id}\"" } ?: "null"
         return """{"showing":${view.showing},"camera":$camera,"moves":${view.moves},""" +
             """"pins":${map?.pins?.size ?: 0},"total":${map?.total ?: 0},"clusters":[$clusters],"sheet":$sheet}"""
+    }
+
+    /** Where the level's list or grid stands: null until it has scrolled or been scrolled. */
+    private fun scrollState(ui: AppUi): String {
+        val scroll = ui.stack.scroll ?: return "null"
+        return """{"key":${scroll.key?.json() ?: "null"},"index":${scroll.index},"offset":${scroll.offset},""" +
+            """"reveal":${scroll.reveal ?: "null"},"moves":${scroll.moves}}"""
     }
 
     private fun String.json(): String =

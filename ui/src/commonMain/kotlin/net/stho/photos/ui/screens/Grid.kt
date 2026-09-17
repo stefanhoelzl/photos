@@ -11,15 +11,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import kotlin.uuid.Uuid
+import net.stho.photos.app.Scroll
 import net.stho.photos.model.PhotoRow
 
 /**
@@ -32,12 +39,17 @@ import net.stho.photos.model.PhotoRow
  *
  * While the pack is still downloading the tiles are placeholders, one per photo. The count is
  * what distinguishes this from §10's zero-photo album, which shows no tiles at all.
+ *
+ * Opened again — back from the viewer, or from the album's map — it stands where [scroll] says it
+ * was left, with the photo the viewer was last on in view.
  */
 @Composable
 public fun PhotoGrid(
     photos: List<PhotoRow>,
     thumbnails: Map<Uuid, ByteArray>,
     columns: Int,
+    scroll: Scroll?,
+    onScrolled: (key: String?, index: Int, offset: Int) -> Unit,
     onDensity: (closer: Boolean) -> Unit,
     onOpen: (index: Int) -> Unit,
 ) {
@@ -45,8 +57,15 @@ public fun PhotoGrid(
         EmptyState("No photos in this album")
         return
     }
+    val grid = rememberLazyGridState()
+    val current by rememberUpdatedState(photos)
+    val keys = remember { derivedStateOf { current.map { it.id.toString() } } }
+    val report by rememberUpdatedState(onScrolled)
+    // Once on arrival, and again whenever the model moves the grid; scrolls of its own are reported.
+    LaunchedEffect(scroll?.moves) { grid.follow(scroll, keys) { key, index, offset -> report(key, index, offset) } }
     LazyVerticalGrid(
         columns = GridCells.Fixed(columns),
+        state = grid,
         modifier = Modifier.fillMaxSize().padding(horizontal = 2.dp).densityGesture(onDensity),
     ) {
         itemsIndexed(photos, key = { _, photo -> photo.id.toString() }) { index, photo ->

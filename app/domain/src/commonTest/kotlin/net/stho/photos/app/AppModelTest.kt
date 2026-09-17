@@ -689,6 +689,107 @@ class AppModelTest {
     }
 
     @Test
+    fun theScrollSurvivesGoingDeeperAndTogglingButNotLeavingItsLevel() = runTest {
+        val trips = container("Trips")
+        val iceland = album("Iceland", 2024).copy(parent = trips.id)
+        val model = model(this, albums = listOf(trips, iceland, album("Garden", 2019)))
+        model.start()
+        val left = Scroll(trips.id.toString(), 0, 40)
+
+        model.scrolled(left.key, left.index, left.offset)
+        model.open(trips)
+        assertNull(model.state.value.stack.scroll, "a new level starts at the top")
+        model.scrolled(iceland.id.toString(), 1, 12)
+        model.back()
+        assertEquals(left, model.state.value.stack.scroll, "Back finds the list where it was left")
+
+        model.toggleMap()
+        model.scrolled("elsewhere", 1, 0)
+        model.toggleMap()
+        assertEquals(left, model.state.value.stack.scroll, "the map neither scrolls the list nor forgets it")
+
+        model.open(trips)
+        model.back()
+        model.open(trips)
+        assertNull(model.state.value.stack.scroll, "a level left is a level forgotten")
+    }
+
+    @Test
+    fun aNewOrderForgetsWhereTheListsStoodButNotTheGrid() = runTest {
+        val trips = container("Trips")
+        val iceland = album("Iceland", 2024).copy(parent = trips.id)
+        val model = photosModel(this, listOf(trips, iceland), photoRows(8))
+        model.start()
+
+        model.scrolled(trips.id.toString(), 0, 40)
+        model.open(trips)
+        model.scrolled(iceland.id.toString(), 1, 0)
+        model.open(iceland)
+        model.scrolled(model.state.value.photos[4].id.toString(), 4, 0)
+        val grid = model.state.value.stack.scroll
+
+        model.cycleSort()
+        assertEquals(listOf(2), model.state.value.stack.scrolls.keys.toList(), "every list level forgotten, the sort being shared")
+        assertEquals(grid, model.state.value.stack.scroll, "and the grid kept: photos have one order")
+
+        model.back()
+        model.scrolled(iceland.id.toString(), 1, 0)
+        model.back()
+        model.scrolled(trips.id.toString(), 0, 40)
+        model.open(trips)
+        model.scrolled(iceland.id.toString(), 1, 0)
+        model.search("ice")
+        assertEquals(listOf(1), model.state.value.stack.scrolls.keys.toList(), "a search forgets the album list's alone")
+    }
+
+    @Test
+    fun backFromTheViewerAsksTheGridToShowTheLastPhotoOnce() = runTest {
+        val iceland = album("Iceland", 2024)
+        val model = photosModel(this, listOf(iceland), photoRows(40))
+        model.start()
+        model.open(iceland)
+        val photos = model.state.value.photos
+        model.scrolled(photos[8].id.toString(), 8, 30)
+
+        model.openPhoto(9)
+        model.showPhoto(30)
+        model.back()
+        assertEquals(Scroll(photos[8].id.toString(), 8, 30, reveal = 30), model.state.value.stack.scroll, "where it was left, and the photo swiped to")
+
+        model.scrolled(photos[16].id.toString(), 16, 0)
+        assertNull(model.state.value.stack.scroll?.reveal, "shown once: the grid's report spends it")
+    }
+
+    /** A photo opened from the album's map was never scrolled to in a grid; the grid still shows it. */
+    @Test
+    fun aGridNeverScrolledStillRevealsThePhotoLeft() = runTest {
+        val iceland = album("Iceland", 2024)
+        val model = photosModel(this, listOf(iceland), photoRows(40))
+        model.start()
+        model.open(iceland)
+        model.navigate { it.push(Screen.Photo(iceland.id, iceland.name, 25)) }
+        model.back()
+        assertEquals(Scroll(reveal = 25), model.state.value.stack.scroll)
+    }
+
+    @Test
+    fun theControlServerScrollsToAnItemAndTheScreenIsToldToFollow() = runTest {
+        val iceland = album("Iceland", 2024)
+        val model = photosModel(this, listOf(iceland), photoRows(12))
+        model.start()
+        model.open(iceland)
+
+        model.scrollTo(6)
+        val moved = requireNotNull(model.state.value.stack.scroll)
+        assertEquals(Scroll(model.state.value.photos[6].id.toString(), 6, 0, moves = 1), moved)
+        model.scrolled(moved.key, 6, 0)
+        assertEquals(1, model.state.value.stack.scroll?.moves, "a report never makes the screen scroll again")
+
+        model.scrollTo(99)
+        assertEquals(moved, model.state.value.stack.scroll, "past the end moves nothing")
+    }
+
+    @Test
     fun tappingAClusterZoomsUntilItSplits() = runTest {
         // About 400 m apart: one circle over the country, two pins over the street.
         val model = model(this, albums = listOf(located("Marienplatz", 48.137, 11.575), located("Isartor", 48.139, 11.580)))
@@ -781,6 +882,17 @@ class AppModelTest {
         model.moveCamera(chosen)
         model.mapViewport(390.0, 640.0)
         assertEquals(chosen, model.state.value.stack.map?.camera, "once someone has moved it, a resize leaves it alone")
+    }
+
+    private fun photoRows(count: Int): List<PhotoRow> =
+        (0 until count).map { PhotoRow(id = Uuid.random(), filename = "IMG_${it.toString().padStart(4, '0')}.jpg") }
+
+    private fun photosModel(scope: TestScope, albums: List<Album>, photos: List<PhotoRow>): AppModel {
+        val own = own(scope)
+        return AppModel(
+            FakeCatalog(albums, photos = photos), FakeSyncer(SyncOutcome.Succeeded(albums.size, photos.size)),
+            FakeThumbnails(), FakePreviews(), FakeVideos(), idleQueue(own), own,
+        )
     }
 
     private fun located(name: String, latitude: Double, longitude: Double): Album =

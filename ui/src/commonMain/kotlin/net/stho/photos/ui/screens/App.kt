@@ -87,6 +87,8 @@ public fun App(
                             cache = { ui.cacheOf(it) },
                             actions = { ui.actionsOf(it) },
                             order = Triple(ui.sort, ui.query, ui.range),
+                            scroll = ui.stack.scroll,
+                            onScrolled = model::scrolled,
                             onSearch = model::search,
                             onCalendar = model::openCalendar,
                             onClearRange = model::clearRange,
@@ -110,20 +112,28 @@ public fun App(
                         // Its whole subtree, from the left edge: the title already names the
                         // container, so no header repeats it. No field, and so no filter: a query or
                         // a range kept for the album list does not narrow this one unseen.
-                        AlbumList(
-                            ui.rows, "", null, false, thumbnails, arrivals,
-                            loading = null,
-                            cache = { ui.cacheOf(it) },
-                            actions = { ui.actionsOf(it) },
-                            order = ui.sort,
-                            onSearch = model::search,
-                            onCalendar = {},
-                            onClearRange = {},
-                            onOpen = model::open,
-                            onAction = { row, action -> model.act(row, action) },
-                            syncing = ui.sync is SyncStatus.Running,
-                            onRefresh = model::refresh,
-                        )
+                        //
+                        // Keyed by the level: a container opened from a container is drawn at this
+                        // same spot, and would otherwise inherit its parent's scroll — and report it
+                        // back as its own. See [ScrollLevel].
+                        ScrollLevel(ui) {
+                            AlbumList(
+                                ui.rows, "", null, false, thumbnails, arrivals,
+                                loading = null,
+                                cache = { ui.cacheOf(it) },
+                                actions = { ui.actionsOf(it) },
+                                order = ui.sort,
+                                scroll = ui.stack.scroll,
+                                onScrolled = model::scrolled,
+                                onSearch = model::search,
+                                onCalendar = {},
+                                onClearRange = {},
+                                onOpen = model::open,
+                                onAction = { row, action -> model.act(row, action) },
+                                syncing = ui.sync is SyncStatus.Running,
+                                onRefresh = model::refresh,
+                            )
+                        }
                     }
                 }
 
@@ -140,7 +150,12 @@ public fun App(
                     if (ui.showingMap) {
                         LevelMap(ui, model, thumbnails, arrivals)
                     } else {
-                        PhotoGrid(ui.photos, ui.thumbnails, ui.columns, model::density, model::openPhoto)
+                        ScrollLevel(ui) {
+                            PhotoGrid(
+                                ui.photos, ui.thumbnails, ui.columns, ui.stack.scroll, model::scrolled,
+                                model::density, model::openPhoto,
+                            )
+                        }
                     }
                 }
 
@@ -214,6 +229,15 @@ private fun ListToggle(ui: AppUi, model: AppModel) {
         BarButton(Icons.sort, "Sort", model::cycleSort)
         BarButton(Icons.map, "Map", model::toggleMap)
     }
+}
+
+/**
+ * A list or grid, as the level it stands for. Its scroll state lives as long as the level does on
+ * screen, and a different level drawn at the same spot starts from where that level was left.
+ */
+@Composable
+private fun ScrollLevel(ui: AppUi, content: @Composable () -> Unit) {
+    key(ui.stack.screens.size) { content() }
 }
 
 /** The current level as its map. Keyed by the level, so a camera never carries from one to the next. */
