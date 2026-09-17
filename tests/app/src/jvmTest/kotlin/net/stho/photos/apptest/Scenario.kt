@@ -148,12 +148,15 @@ internal class Scenario(
      *
      * Never compared: the repo's rule for rendered frames, since a pixel diff fails on a font
      * hinting differently rather than on a bug.
+     *
+     * [frames] above one lets the screen's effects run and report back first — a grid restoring
+     * where it was left — and writes the last frame.
      */
-    fun screenshot(name: String) {
+    fun screenshot(name: String, frames: Int = 1) {
         val running = requireNotNull(app) { "launch() first" }
         // Through the root's own offscreen path, so a frame here is drawn exactly as `/screenshot`
         // draws one — on the one thread that keeps the scene's effects from measuring it mid-render.
-        val png = renderFrame(width = 430, height = 890) {
+        val png = renderFrame(width = 430, height = 890, count = frames) {
             PhotosTheme {
                 App(running.model, running.thumbnails, endpoint.asStorageUrl(), onLogOut = {}, uploads = running.uploads)
             }

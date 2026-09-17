@@ -6,6 +6,7 @@ import androidx.compose.ui.unit.Density
 import java.util.concurrent.Executors
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 
 /**
  * The desktop's half of the control server: the one endpoint that differs by root.
@@ -15,7 +16,7 @@ import kotlinx.coroutines.runBlocking
  * it needs no display at all, which is what lets an agent on a headless machine look at the UI.
  */
 internal fun offscreen(content: @Composable () -> Unit): (width: Int, height: Int) -> ByteArray =
-    { width, height -> renderFrame(width, height, content) }
+    { width, height -> renderFrame(width, height, content = content) }
 
 /**
  * One PNG of [content], rendered offscreen.
@@ -28,9 +29,12 @@ internal fun offscreen(content: @Composable () -> Unit): (width: Int, height: In
  * Here the scene is built, rendered and closed on [frames], and an effect waiting to resume queues
  * behind that work on the same thread, so it can never run in the middle of a frame.
  *
- * Public for `:tests:app`, whose screenshots are drawn exactly as `/screenshot` draws them.
+ * Public for `:tests:app`, whose screenshots are drawn exactly as `/screenshot` draws them. A
+ * scenario can ask for a [count] of frames above one: what an effect does — the grid restoring its
+ * scroll and reporting where it came to rest — lands a frame or two after the first. The last
+ * frame is the one returned.
  */
-public fun renderFrame(width: Int, height: Int, content: @Composable () -> Unit): ByteArray =
+public fun renderFrame(width: Int, height: Int, count: Int = 1, content: @Composable () -> Unit): ByteArray =
     runBlocking(frames) {
         val scene = ImageComposeScene(
             width = width,
@@ -40,11 +44,21 @@ public fun renderFrame(width: Int, height: Int, content: @Composable () -> Unit)
             content = content,
         )
         try {
-            requireNotNull(scene.render().encodeToData()) { "skia declined to encode the frame" }.bytes
+            // Between frames the effects queued on this thread run, then the next frame draws what they did.
+            repeat(count - 1) { frame ->
+                scene.render(frame * FRAME_NANOS)
+                repeat(EFFECT_TURNS) { yield() }
+            }
+            requireNotNull(scene.render((count - 1) * FRAME_NANOS).encodeToData()) { "skia declined to encode the frame" }.bytes
         } finally {
             scene.close()
         }
     }
+
+private const val FRAME_NANOS = 16_000_000L
+
+/** Turns of the frame thread between frames: an effect that suspends more than once resumes on each. */
+private const val EFFECT_TURNS = 8
 
 /** The thread every offscreen frame is drawn on. A daemon, so it never holds the JVM open. */
 private val frames = Executors.newSingleThreadExecutor { task ->

@@ -1134,6 +1134,17 @@ level's entry in the back stack, in memory only — it survives opening an album
 the list, and is framed afresh once the level is left or the app relaunched. Zoom runs from the
 whole world to street level; rotation and tilt are off.
 
+**The scroll** is remembered the same way, for the album list, a container and an album's grid:
+on the level's back-stack entry, in memory only, kept across opening something deeper and
+toggling to the map, dropped once the level is left. It names the first row on screen by key, not
+by position, so a sync that rebuilds the list while an album is open still comes back to the same
+row — or, that row gone, to about where it was. A new order has no place to return to: a sort
+forgets every list's scroll, since the sort is shared, and a search or a range forgets the album
+list's; the grid keeps its own, photos having one order. Back from the viewer, the grid stands
+where it was left and then scrolls the least that shows the photo the viewer was on, whole — its
+row to the top edge from above, to the bottom edge from below — since a swipe can carry the viewer
+far past the tiles that were on screen.
+
 **Tiles come from the public VersaTiles server**, cached by MapLibre Native's own ambient cache
 at its default size, with no Settings entry. Offline, an area looked at before still draws and
 the rest is a plain ground; the pins, clusters and thumbnails always work, being local. Two

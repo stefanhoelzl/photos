@@ -51,6 +51,13 @@ public data class BackStack(
      * drops the entry, frames the map afresh next time.
      */
     val maps: Map<Int, MapView> = emptyMap(),
+    /**
+     * Where each list or grid was scrolled to, keyed by its position in [screens].
+     *
+     * The same bargain as [maps]: the composable that scrolled is gone the moment a deeper screen
+     * replaces it, so where it stood rides on the level instead — and leaving the level drops it.
+     */
+    val scrolls: Map<Int, Scroll> = emptyMap(),
 ) {
     public val current: Screen get() = screens.last()
     public val canGoBack: Boolean get() = screens.size > 1
@@ -60,8 +67,20 @@ public data class BackStack(
 
     public fun push(screen: Screen): BackStack = copy(screens = screens + screen)
 
-    public fun pop(): BackStack =
-        if (canGoBack) BackStack(screens.dropLast(1), maps - screens.lastIndex) else this
+    /** The current level's scroll, or null when it has never reported one. */
+    public val scroll: Scroll? get() = scrolls[screens.lastIndex]
+
+    /**
+     * Back from the viewer, the grid is asked to show the photo last looked at: a swipe may have
+     * carried it well past the tiles that were on screen when the photo was opened.
+     */
+    public fun pop(): BackStack {
+        if (!canGoBack) return this
+        val left = current
+        val popped = BackStack(screens.dropLast(1), maps - screens.lastIndex, scrolls - screens.lastIndex)
+        if (left !is Screen.Photo || popped.current !is Screen.Grid) return popped
+        return popped.withScroll((popped.scroll ?: Scroll()).copy(reveal = left.index))
+    }
 
     /** Swiping does not deepen the stack: the photo you are on replaces the one you were on. */
     public fun replace(screen: Screen): BackStack = copy(screens = screens.dropLast(1) + screen)
@@ -70,4 +89,39 @@ public data class BackStack(
     public fun root(): BackStack = BackStack()
 
     public fun withMap(view: MapView): BackStack = copy(maps = maps + (screens.lastIndex to view))
+
+    public fun withScroll(scroll: Scroll): BackStack = copy(scrolls = scrolls + (screens.lastIndex to scroll))
+
+    /**
+     * Forgets where the album lists stood — every level of them, since the sort is shared — for a
+     * new order, in which a remembered row is somewhere else entirely. The grid keeps its own:
+     * an album's photos have one order (§3), whatever the sort says.
+     */
+    public fun withoutListScrolls(): BackStack =
+        copy(scrolls = scrolls.filterKeys { level -> screens[level] is Screen.Grid })
+
+    /** Forgets the album list's own, for a search or a date range, which narrow no other list. */
+    public fun withoutRootScroll(): BackStack = copy(scrolls = scrolls - 0)
 }
+
+/**
+ * Where a list or grid stood: the first item on screen, by its key, and how far it was scrolled past.
+ *
+ * By key rather than by position, because the rows can change while the level is out of sight — a
+ * sync rebuilds the album list — and a position would then point at whichever row moved into it.
+ * [index] is where the key was, for when it is gone: the list comes back about where it was.
+ */
+public data class Scroll(
+    /** The first visible item's key; null for the top. */
+    val key: String? = null,
+    val index: Int = 0,
+    /** Pixels the first visible item is scrolled past the top edge. */
+    val offset: Int = 0,
+    /** A photo index the grid must show whole, once, after it restores [key]: see [BackStack.pop]. */
+    val reveal: Int? = null,
+    /**
+     * Bumped each time the model moves the list — the control server — which the screen then
+     * scrolls to. A scroll the screen reports leaves it alone, since the list is already there.
+     */
+    val moves: Int = 0,
+)
