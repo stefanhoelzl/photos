@@ -84,10 +84,9 @@ public class PhotosApp(
         // The nav bar counts packs down as they land. The queue knows what is held; only this
         // root knows which of those ids are packs, so the counting happens here.
         scope.launch {
-            var albums = catalog.everyAlbum()
+            thumbnails.seed(catalog.everyAlbum())
             queue.held.collect { held ->
-                if (albums.isEmpty()) albums = catalog.everyAlbum()
-                thumbnails.noteArrivals(held, albums)
+                thumbnails.noteArrivals(held)
                 delay(150)
             }
         }

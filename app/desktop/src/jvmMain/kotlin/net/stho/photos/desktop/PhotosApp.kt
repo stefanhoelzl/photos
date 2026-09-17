@@ -101,15 +101,14 @@ public class PhotosApp(
         // The nav bar counts packs down as they land. The queue knows what is held; only this
         // root knows which of those ids are packs, so the counting happens here.
         scope.launch {
-            // `everyAlbum()` opens the merged DB, so it is read once rather than per arrival:
-            // doing it per blob put a database open on the download workers' own dispatcher
-            // several hundred times during a first run.
-            var albums = catalog.everyAlbum()
+            // `everyAlbum()` opens the merged DB, so it is read at launch and then by each sweep
+            // rather than per arrival: doing it per blob put a database open on the download
+            // workers' own dispatcher several hundred times during a first run.
+            thumbnails.seed(catalog.everyAlbum())
             // A StateFlow already conflates; the delay below is what coalesces a burst, since
             // emissions arriving while the collector is suspended replace one another.
             queue.held.collect { held ->
-                if (albums.isEmpty()) albums = catalog.everyAlbum()
-                thumbnails.noteArrivals(held, albums)
+                thumbnails.noteArrivals(held)
                 kotlinx.coroutines.delay(150)
             }
         }
