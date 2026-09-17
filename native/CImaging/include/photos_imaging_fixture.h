@@ -21,10 +21,13 @@ extern "C" {
  * rotation, when 90/180/270, is written as a display matrix, so the fixture can exercise the
  * rotation baking that 118 of the library's files need. */
 /* content_identifier, when non-NULL, is written as
- * com.apple.quicktime.content.identifier -- the signal decision 14 pairs Live Photos on. */
+ * com.apple.quicktime.content.identifier -- the signal decision 14 pairs Live Photos on.
+ *
+ * with_audio adds an AAC tone as long as the clip, as a phone's own videos carry. Without one no
+ * fixture had a soundtrack, which is how a transcoder that dropped every soundtrack passed. */
 int pi_fixture_write_video(const char *path, int width, int height,
                            int frames, int rotation,
-                           const char *content_identifier, pi_error *err);
+                           const char *content_identifier, int with_audio, pi_error *err);
 
 /* Writes a HEIC carrying an EXIF block, given an APP1 payload ("Exif\0\0" + TIFF).
  *

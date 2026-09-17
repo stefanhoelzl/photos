@@ -946,6 +946,11 @@ to remember to run — which is what makes a quality decision reversible rather 
     already at 1080p.
   - **A ceiling, not a target.** 137 files are 640×480 or smaller; scaling those up would be
     20× the pixels for no added detail. Only the 14 files above 1080p are scaled at all.
+  - **A soundtrack is kept, or the file fails.** One the build cannot decode is still dropped
+    and the video kept, but once decoding works, anything that loses the sound fails the file.
+    That rule exists because of profile 1: the audio graph needed `aformat`, the ffmpeg build
+    left it out, and every transcode came out silent without a word. No fixture had a
+    soundtrack, so the suite could not notice; the synthetic video can now carry one.
   - **Rotation is baked into the pixels** and the display matrix cleared — 118 files carry a
     90° matrix and 15 carry 180°, and a transcode that ignores it plays sideways.
   - Deinterlacing runs only when the decoder reports interlaced frames. The 33 `.mpg` files are
@@ -1762,11 +1767,11 @@ what the zone contains; the other two decide nothing at all.
   re-encoded photograph is the same photograph would be false — `cover_photo_id` would resolve
   to nothing and every custom cover in the library would clear on the first profile bump.
 
-  > At `ENCODING_VERSION = 1` this path is dormant for laptop-owned albums: the schema's second
-  > CHECK forbids an `encoded` album at version 0, so no legal shard can sit below the current
-  > profile yet. What exercises the same code today is the pull, which re-derives a phone album
-  > at version 0 on its way to `encoded`. The first bump to 2 is what wakes it for everything
-  > else.
+  > At `ENCODING_VERSION = 1` this path was dormant for laptop-owned albums: the schema's second
+  > CHECK forbids an `encoded` album at version 0, so no legal shard could sit below the
+  > profile. What exercised the same code was the pull, which re-derives a phone album at
+  > version 0 on its way to `encoded`. **Version 2 is the first bump**, and it woke the path
+  > for every album: every video transcode written at 1 had lost its soundtrack (§5).
 - **One sync at a time**, enforced by an `flock` on a file in the cache directory. The first
   import is several hours and the timer fires hourly, so without it the two overlap repeatedly:
   both derive and upload the same files, and the loser's blobs sit in the zone with nothing

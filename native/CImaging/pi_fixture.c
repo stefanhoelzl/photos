@@ -9,6 +9,8 @@
 #include <libavutil/opt.h>
 #include <libavutil/display.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/channel_layout.h>
+#include <math.h>
 
 #include <libheif/heif.h>
 
@@ -17,9 +19,11 @@
 
 int pi_fixture_write_video(const char *path, int width, int height,
                            int frames, int rotation,
-                           const char *content_identifier, pi_error *err) {
+                           const char *content_identifier, int with_audio, pi_error *err) {
     AVFormatContext *ofmt = NULL;
     AVCodecContext *enc = NULL;
+    AVCodecContext *aenc = NULL;
+    AVStream *ast = NULL;
     AVFrame *frame = NULL;
     AVPacket *pkt = NULL;
     int rc = PI_ERR_ENCODE;
@@ -71,6 +75,27 @@ int pi_fixture_write_video(const char *path, int width, int height,
         uint8_t *matrix = av_stream_new_side_data(st, AV_PKT_DATA_DISPLAYMATRIX,
                                                   sizeof(int32_t) * 9);
         if (matrix) av_display_rotation_set((int32_t *)matrix, (double)rotation);
+    }
+
+    if (with_audio) {
+        const AVCodec *acodec = avcodec_find_encoder(AV_CODEC_ID_AAC);
+        if (!acodec) { rc = pi_fail(err, PI_ERR_UNSUPPORTED, "fixture: aac missing"); goto done; }
+        aenc = avcodec_alloc_context3(acodec);
+        aenc->sample_rate = 44100;
+        aenc->sample_fmt = AV_SAMPLE_FMT_FLTP;
+        av_channel_layout_default(&aenc->ch_layout, 1);
+        aenc->bit_rate = 64000;
+        aenc->time_base = (AVRational){ 1, aenc->sample_rate };
+        if (ofmt->oformat->flags & AVFMT_GLOBALHEADER)
+            aenc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+        if (avcodec_open2(aenc, acodec, NULL) < 0) {
+            rc = pi_fail(err, PI_ERR_ENCODE, "fixture: cannot open aac");
+            goto done;
+        }
+        ast = avformat_new_stream(ofmt, NULL);
+        if (!ast) { rc = pi_fail(err, PI_ERR_ENCODE, "fixture: cannot add audio stream"); goto done; }
+        avcodec_parameters_from_context(ast->codecpar, aenc);
+        ast->time_base = aenc->time_base;
     }
 
     if (!(ofmt->oformat->flags & AVFMT_NOFILE)) {
@@ -141,6 +166,44 @@ int pi_fixture_write_video(const char *path, int width, int height,
         av_packet_unref(pkt);
     }
 
+    if (aenc) {
+        /* A 440 Hz tone for as long as the pictures last, in the encoder's fixed frame size. */
+        AVFrame *af = av_frame_alloc();
+        if (!af) { rc = pi_fail(err, PI_ERR_MEMORY, "fixture: audio frame"); goto done; }
+        af->format = aenc->sample_fmt;
+        af->nb_samples = aenc->frame_size;
+        af->sample_rate = aenc->sample_rate;
+        av_channel_layout_copy(&af->ch_layout, &aenc->ch_layout);
+        if (av_frame_get_buffer(af, 0) < 0) {
+            av_frame_free(&af);
+            rc = pi_fail(err, PI_ERR_MEMORY, "fixture: audio buffer");
+            goto done;
+        }
+        long total = (long)frames * aenc->sample_rate / 25;
+        for (long at = 0; at < total; at += aenc->frame_size) {
+            if (av_frame_make_writable(af) < 0) break;
+            float *samples = (float *)af->data[0];
+            for (int i = 0; i < aenc->frame_size; i++)
+                samples[i] = 0.25f * (float)sin(2.0 * 3.141592653589793 * 440.0 * (double)(at + i) / aenc->sample_rate);
+            af->pts = at;
+            if (avcodec_send_frame(aenc, af) < 0) break;
+            while (avcodec_receive_packet(aenc, pkt) >= 0) {
+                av_packet_rescale_ts(pkt, aenc->time_base, ast->time_base);
+                pkt->stream_index = ast->index;
+                av_interleaved_write_frame(ofmt, pkt);
+                av_packet_unref(pkt);
+            }
+        }
+        av_frame_free(&af);
+        avcodec_send_frame(aenc, NULL);
+        while (avcodec_receive_packet(aenc, pkt) >= 0) {
+            av_packet_rescale_ts(pkt, aenc->time_base, ast->time_base);
+            pkt->stream_index = ast->index;
+            av_interleaved_write_frame(ofmt, pkt);
+            av_packet_unref(pkt);
+        }
+    }
+
     if (av_write_trailer(ofmt) < 0) {
         rc = pi_fail(err, PI_ERR_ENCODE, "fixture: cannot finalise");
         goto done;
@@ -152,6 +215,7 @@ done:
     av_packet_free(&pkt);
     av_frame_free(&frame);
     avcodec_free_context(&enc);
+    avcodec_free_context(&aenc);
     if (ofmt && !(ofmt->oformat->flags & AVFMT_NOFILE) && ofmt->pb) avio_closep(&ofmt->pb);
     avformat_free_context(ofmt);
     return rc;

@@ -53,8 +53,14 @@ public object DerivativeSpec {
      * Bump this and every album re-encodes on the next run, one album per commit, draining
      * over as many runs as it takes. That is the whole migration mechanism: there is no
      * separate pass and no second verb.
+     *
+     * - **1** — the first profile.
+     * - **2** — video transcodes keep their soundtrack. Every one written at 1 came out silent:
+     *   the audio filter graph needed `aformat`, the ffmpeg build did not include it, and the
+     *   transcoder fell back to video only without a word. Images and thumbnails are unchanged,
+     *   and both encoders are byte-deterministic, so only the videos are new objects.
      */
-    public const val ENCODING_VERSION: Int = 1
+    public const val ENCODING_VERSION: Int = 2
 
     /**
      * 3200px on the **long** edge, aspect preserved.

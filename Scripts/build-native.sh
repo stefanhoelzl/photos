@@ -271,7 +271,8 @@ if ! have ffmpeg; then
         --enable-decoder=aac,aac_latm,mp3,pcm_s16le,pcm_s16be,pcm_u8,ac3,adpcm_ima_wav
         --enable-encoder=libx265,aac
         --enable-parser=h264,hevc,mpeg4video,mpegvideo,mjpeg,png
-        --enable-filter=scale,yadif,transpose,hflip,vflip,format,null,anull,aresample
+        # aformat: the audio graph ends in it. Left out once, and every transcode lost its sound.
+        --enable-filter=scale,yadif,transpose,hflip,vflip,format,null,anull,aresample,aformat
         --enable-swscale --enable-swresample --enable-avfilter
         --enable-bsf=hevc_mp4toannexb,h264_mp4toannexb,extract_extradata
         --pkg-config-flags=--static

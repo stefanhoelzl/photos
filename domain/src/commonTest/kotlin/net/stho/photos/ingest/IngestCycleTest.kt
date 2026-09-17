@@ -159,10 +159,9 @@ class IngestCycleTest {
      * a cover set on the phone would quietly resolve to nothing the moment the laptop pulled
      * the album.
      *
-     * The pull is where this is reachable today: with `ENCODING_VERSION` at 1 an *encoded*
-     * album cannot legally sit below the profile — the schema's second CHECK forbids version 0
-     * there — so a phone album at `uploaded` is the only thing the re-derive path currently
-     * fires for. The carry-over is the same code either way.
+     * The pull is one way in: a phone album at `uploaded` sits at version 0, below any profile.
+     * A profile bump is the other — every `encoded` album then sits below it — and the carry-over
+     * is the same code either way.
      */
     @Test
     fun aPulledAlbumKeepsItsRowIdentityAndItsCover() = runTest {

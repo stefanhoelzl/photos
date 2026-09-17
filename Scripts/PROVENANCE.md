@@ -74,7 +74,7 @@ Not here, and deliberately:
 mov/mp4/avi/mpegps/matroska; decoders for h264, hevc, mjpeg, mpeg1/2video, mpeg4, msmpeg4v2/v3,
 h263 — one per codec actually present in the 550 video files — plus png/tiff/bmp/gif for the
 still strays and aac/mp3/pcm for audio; `libx265` and `aac` encoders; the mp4 muxer, and the mov muxer for the Live Photo test fixture only (iOS pairs a Live Photo's MOV only as QuickTime); and the
-scale/yadif/transpose/format filters.
+scale/yadif/transpose/format filters, and aresample/aformat for the soundtrack.
 
 **`--enable-zlib` is not optional.** ffmpeg builds its PNG decoder only when zlib is present,
 and `--disable-autodetect` means it has to be asked for by name. Without it the PNG decoder is

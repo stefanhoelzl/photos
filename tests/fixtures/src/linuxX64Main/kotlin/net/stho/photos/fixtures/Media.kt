@@ -56,7 +56,7 @@ public fun writeSyntheticHeic(
 }
 
 /**
- * A short HEVC clip, optionally carrying a display matrix and a Live Photo identifier.
+ * A short HEVC clip, optionally carrying a display matrix, a Live Photo identifier and an AAC tone.
  *
  * A `.mov` is QuickTime and anything else MP4 (the shim picks the muxer). A `.mov` carrying an
  * identifier then has its metadata moved to where Apple writes it — see [toQuickTimeMetadata].
@@ -68,9 +68,10 @@ public fun writeSyntheticVideo(
     frames: Int = 10,
     rotation: Int = 0,
     contentIdentifier: String? = null,
+    audio: Boolean = false,
 ) {
     imagingCall { err ->
-        pi_fixture_write_video(path.toString(), width, height, frames, rotation, contentIdentifier, err)
+        pi_fixture_write_video(path.toString(), width, height, frames, rotation, contentIdentifier, if (audio) 1 else 0, err)
     }
     if (contentIdentifier != null && path.name.endsWith(".mov", ignoreCase = true)) {
         path.write(toQuickTimeMetadata(path.readBytes()))
