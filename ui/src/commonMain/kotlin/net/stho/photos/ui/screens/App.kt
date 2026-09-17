@@ -56,10 +56,9 @@ public fun App(
         onDispose { orientation.allowLandscape(false) }
     }
 
-    // On the two album lists the list on screen becomes the new album's parent; on an album of
-    // photos, which cannot hold a sub-album (§2), the photos are added to that album instead (§8).
+    // The dialog starts where the upload did: the list on screen, or the album of photos on screen (§8).
     val startUpload: (() -> Unit)? = uploads?.let { upload ->
-        { model.openUpload()?.let { upload.open(it.parent, it.parentName, it.addTo) } }
+        { model.openUpload()?.let { upload.open(it.parent, it.addTo) } }
     }
 
     // The ground runs under the status bar and home indicator; the content does not. On a

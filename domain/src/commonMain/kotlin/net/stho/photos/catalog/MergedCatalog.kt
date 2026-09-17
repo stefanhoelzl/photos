@@ -76,14 +76,19 @@ public class CatalogWriter(public val path: Path, drivers: SqlDrivers) : AutoClo
     public fun rebuild(shards: List<Shard>): RebuildSummary {
         val visible = shards.filter { it.info.state != AlbumState.UPLOADING }
         // An addition is folded into the album it adds to (§8): its photos are that album's, and
-        // its pack is one more the album's grid reads from. An addition whose target is not here —
-        // deleted before the laptop merged it — is shown as the album it records being added to,
-        // so photos the phone may already have deleted from its gallery stay in sight.
-        val albumIds = visible.filterNot { it.info.isAddition }.mapTo(mutableSetOf()) { it.info.id }
-        val folded = visible.filter { it.info.addsTo?.let(albumIds::contains) == true }
-            .sortedBy { it.info.addedAt }
+        // its pack is one more the album's grid reads from. Additions whose album is not here — a
+        // new album the laptop has not pulled yet, or one deleted before it merged them — are shown
+        // together as that album, under its id, with the name and parent the earliest recorded, so
+        // photos the phone may already have deleted from its gallery stay in sight.
+        val standing = visible.filterNot { it.info.isAddition }
+        val albumIds = standing.mapTo(mutableSetOf()) { it.info.id }
+        val additions = visible.filter { it.info.isAddition }
+            .sortedWith(compareBy({ it.info.addedAt }, { it.info.id.toString() }))
             .groupBy { requireNotNull(it.info.addsTo) }
-        val albums = visible.filterNot { it.info.addsTo?.let(albumIds::contains) == true }
+        val pending = additions.filterKeys { it !in albumIds }
+            .map { (albumId, group) -> Shard(group.first().info.copy(id = albumId, addsTo = null), group.first().photos) }
+        val folded = additions.mapValues { (albumId, group) -> if (albumId in albumIds) group else group.drop(1) }
+        val albums = standing + pending
         val present = albums.mapTo(mutableSetOf()) { it.info.id }
         val queries = database.mergedQueries
         var photoCount = 0

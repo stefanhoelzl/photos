@@ -3,7 +3,7 @@ package net.stho.photos.app
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-/** §3: two rows in one album may not claim one name, and the pull writes files under these names. */
+/** The names an upload's rows carry, which the laptop's pull makes unique against the album's folder (§7). */
 class UploadNamesTest {
 
     @Test
@@ -13,33 +13,15 @@ class UploadNamesTest {
     }
 
     @Test
-    fun aClashGainsASuffix() {
-        val names = UploadNames()
-        names.claim("IMG_0001", "heic")
-        // The clash is found ignoring case; the extension stays as the bytes' own.
-        assertEquals("IMG_0001 (2).HEIC" to null, names.claim("IMG_0001", "HEIC"))
-        assertEquals("IMG_0001 (3).heic" to null, names.claim("IMG_0001", "heic"))
+    fun aLivePhotosMovIsNamedBesideItsStill() {
+        assertEquals("IMG_0007.heic" to "IMG_0007.MOV", UploadNames().claim("IMG_0007", "heic", pairedExtension = "MOV"))
     }
 
+    /** Only the laptop can see the album's folder, so only the laptop makes a name unique (§7). */
     @Test
-    fun aLivePhotoClaimsItsMovTooSoAVideoCannotTakeIt() {
+    fun clashesAreLeftToTheLaptop() {
         val names = UploadNames()
-        assertEquals("IMG_0007.heic" to "IMG_0007.MOV", names.claim("IMG_0007", "heic", pairedExtension = "MOV"))
-        assertEquals("IMG_0007 (2).mov" to null, names.claim("IMG_0007", "mov"))
-    }
-
-    /** An addition's names are the camera's, clash or not: only the laptop can see the album's folder (§7). */
-    @Test
-    fun anAdditionLeavesClashesToTheLaptop() {
-        val names = UploadNames(unique = false)
         assertEquals("IMG_0001.heic" to "IMG_0001.MOV", names.claim("IMG_0001", "heic", pairedExtension = "MOV"))
         assertEquals("IMG_0001.heic" to null, names.claim("IMG_0001", "heic"))
-    }
-
-    @Test
-    fun aPairMovesTogetherWhenEitherHalfClashes() {
-        val names = UploadNames()
-        names.claim("IMG_0009", "MOV")
-        assertEquals("IMG_0009 (2).heic" to "IMG_0009 (2).MOV", names.claim("IMG_0009", "heic", pairedExtension = "MOV"))
     }
 }

@@ -95,7 +95,7 @@ public class PhotosApp(
         Uploads(it, ForegroundUploader(http, scope), sync, drivers, cacheRoot, scope, onLanded = { model.refresh() })
     }
 
-    override val uploads: UploadModel? = if (gallery != null && upload != null) UploadModel(gallery, upload, scope) else null
+    override val uploads: UploadModel? = if (gallery != null && upload != null) UploadModel(gallery, upload, catalog, scope) else null
 
     init {
         // The nav bar counts packs down as they land. The queue knows what is held; only this

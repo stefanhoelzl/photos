@@ -82,9 +82,9 @@ internal class GivenAlbum(private val name: String) : Given {
     var sourcePath: String? = null
 
     /**
-     * Defaults to what the path implies: an album with no `source_path` is one the phone made
-     * and finished uploading, so it is `uploaded` at encoding version 0 — the only shape the
-     * CLI pulls from. One that names a path is already the laptop's.
+     * Defaults to what the path implies: an album with no `source_path` is `uploaded` at encoding
+     * version 0, the shape an older app wrote a new album in — which this CLI no longer pulls; the
+     * phone's new albums are additions now (§8). One that names a path is already the laptop's.
      */
     var state: AlbumState? = null
 

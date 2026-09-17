@@ -40,28 +40,39 @@ import net.stho.photos.model.PhotoRow
 import net.stho.photos.ports.SqlDrivers
 import net.stho.photos.storage.presignedPut
 
-/** What the name dialog hands over: a new album, or photos for one that exists (§8). */
+/**
+ * What the album dialog hands over: photos for an album (§8). Every upload is an addition — to an
+ * album that exists, or to a new one whose id was minted in the dialog and no shard has yet.
+ */
 public data class UploadRequest(
-    /** The new album's name; when adding, the name of the album added to. */
+    /** The album's name, which a new album is made with. */
     val name: String,
-    /** The list the upload was started from — the root, or a container; when adding, that album's parent. */
+    /** The album's parent: the container it is in, or null at the root. */
     val parent: Uuid?,
+    /** The album's path from the library root, `Trips / Italy`, for the sheet and the pill. */
+    val path: String,
     val assetIds: List<String>,
     /** The gallery album chosen whole, null for loose photos: deleting takes it too once it is empty. */
     val galleryAlbum: String?,
     val deleteFromGallery: Boolean,
-    /** The album the photos are added to, or null for a new album. */
-    val addTo: Uuid? = null,
+    /** The album the photos go into. */
+    val addTo: Uuid,
 )
 
 public enum class UploadStage { Waiting, Preparing, Uploading, Finishing, Done, Failed }
 
-/** One album's upload, as the sheet and the pill draw it. */
+/** One upload, as the sheet and the pill draw it. */
 public data class UploadStatus(
-    /** The upload's own id: the new album's, or the addition's. */
+    /** The upload's own id, which is its addition's. */
     val albumId: Uuid,
-    /** The album's name — the new one, or the one being added to. */
+    /** The album the photos go into. */
+    val target: Uuid,
+    /** That album's name. */
     val name: String,
+    /** That album's parent. */
+    val parent: Uuid?,
+    /** That album's path from the library root: what the sheet and the pill say it goes to. */
+    val path: String,
     val stage: UploadStage,
     val files: Int = 0,
     val filesDone: Int = 0,
@@ -69,8 +80,6 @@ public data class UploadStatus(
     val bytesDone: Long = 0,
     /** §1's wording: the status and its cause, never an opaque error. */
     val failure: String? = null,
-    /** Whether these photos go into an album that exists rather than a new one. */
-    val adding: Boolean = false,
 ) {
     val fraction: Float
         get() = when {
@@ -82,9 +91,8 @@ public data class UploadStatus(
 }
 
 /**
- * §8's upload, from the chosen assets to an `uploaded` album — or to an `uploaded` addition, when the
- * photos go into an album that exists: the same steps, for a shard at `addition/<id>.db` that names
- * the album it adds to.
+ * §8's upload, from the chosen assets to an `uploaded` addition: a shard at `addition/<id>.db` that
+ * names the album it adds to — one that exists, or a new one no shard is yet.
  *
  * ```
  * prepare    export every asset, name its file, pack the thumbnails     foreground, one album at a time
@@ -146,6 +154,7 @@ public class Uploads(
         val manifest = Manifest(
             name = request.name,
             parent = request.parent,
+            path = request.path,
             addedAt = Instant.fromEpochSeconds(clock.now().epochSeconds),
             deleteFromGallery = request.deleteFromGallery,
             galleryAlbum = request.galleryAlbum,
@@ -253,9 +262,9 @@ public class Uploads(
         SystemFileSystem.createDirectories(files)
         SystemFileSystem.createDirectories(export)
 
-        // Only the laptop names the files of an addition (§7): it is the one place that can see
-        // what the album's folder already holds, so the phone sends the camera's names as they are.
-        val names = UploadNames(unique = manifest.addTo == null)
+        // Only the laptop names files (§7): it is the one place that can see what the album's folder
+        // already holds, so the phone sends the camera's names as they are.
+        val names = UploadNames()
         val rows = mutableListOf<PhotoRow>()
         val thumbnails = mutableMapOf<Uuid, ByteArray>()
         update(id) { it.copy(stage = UploadStage.Preparing, files = manifest.assetIds.size, filesDone = 0) }
@@ -449,64 +458,47 @@ public class Uploads(
 }
 
 /**
- * One album's names for its files, so no two rows claim one (§3): `IMG_1234 (2).heic` on a clash.
- *
- * Compared ignoring case, because the pull writes these into a library that may sit on a
- * case-insensitive filesystem. A Live Photo claims its MOV's name in the same step, so a plain
- * video called `IMG_1234.MOV` cannot collide with the MOV half of `IMG_1234.heic`.
+ * The names an upload's rows carry: the camera's stem with the extension of the bytes sent, a Live
+ * Photo's MOV named beside its still. Clashes and all — only the laptop can see what the album's
+ * folder holds, so only the laptop makes a name unique (§7).
  */
-internal class UploadNames(
-    /** False for an addition, whose names only the laptop makes unique (§7): every name is the camera's. */
-    private val unique: Boolean = true,
-) {
-    private val taken = mutableSetOf<String>()
+internal class UploadNames {
 
-    fun claim(stem: String, extension: String, pairedExtension: String? = null): Pair<String, String?> {
-        if (!unique) return stem.withExtension(extension) to pairedExtension?.let { stem.withExtension(it) }
-        var attempt = 1
-        while (true) {
-            val base = if (attempt == 1) stem else "$stem ($attempt)"
-            val name = base.withExtension(extension)
-            val paired = pairedExtension?.let { base.withExtension(it) }
-            if (name.lowercase() !in taken && (paired == null || paired.lowercase() !in taken)) {
-                taken += name.lowercase()
-                if (paired != null) taken += paired.lowercase()
-                return name to paired
-            }
-            attempt++
-        }
-    }
+    fun claim(stem: String, extension: String, pairedExtension: String? = null): Pair<String, String?> =
+        stem.withExtension(extension) to pairedExtension?.let { stem.withExtension(it) }
 
     private fun String.withExtension(extension: String) = if (extension.isEmpty()) this else "$this.$extension"
 }
 
-/** What `uploads/<album-id>/manifest` holds: the request, and how far it got. */
+/** What `uploads/<upload-id>/manifest` holds: the request, and how far it got. */
 private data class Manifest(
     val name: String,
     val parent: Uuid?,
+    val path: String,
     val addedAt: Instant,
     val deleteFromGallery: Boolean,
     /** Absent from a manifest written before albums were deleted too: that upload deletes its assets only. */
     val galleryAlbum: String?,
     val assetIds: List<String>,
     val stage: Stage,
-    /** The album these photos are added to; absent for a new album. */
-    val addTo: Uuid? = null,
+    /** The album these photos are added to. */
+    val addTo: Uuid,
 ) {
     enum class Stage { REQUESTED, PREPARED, WRITTEN, LANDED }
 
     fun status(id: Uuid): UploadStatus =
-        UploadStatus(id, name, UploadStage.Waiting, files = assetIds.size, adding = addTo != null)
+        UploadStatus(id, addTo, name, parent, path, UploadStage.Waiting, files = assetIds.size)
 
     fun write(directory: Path) {
         val text = buildString {
             appendLine("stage=${stage.name}")
             appendLine("name=${name.replace('\n', ' ')}")
             appendLine("parent=${parent ?: ""}")
+            appendLine("path=${path.replace('\n', ' ')}")
             appendLine("added=${addedAt.epochSeconds}")
             appendLine("delete=$deleteFromGallery")
             galleryAlbum?.let { appendLine("album=$it") }
-            addTo?.let { appendLine("adds=$it") }
+            appendLine("adds=$addTo")
             for (asset in assetIds) appendLine("asset=$asset")
         }
         val scratch = Path(directory, "manifest.part")
@@ -524,12 +516,15 @@ private data class Manifest(
                 Manifest(
                     name = requireNotNull(value("name")),
                     parent = value("parent")?.ifEmpty { null }?.let(Uuid::parse),
+                    path = value("path") ?: requireNotNull(value("name")),
                     addedAt = Instant.fromEpochSeconds(requireNotNull(value("added")).toLong()),
                     deleteFromGallery = value("delete") == "true",
                     galleryAlbum = value("album")?.ifEmpty { null },
                     assetIds = lines.filter { it.startsWith("asset=") }.map { it.substringAfter('=') },
                     stage = Stage.valueOf(requireNotNull(value("stage"))),
-                    addTo = value("adds")?.ifEmpty { null }?.let(Uuid::parse),
+                    // A manifest from before every upload was an addition has none, and is not resumed:
+                    // the laptop no longer pulls a phone album written under `meta/` (§8).
+                    addTo = Uuid.parse(requireNotNull(value("adds"))),
                 )
             }.getOrNull()
         }

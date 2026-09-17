@@ -135,6 +135,34 @@ class IngestCycleTest {
             return added
         }
 
+        /**
+         * What the phone leaves in the zone when it uploads [names] as a new album (§8): an
+         * `uploaded` addition naming [albumId], which no shard is yet, and the blobs it names.
+         */
+        fun newAlbum(
+            name: String,
+            vararg names: String,
+            albumId: Uuid = Uuid.random(),
+            sourcePath: String? = null,
+        ): Shard {
+            val added = Shard(
+                AlbumInfo(
+                    id = Uuid.random(),
+                    name = name,
+                    sourcePath = sourcePath,
+                    thumbsId = blobId(),
+                    state = AlbumState.UPLOADED,
+                    encodingVersion = 0,
+                    addedAt = fixtureAddedAt,
+                    addsTo = albumId,
+                ),
+                names.map { library.row(it) },
+            )
+            for (id in added.objectIds) zone.put(id.blobKey, ByteArray(64) { 0x41 }, "e")
+            writeShard(added)
+            return added
+        }
+
         fun additionKeys(): List<String> = zone.keys.filter { it.startsWith(ADDITION_PREFIX) }
 
         fun blobKeys(): List<String> = zone.keys.filter { it.startsWith("blob/") }
@@ -151,68 +179,71 @@ class IngestCycleTest {
     // ------------------------------------------------------------------------------- re-encoding
 
     /**
-     * §5's re-derive meeting §3's identity rule.
+     * §7's pull, end to end: a new album the phone uploaded is derived into `meta/` under the id the
+     * phone minted — the one every device already shows it by — as the same photographs.
      *
-     * Re-encoding is expressed as "drop every row, upload every file", because that reuses the
-     * paths that already delete blobs and derive files. Done naively that mints fresh row ids —
-     * and `photo.id` is what `cover_photo_id` points at and what the thumbnail pack keys by, so
-     * a cover set on the phone would quietly resolve to nothing the moment the laptop pulled
-     * the album.
-     *
-     * The pull is one way in: a phone album at `uploaded` sits at version 0, below any profile.
-     * A profile bump is the other — every `encoded` album then sits below it — and the carry-over
-     * is the same code either way.
+     * `photo.id` is what `cover_photo_id` points at and what the thumbnail pack keys by, so the rows
+     * derived from the downloaded files carry the phone's identities. The phone's full-quality blobs
+     * and its addition are gone once the album is committed.
      */
     @Test
-    fun aPulledAlbumKeepsItsRowIdentityAndItsCover() = runTest {
-        val cycle = Cycle("reencode")
+    fun aNewPhoneAlbumIsPulledUnderItsIdAsTheSamePhotographs() = runTest {
+        val cycle = Cycle("pull")
+        val albumId = Uuid.random()
+        val phone = cycle.newAlbum("FromPhone", "a.jpg", "b.jpg", albumId = albumId)
 
-        val photos = listOf(cycle.library.row("a.jpg"), cycle.library.row("b.jpg"))
-        val phone = Shard(
-            info = AlbumInfo(
-                id = Uuid.random(),
-                name = "FromPhone",
-                sourcePath = null,
-                thumbsId = null,
-                state = AlbumState.UPLOADED,
-                encodingVersion = 0,
-                coverPhotoId = photos[1].id,
-                addedAt = fixtureAddedAt,
-            ),
-            photos = photos,
-        )
-        for (row in photos) {
-            cycle.zone.put(assertNotNull(row.imageId).blobKey, ByteArray(64) { 0x41 }, "e")
-        }
-        cycle.writeShard(phone)
+        val report = cycle.run()
 
-        cycle.run()
-
+        assertTrue(report.failures.isEmpty(), report.failures.toString())
         val after = cycle.shard("FromPhone")
+        assertEquals(albumId, after.info.id)
+        assertNull(after.info.addsTo)
+        assertEquals("FromPhone", after.info.sourcePath)
         assertEquals(AlbumState.ENCODED, after.info.state)
         assertEquals(DerivativeSpec.ENCODING_VERSION, after.info.encodingVersion)
+        assertEquals(fixtureAddedAt, after.info.addedAt)
         assertEquals(
-            photos.map(PhotoRow::id).toSet(),
+            phone.photos.map(PhotoRow::id).toSet(),
             after.photos.map(PhotoRow::id).toSet(),
-            "a re-derived photo is the same photo",
+            "a pulled photo is the photo the phone uploaded",
         )
-        assertEquals(
-            photos[1].id,
-            after.info.coverPhotoId,
-            "the cover points at a row id, so it must survive the re-derive",
-        )
-        // §2: new UUIDs rather than a rewritten blob, and the phone's originals are gone.
-        assertTrue(
-            phone.objectIds.toSet().intersect(after.objectIds.toSet()).isEmpty(),
-            "re-encoding mints new blobs",
-        )
+        assertTrue(cycle.library.exists("FromPhone/a.jpg"))
+        assertTrue(cycle.additionKeys().isEmpty())
+        // §2: new blobs rather than rewritten ones, and the phone's originals are gone.
+        assertTrue(phone.objectIds.toSet().intersect(after.objectIds.toSet()).isEmpty())
         for (id in phone.objectIds) {
-            assertFalse(cycle.zone.contains(id.blobKey), "the phone's blob should be deleted")
+            assertFalse(cycle.zone.contains(id.blobKey), "the phone's blob should be swept")
         }
+
+        val again = cycle.run()
+        assertEquals(0, again.uploadedFiles)
+        assertEquals(1, cycle.metaKeys().size)
+    }
+
+    /** Two uploads into one new album before the laptop saw either: one album, both uploads in it. */
+    @Test
+    fun aNewAlbumUploadedToTwiceIsPulledOnceAndMergedInTheSameRun() = runTest {
+        val cycle = Cycle("pull-twice")
+        val albumId = Uuid.random()
+        val first = cycle.newAlbum("FromPhone", "a.jpg", albumId = albumId)
+        val second = cycle.newAlbum("FromPhone", "a.jpg", "b.jpg", albumId = albumId)
+
+        val report = cycle.run()
+
+        assertTrue(report.failures.isEmpty(), report.failures.toString())
+        assertEquals(1, cycle.metaKeys().size)
+        val after = cycle.shard("FromPhone")
+        assertEquals(albumId, after.info.id)
+        assertEquals(listOf("a (2).jpg", "a.jpg", "b.jpg"), after.photos.map(PhotoRow::filename).sorted())
+        assertEquals(
+            (first.photos + second.photos).map(PhotoRow::id).toSet(),
+            after.photos.map(PhotoRow::id).toSet(),
+        )
+        assertTrue(cycle.additionKeys().isEmpty())
     }
 
     /**
-     * A run stopped halfway through a pull (§7): the album claimed, still `uploaded`, some of its
+     * A run stopped halfway through a pull (§7): the addition claimed, still `uploaded`, some of its
      * files already in the folder. The next run finishes that album into that folder — it does not
      * first upload the files already there as an album of their own, which is how `Transdinarica`
      * became two albums claiming one folder.
@@ -220,23 +251,8 @@ class IngestCycleTest {
     @Test
     fun aPullInterruptedAfterPartOfItsDownloadResumesWithoutADuplicateAlbum() = runTest {
         val cycle = Cycle("pull-resume")
-        val photos = listOf(cycle.library.row("a.jpg"), cycle.library.row("b.jpg"))
-        val phone = Shard(
-            info = AlbumInfo(
-                id = Uuid.random(),
-                name = "FromPhone",
-                sourcePath = "FromPhone",
-                thumbsId = null,
-                state = AlbumState.UPLOADED,
-                encodingVersion = 0,
-                addedAt = fixtureAddedAt,
-            ),
-            photos = photos,
-        )
-        for (row in photos) {
-            cycle.zone.put(assertNotNull(row.imageId).blobKey, ByteArray(64) { 0x41 }, "e")
-        }
-        cycle.writeShard(phone)
+        val albumId = Uuid.random()
+        val phone = cycle.newAlbum("FromPhone", "a.jpg", "b.jpg", albumId = albumId, sourcePath = "FromPhone")
         cycle.library.file("FromPhone/a.jpg")
 
         val report = cycle.run()
@@ -244,9 +260,10 @@ class IngestCycleTest {
         assertTrue(report.failures.isEmpty(), report.failures.toString())
         assertEquals(1, cycle.metaKeys().size, "one album for the folder, not a second beside it")
         val after = cycle.shard("FromPhone")
-        assertEquals(phone.info.id, after.info.id)
+        assertEquals(albumId, after.info.id)
         assertEquals(AlbumState.ENCODED, after.info.state)
-        assertEquals(photos.map(PhotoRow::id).toSet(), after.photos.map(PhotoRow::id).toSet())
+        assertEquals(phone.photos.map(PhotoRow::id).toSet(), after.photos.map(PhotoRow::id).toSet())
+        assertTrue(cycle.additionKeys().isEmpty())
 
         val again = cycle.run()
         assertTrue(again.doublyClaimed.isEmpty())
@@ -337,65 +354,68 @@ class IngestCycleTest {
     }
 
     /**
-     * An addition whose album was deleted before the merge becomes the album it records (§8): pulled
-     * into a folder of its own and encoded, rather than lost with the folder it was meant for. Not
-     * *that* folder, though: this run deleted it, and a pull never puts a deleted folder back.
+     * An addition whose album was deleted before the merge becomes the album it records (§8), under
+     * that album's id, rather than being lost with the folder it was meant for. Not in the run that
+     * deleted the folder, though: a pull never puts back a folder the same run deleted, so it lands
+     * on the next one.
      */
     @Test
-    fun anAdditionWhoseAlbumIsDeletedBecomesAnAlbumOfItsOwn() = runTest {
+    fun anAdditionWhoseAlbumIsDeletedBecomesThatAlbumAgain() = runTest {
         val cycle = cycle("merge-adopt")
         cycle.run()
         val neuseeland = cycle.shard("Neuseeland")
         val added = cycle.addTo(neuseeland, "x.jpg", "x.jpg")
         cycle.library.remove("Neuseeland")
 
+        val deleting = cycle.run()
+
+        assertTrue(deleting.failures.isEmpty(), deleting.failures.toString())
+        assertTrue(deleting.heldBack.isEmpty(), "its own deleted folder is not a name someone else has")
+        assertFalse(cycle.library.exists("Neuseeland"))
+        assertEquals(listOf(added.info.key), cycle.additionKeys())
+
         val report = cycle.run()
 
         assertTrue(report.failures.isEmpty(), report.failures.toString())
         val adopted = cycle.shard("Neuseeland")
-        assertEquals(added.info.id, adopted.info.id)
+        assertEquals(neuseeland.info.id, adopted.info.id)
         assertEquals(AlbumState.ENCODED, adopted.info.state)
+        assertEquals("Neuseeland", adopted.info.sourcePath)
         assertEquals(listOf("x (2).jpg", "x.jpg"), adopted.photos.map(PhotoRow::filename).sorted())
-        val folder = assertNotNull(adopted.info.sourcePath)
-        assertTrue(folder.startsWith("Neuseeland (") && folder != "Neuseeland", folder)
-        assertTrue(cycle.library.exists("$folder/x (2).jpg"))
-        assertFalse(cycle.library.exists("Neuseeland"))
+        assertTrue(cycle.library.exists("Neuseeland/x (2).jpg"))
         assertEquals(added.photos.map(PhotoRow::id).toSet(), adopted.photos.map(PhotoRow::id).toSet())
         assertTrue(cycle.additionKeys().isEmpty())
         assertEquals(2, cycle.metaKeys().size)
     }
 
     /**
-     * An adoption a run stopped partway through (§8): the addition already written to `meta/` as the
-     * album it records, its `addition/` key gone, the folder claimed and some of its files already
-     * there. The next run finishes pulling it into that folder rather than uploading those files as
-     * another album.
+     * The same, stopped partway through its pull: the addition claimed a folder and some of its files
+     * are there. The next run finishes pulling it into that folder rather than uploading those files
+     * as another album.
      */
     @Test
     fun anAdoptionInterruptedAfterPartOfItsDownloadResumesWithoutADuplicateAlbum() = runTest {
         val cycle = cycle("merge-adopt-resume")
         cycle.run()
         val neuseeland = cycle.shard("Neuseeland")
-        val added = cycle.addTo(neuseeland, "x.jpg", "y.jpg")
-        // What the stopped run had done: deleted the album, adopted the addition and claimed a folder
-        // for it, and downloaded one of its two files.
+        // What the stopped runs had done: deleted the album, then claimed its folder for the addition
+        // and downloaded one of its two files.
         cycle.library.remove("Neuseeland")
         cycle.zone.remove(neuseeland.info.id.shardKey)
-        cycle.zone.remove(added.info.key)
-        val folder = "Neuseeland (${added.info.id.toString().take(8)})"
-        cycle.writeShard(Shard(added.info.copy(addsTo = null, sourcePath = folder), added.photos))
-        cycle.library.file("$folder/x.jpg")
+        val added = cycle.addTo(neuseeland, "x.jpg", "y.jpg", sourcePath = "Neuseeland")
+        cycle.library.file("Neuseeland/x.jpg")
 
         val report = cycle.run()
 
         assertTrue(report.failures.isEmpty(), report.failures.toString())
         assertEquals(2, cycle.metaKeys().size, "Rauhöd and the adopted album, nothing beside it")
         val adopted = cycle.shard("Neuseeland")
-        assertEquals(added.info.id, adopted.info.id)
+        assertEquals(neuseeland.info.id, adopted.info.id)
         assertEquals(AlbumState.ENCODED, adopted.info.state)
-        assertEquals(folder, adopted.info.sourcePath)
+        assertEquals("Neuseeland", adopted.info.sourcePath)
         assertEquals(added.photos.map(PhotoRow::id).toSet(), adopted.photos.map(PhotoRow::id).toSet())
-        assertTrue(cycle.library.exists("$folder/y.jpg"))
+        assertTrue(cycle.library.exists("Neuseeland/y.jpg"))
+        assertTrue(cycle.additionKeys().isEmpty())
 
         val again = cycle.run()
         assertTrue(again.doublyClaimed.isEmpty())

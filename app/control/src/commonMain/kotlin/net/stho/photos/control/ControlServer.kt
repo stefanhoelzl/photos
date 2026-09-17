@@ -24,6 +24,7 @@ import net.stho.photos.app.MapCamera
 import net.stho.photos.app.MapPin
 import net.stho.photos.app.SaveOutcome
 import net.stho.photos.app.Screen
+import net.stho.photos.app.Resolution
 import net.stho.photos.app.UploadModel
 
 /**
@@ -60,14 +61,17 @@ import net.stho.photos.app.UploadModel
  *                         a row of the list of albums sharing one spot, or closing it
  *   POST /cache?album=<uuid>&action=download|pause|clear
  *                         the album row's cache controls, which are a swipe or a tap on the strip
- *   POST /upload/open     the upload icon, on the album list or a container (§8), or in an album to add to it
+ *   POST /upload/open     the upload icon, on the album list, a container or an album (§8)
  *   POST /upload/album?id=<gallery album id>
- *                         pick a whole gallery album; the name dialog opens prefilled
+ *                         pick a whole gallery album; the album dialog opens pre-filled
  *   POST /upload/select?ids=<asset>,<asset>
- *                         pick loose photos; the name dialog opens empty
- *   POST /upload/name?name=…&delete=true|false
- *                         the name dialog's field and checkbox
- *   POST /upload/confirm  the dialog's Upload; answers 422 while there is no name
+ *                         pick loose photos; the album dialog opens pre-filled
+ *   POST /upload/name?album=<path>[&new=true]&delete=true|false
+ *                         the album field typed, its `+` tapped, and the checkbox; `new` answers 422
+ *                         with the reason when the path names no new album
+ *   POST /upload/target?id=<uuid>
+ *                         pick an entry from the album list
+ *   POST /upload/confirm  the dialog's Upload; answers 422 while no album is selected
  *   POST /upload/cancel?album=<uuid>, POST /upload/retry?album=<uuid>
  *                         the sheet's two buttons
  *   POST /setup?url=…&password=…
@@ -259,7 +263,7 @@ public class ControlServer(
                     val uploads = uploads ?: return@post call.fail(HttpStatusCode.NotFound, "this root has no gallery")
                     val upload = model.openUpload()
                         ?: return@post call.fail(HttpStatusCode.Conflict, "upload starts from the album list, a container or an album")
-                    uploads.open(upload.parent, upload.parentName, upload.addTo)
+                    uploads.open(upload.parent, upload.addTo)
                     call.json(state())
                 }
 
@@ -282,15 +286,32 @@ public class ControlServer(
 
                 post("/upload/name") {
                     val uploads = uploads ?: return@post call.fail(HttpStatusCode.NotFound, "this root has no gallery")
-                    call.request.queryParameters["name"]?.let(uploads::rename)
+                    call.request.queryParameters["album"]?.let(uploads::type)
                     call.request.queryParameters["delete"]?.let { uploads.deleteAfterUpload(it == "true") }
+                    if (call.request.queryParameters["new"] == "true" && !uploads.addNew()) {
+                        val naming = uploads.picker.value.naming
+                            ?: return@post call.fail(HttpStatusCode.Conflict, "the album dialog is not open")
+                        return@post call.fail(HttpStatusCode.UnprocessableEntity, naming.resolution.reason())
+                    }
+                    call.json(state())
+                }
+
+                post("/upload/target") {
+                    val uploads = uploads ?: return@post call.fail(HttpStatusCode.NotFound, "this root has no gallery")
+                    val id = runCatching { Uuid.parse(call.request.queryParameters["id"].orEmpty()) }.getOrNull()
+                        ?: return@post call.fail(HttpStatusCode.BadRequest, "bad album id")
+                    if (!uploads.target(id)) return@post call.fail(HttpStatusCode.NotFound, "no such album in the list")
                     call.json(state())
                 }
 
                 post("/upload/confirm") {
                     val model = model ?: return@post call.fail(HttpStatusCode.Conflict, "not set up")
                     val uploads = uploads ?: return@post call.fail(HttpStatusCode.NotFound, "this root has no gallery")
-                    uploads.confirm() ?: return@post call.fail(HttpStatusCode.UnprocessableEntity, "choose photos, and name a new album, first")
+                    uploads.confirm() ?: return@post call.fail(
+                        HttpStatusCode.UnprocessableEntity,
+                        uploads.picker.value.naming?.let { if (it.selected == null) it.resolution.reason() else null }
+                            ?: "choose photos first",
+                    )
                     if (model.state.value.screen is Screen.Upload) model.back()
                     call.json(state())
                 }
@@ -405,13 +426,26 @@ public class ControlServer(
                 """{"id":${it.id.json()},"type":"${it.mediaType}"}"""
             }
             val naming = picker.naming?.let {
-                """{"name":${it.name.json()},"count":${it.count},"album":${it.galleryAlbum?.json() ?: "null"},""" +
-                    """"delete":${it.deleteFromGallery}}"""
+                val entries = it.entries.joinToString(",") { entry ->
+                    """{"id":"${entry.id}","path":${entry.path.json()},"kind":"${entry.kind}"}"""
+                }
+                val resolution = when (val resolved = it.resolution) {
+                    Resolution.Incomplete -> """{"kind":"incomplete"}"""
+                    is Resolution.Entry -> """{"kind":"entry","id":"${resolved.target.id}"}"""
+                    is Resolution.New ->
+                        """{"kind":"new","name":${resolved.name.json()},"parent":${resolved.parent?.let { p -> "\"$p\"" } ?: "null"}}"""
+                    is Resolution.Refused -> """{"kind":"refused","reason":${resolved.reason.json()}}"""
+                }
+                val selected = it.selected?.let { entry ->
+                    """{"id":"${entry.id}","path":${entry.path.json()},"kind":"${entry.kind}"}"""
+                } ?: "null"
+                """{"text":${it.text.json()},"count":${it.count},"album":${it.galleryAlbum?.json() ?: "null"},""" +
+                    """"delete":${it.deleteFromGallery},"entries":[$entries],"resolution":$resolution,"selected":$selected}"""
             } ?: "null"
             val statuses = model.statuses.value.joinToString(",") {
-                """{"album":"${it.albumId}","name":${it.name.json()},"stage":"${it.stage}",""" +
-                    """"files":${it.files},"filesDone":${it.filesDone},"bytes":${it.bytes},"bytesDone":${it.bytesDone},""" +
-                    """"failure":${it.failure?.json() ?: "null"},"adding":${it.adding}}"""
+                """{"album":"${it.albumId}","target":"${it.target}","name":${it.name.json()},"path":${it.path.json()},""" +
+                    """"stage":"${it.stage}","files":${it.files},"filesDone":${it.filesDone},"bytes":${it.bytes},""" +
+                    """"bytesDone":${it.bytesDone},"failure":${it.failure?.json() ?: "null"}}"""
             }
             listOf(
                 """"picker":{"access":${picker.access?.name?.json() ?: "null"},"albums":[$galleryAlbums],""" +
@@ -483,4 +517,12 @@ public class ControlServer(
 
     private suspend fun ApplicationCall.fail(status: HttpStatusCode, why: String) =
         respondText(why, ContentType.Text.Plain, status)
+}
+
+/** Why no album is selected, in the dialog's words. */
+private fun Resolution.reason(): String = when (this) {
+    Resolution.Incomplete -> "type an album's path"
+    is Resolution.Entry -> "pick the album"
+    is Resolution.New -> "add \"$path\" as a new album first"
+    is Resolution.Refused -> reason
 }

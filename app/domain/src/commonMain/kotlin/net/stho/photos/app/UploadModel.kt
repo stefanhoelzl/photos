@@ -9,12 +9,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import net.stho.photos.catalog.Album
 
-/** The gallery picker and the name dialog (§8), as one snapshot. */
+/** The gallery picker and the album dialog (§8), as one snapshot. */
 public data class PickerUi(
+    /** The container the upload was started from; null at the root, or inside an album. */
     val parent: Uuid? = null,
-    val parentName: String = "",
-    /** The album the photos are added to, when the picker was opened from one (§8); its name is [parentName]. */
+    /** The album the upload was started inside, which the dialog pre-selects. */
     val addTo: Uuid? = null,
     /** Null until the platform has answered. */
     val access: GalleryAccess? = null,
@@ -23,22 +24,34 @@ public data class PickerUi(
     val assets: List<GalleryAsset> = emptyList(),
     val selected: Set<String> = emptySet(),
     val thumbnails: Map<String, ByteArray> = emptyMap(),
-    /** The name dialog, while it is up. */
+    /** The album dialog, while it is up. */
     val naming: Naming? = null,
     /** Why the library could not be read — §1's rule: a picker that stays empty says so. */
     val failure: String? = null,
 )
 
 public data class Naming(
-    /** The new album's name. Unused when adding to an album, which already has one. */
-    val name: String,
+    /** The album field's text: a path from the library root, `Trips / Italy`. */
+    val text: String,
     val assetIds: List<String>,
+    /** The albums the photos can go into, read when the dialog opened. */
+    val targets: UploadTargets,
+    /** New albums added with `+` while this dialog is up, newest first. Nothing creates them until Upload. */
+    val added: List<UploadTarget> = emptyList(),
+    /** The entry Upload sends to; null until one is picked, added, or typed exactly. */
+    val selected: UploadTarget? = null,
     /** The gallery album chosen whole, which deleting takes too; null for loose photos. */
     val galleryAlbum: String? = null,
     /** Decided up front rather than asked afterwards (§8). */
     val deleteFromGallery: Boolean = false,
 ) {
     val count: Int get() = assetIds.size
+
+    /** Every entry the list offers: the added ones first, then the albums. */
+    val entries: List<UploadTarget> get() = added + targets.entries
+
+    /** What the text names right now. */
+    val resolution: Resolution get() = targets.resolve(text, added)
 }
 
 /**
@@ -50,6 +63,7 @@ public data class Naming(
 public class UploadModel(
     private val gallery: Gallery,
     private val uploads: Uploads,
+    private val catalog: Catalog,
     private val scope: CoroutineScope,
 ) {
     private val _picker = MutableStateFlow(PickerUi())
@@ -59,10 +73,10 @@ public class UploadModel(
 
     private var loading: Job? = null
 
-    /** The upload icon. [parent] is where the new album goes, or [addTo] the album the photos go into. */
-    public fun open(parent: Uuid?, parentName: String, addTo: Uuid? = null) {
+    /** The upload icon: on the album list or in a container ([parent]), or inside the album [addTo]. */
+    public fun open(parent: Uuid?, addTo: Uuid? = null) {
         loading?.cancel()
-        _picker.value = PickerUi(parent = parent, parentName = parentName, addTo = addTo)
+        _picker.value = PickerUi(parent = parent, addTo = addTo)
         loading = scope.launch {
             try {
                 val access = gallery.requestAccess()
@@ -99,18 +113,71 @@ public class UploadModel(
      */
     public fun setSelection(assetIds: Set<String>): Unit = _picker.update { it.copy(selected = assetIds) }
 
-    /** A gallery album: the whole album, its name prefilled. */
+    /** A gallery album: the whole album, its name pre-filled after the container the upload started in. */
     public suspend fun chooseAlbum(album: GalleryAlbum) {
         val ids = gallery.assets(album).map(GalleryAsset::id)
-        _picker.update { it.copy(naming = Naming(album.name, ids, galleryAlbum = album.id)) }
+        name(ids, album)
     }
 
     /** Loose photos, in the library's order rather than the order they were tapped. */
-    public fun chooseSelected(): Unit = _picker.update { picker ->
-        picker.copy(naming = Naming("", picker.assets.map(GalleryAsset::id).filter { it in picker.selected }))
+    public fun chooseSelected() {
+        val picker = _picker.value
+        name(picker.assets.map(GalleryAsset::id).filter { it in picker.selected }, galleryAlbum = null)
     }
 
-    public fun rename(name: String): Unit = _picker.update { it.copy(naming = it.naming?.copy(name = name)) }
+    private fun name(assetIds: List<String>, galleryAlbum: GalleryAlbum?) {
+        val targets = targets()
+        _picker.update { picker ->
+            val text = targets.prefill(start = picker.parent, addTo = picker.addTo, galleryName = galleryAlbum?.name)
+            picker.copy(naming = Naming(text, assetIds, targets, galleryAlbum = galleryAlbum?.id).typed(text))
+        }
+    }
+
+    /** The album tree as it stands, and this phone's new albums still on their way up. */
+    private fun targets(): UploadTargets {
+        val albums = mutableListOf<Album>()
+        val containers = mutableSetOf<Uuid>()
+        fun walk(parent: Uuid?) {
+            for (album in catalog.albums(under = parent)) {
+                albums += album
+                val before = albums.size
+                walk(album.id)
+                if (albums.size > before && album.photoCount == 0) containers += album.id
+            }
+        }
+        walk(null)
+        val uploading = uploads.statuses.value
+            .filter { it.stage != UploadStage.Done }
+            .map { UploadTarget(it.target, it.name, it.parent, it.path, UploadTarget.Kind.Uploading) }
+        return UploadTargets(albums, containers, uploading)
+    }
+
+    /**
+     * The album field's text, as typed. The selection follows it: an entry whose path it matches
+     * exactly, and none otherwise — editing away from a picked album unpicks it.
+     */
+    public fun type(text: String): Unit = _picker.update { it.copy(naming = it.naming?.typed(text)) }
+
+    /**
+     * The `+` beside a path that names no album: adds it to the list as a new album and selects it.
+     * Nothing is created — the album exists once an upload into it starts. False when the text names
+     * no new album, and nothing changes.
+     */
+    public fun addNew(): Boolean {
+        val naming = _picker.value.naming ?: return false
+        val new = naming.resolution as? Resolution.New ?: return false
+        val entry = UploadTarget(Uuid.random(), new.name, new.parent, new.path, UploadTarget.Kind.New)
+        _picker.update { it.copy(naming = naming.copy(text = entry.path, added = listOf(entry) + naming.added, selected = entry)) }
+        return true
+    }
+
+    /** An entry picked from the list. False when the dialog offers no entry with that id. */
+    public fun target(id: Uuid): Boolean {
+        val naming = _picker.value.naming ?: return false
+        val entry = naming.entries.firstOrNull { it.id == id } ?: return false
+        _picker.update { it.copy(naming = naming.copy(text = entry.path, selected = entry)) }
+        return true
+    }
 
     public fun deleteAfterUpload(delete: Boolean): Unit =
         _picker.update { it.copy(naming = it.naming?.copy(deleteFromGallery = delete)) }
@@ -118,20 +185,27 @@ public class UploadModel(
     public fun dismissNaming(): Unit = _picker.update { it.copy(naming = null) }
 
     /**
-     * Upload. The upload's id, or null when there is nothing to send, or no name for a new album.
+     * Upload into the selected entry. The upload's id, or null when there is nothing to send or no
+     * entry is selected.
      *
-     * Adding to an album sends that album's name and parent as the request's: the addition records
-     * both, so it can stand as an album of its own if its target is gone before the laptop merges it.
+     * Every upload is an addition (§8), carrying the album's name and parent: they are what a new
+     * album is made from, and what an addition to one that is gone stands as.
      */
     public fun confirm(): Uuid? {
-        val picker = _picker.value
-        val naming = picker.naming ?: return null
+        val naming = _picker.value.naming ?: return null
+        val target = naming.selected ?: return null
         if (naming.assetIds.isEmpty()) return null
-        val name = if (picker.addTo != null) picker.parentName else naming.name.trim()
-        if (name.isBlank()) return null
         close()
         return uploads.start(
-            UploadRequest(name, picker.parent, naming.assetIds, naming.galleryAlbum, naming.deleteFromGallery, picker.addTo),
+            UploadRequest(
+                name = target.name,
+                parent = target.parent,
+                path = target.path,
+                assetIds = naming.assetIds,
+                galleryAlbum = naming.galleryAlbum,
+                deleteFromGallery = naming.deleteFromGallery,
+                addTo = target.id,
+            ),
         )
     }
 
@@ -145,4 +219,10 @@ public class UploadModel(
     public fun retry(albumId: Uuid): Unit = uploads.retry(albumId)
 
     public fun openSettings(): Unit = gallery.openSettings()
+}
+
+/** [text] as the field now holds, with the selection following it (see [UploadModel.type]). */
+private fun Naming.typed(text: String): Naming {
+    val match = (targets.resolve(text, added) as? Resolution.Entry)?.target
+    return copy(text = text, selected = match)
 }

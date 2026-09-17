@@ -88,20 +88,28 @@ class MergedCatalogTest {
         assertEquals(2, built.reader.photoCount())
     }
 
-    /** An addition whose album is gone reads as the album it recorded, so nothing it holds is out of sight. */
+    /**
+     * Additions naming an album no shard is — a new album the laptop has not pulled yet, or one
+     * deleted before it merged them — read as that one album, under its id, so nothing they hold is
+     * out of sight and a second upload into it does not show as a second album.
+     */
     @Test
-    fun anAdditionWhoseAlbumIsGoneIsShownAsThatAlbum() {
+    fun additionsWhoseAlbumIsNotHereAreShownTogetherAsThatAlbum() {
         val container = album("Reisen", thumbsId = null)
         val island = album("Island", parent = container.info.id, photos = listOf(photo("IMG_0001.jpg")))
-        val orphan = addition(island, listOf(photo("IMG_0002.heic")))
+        val first = addition(island, listOf(photo("IMG_0002.heic")))
+        val second = addition(island, listOf(photo("IMG_0003.heic"), photo("IMG_0004.heic")))
+            .let { it.copy(info = it.info.copy(addedAt = Instant.fromEpochSeconds(it.info.addedAt.epochSeconds + 60))) }
 
-        val built = build(listOf(container, orphan))
+        val built = build(listOf(container, second, first))
 
-        val shown = assertNotNull(built.reader.album(orphan.info.id))
+        assertEquals(2, built.summary.albums)
+        val shown = assertNotNull(built.reader.album(island.info.id))
         assertEquals("Island", shown.name)
         assertEquals(container.info.id, shown.parent)
-        assertEquals(1, shown.photoCount)
-        assertEquals(listOf(orphan.info.thumbsId), shown.packs)
+        assertEquals(3, shown.photoCount)
+        assertEquals(listOf(first.info.thumbsId, second.info.thumbsId), shown.packs)
+        assertNull(built.reader.album(first.info.id))
     }
 
     /**

@@ -234,9 +234,7 @@ public class CatalogSync(
                 // No ETag means nothing to diff against, so the shard cannot be trusted to be
                 // current. Skipped rather than guessed at.
                 val etag = listed.etag
-                // An addition the laptop has just turned into an album of its own is written to
-                // `meta/` under the same id before its `addition/` key goes (§7), so for that
-                // moment both are listed. The album is what it now is.
+                // Ids are random, so one key per id; a second is not trusted to be the same shard.
                 if (albumId == null || etag == null || albumId in seen) {
                     ignoredKeys += listed.key
                     return@collect
@@ -380,19 +378,12 @@ public class CatalogSync(
      * The shard goes **first**, so the album stops existing before its blobs do: the reverse order
      * would leave a shard pointing at objects that are gone, and §2's rule is that the catalog
      * never lies. The blobs it listed become unreferenced and are the caller's to delete.
-     *
-     * An addition the laptop turned into an album of its own shares that album's id, and by the
-     * time its `addition/` key is deleted the local file is already the album. So the local copy
-     * goes only when it is the same kind of shard as the key being deleted.
      */
     public suspend fun deleteShard(shard: Shard): Unit = mutex.withLock {
         val id = shard.info.id
         s3.delete(shard.info.key)
-        val local = runCatching { shardPath(id).readShard(drivers) }.getOrNull()
-        if (local == null || local.info.isAddition == shard.info.isAddition) {
-            SystemFileSystem.delete(shardPath(id), mustExist = false)
-            state.forget(id)
-        }
+        SystemFileSystem.delete(shardPath(id), mustExist = false)
+        state.forget(id)
     }
 
     // ---------------------------------------------------------------------------- local state
