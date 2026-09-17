@@ -11,8 +11,9 @@ import net.stho.photos.model.MediaType
  * Motion reaches the viewer on the phone: the files the app hands its players are the bytes the
  * zone declared, read straight out of the app's container.
  *
- * What these cannot show is the players themselves — whether AVPlayer and `PHLivePhotoView` open
- * those files. The screenshot is written so a person can look.
+ * What these cannot fully show is the players themselves. A Live Photo's view does report the
+ * playback it starts, so that much is asserted; whether AVPlayer opens a video is not, and the
+ * screenshot is written so a person can look.
  */
 class MediaTest {
 
@@ -27,6 +28,8 @@ class MediaTest {
 
         val video = album.row(MediaType.VIDEO)
         assertContentEquals(album.bytesOf(requireNotNull(video.videoId)), File(opened.string("videoPath")).readBytes())
+        // Opening a video must not make a sound nobody asked for; the player's own control unmutes.
+        awaitState("the video to play muted") { it.nullableString("videoSound") == "muted" }
         screenshot("media-video")
     }
 
@@ -49,6 +52,9 @@ class MediaTest {
         // own files, must get a *full* Live Photo from PHLivePhoto -- not the degraded one it
         // builds from the still alone, and not the `none` an unassemblable pair ends with.
         awaitState("PHLivePhoto to assemble the pair in full") { it.nullableString("livePhoto") == "full" }
+        // Assembled is not the same as playing: the view's own brief hint on arrival must have run.
+        // A pair a phone rejects never gets that far, however it assembles on a simulator.
+        awaitState("the Live Photo view to play its hint") { "hint-began" in it.nullableString("livePlayback").orEmpty() }
         screenshot("media-live")
     }
 }

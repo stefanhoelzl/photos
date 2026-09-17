@@ -1200,13 +1200,19 @@ Five facts about the build are decisions rather than defaults:
 - **`CADisableMinimumFrameDurationOnPhone` is set.** Without it iOS caps the app at 60 fps and
   Compose refuses to start rather than allow that quietly — which matters here more than in most
   apps, because §10's remaining unknown is a question about frame rate.
-- **Playback goes through an extension.** §2 names every blob by its hash alone, and
+- **A cached blob carries an extension on disk.** §2 names every blob by its hash alone, and
   AVFoundation and PhotoKit both decide what a file is from its extension before reading a byte.
-  So a played blob is reached through a symbolic link, `playable/<id>.<ext>`, beside the cache —
-  no copy, and no second policy, since a link to a cleared blob is recreated when it lands
-  again. The extension is sniffed rather than assumed: a Live Photo's still is the camera's own
-  file, HEIC or JPEG. Measured on a simulator with one MP4: `AVURLAsset.playable` is **false**
-  for the blob under its hash and **true** for the same bytes through the link.
+  So `blobs/` holds `<id>.<ext>`, the extension sniffed from the bytes as the blob lands — a Live
+  Photo's still is the camera's own file, HEIC or JPEG, and its MOV must stay a `.mov` — and the
+  players are handed the blob itself. Everything that counts or clears the cache still reads the
+  id as the name up to its first dot, and a blob cached bare by an earlier build is renamed on its
+  first lookup. Measured: on a simulator `AVURLAsset.playable` is **false** for an MP4 under its
+  bare hash; on a phone `PHLivePhoto` refuses a pair under bare hashes outright
+  (`PHPhotosErrorDomain` 3303). An earlier build reached blobs through symbolic links,
+  `playable/<id>.<ext>`, which a simulator accepts and **a phone does not**: the same pair,
+  byte for byte, answered degraded-then-nothing through the links and played as real files. A
+  video could instead be given its type (`AVURLAssetOverrideMIMETypeKey`, verified on the phone),
+  but `PHLivePhoto` takes nothing but file URLs, so one naming rule serves both.
 
 - **Debug and Release link different frameworks.** Both are named `PhotosKit`; Release's is
   `:app:ios`, and Debug's is `:app:ios-debug` — the same app plus `:app:control`, the control
@@ -1270,7 +1276,7 @@ hint once when it arrives so the motion is discoverable before the mark has to a
 > required. The still's identifier lives
 > in Apple's maker note, which ImageIO reads only **big-endian**. The synthetic pair the app suites
 > sync is written that way, and the iOS suite asserts the app's own view gets a full Live Photo
-> from it. A real library's MOV and still are uploaded as-is (§5), so genuine pairs keep both.
+> from it and plays its hint — assembled is not playing, as the symbolic links above showed. A real library's MOV and still are uploaded as-is (§5), so genuine pairs keep both.
 The desktop harness installs no Live Photo view: the still stays and the mark says what the
 phone would do with it.
 

@@ -27,7 +27,7 @@ class CacheTest {
 
             model.act(row, CacheAction.Download)
             await("the album to be held") { it.cacheOf(row).complete }
-            assertEquals(album.objectIds.map { it.toString() }.toSet(), blobsOnDisk(), "exactly the rows' six objects")
+            assertEquals(album.cachedNames, blobsOnDisk(), "exactly the rows' six objects, each under its own extension")
             screenshot("cache-downloaded")
 
             model.act(row, CacheAction.Clear)

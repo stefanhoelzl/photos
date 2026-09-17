@@ -12,7 +12,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.UIKitView
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.ObjCSignatureOverride
 import net.stho.photos.ui.screens.LivePhotoSurface
+import net.stho.photos.ui.screens.LocalViewerSound
+import net.stho.photos.ui.screens.ViewerSound
 import platform.CoreGraphics.CGSizeMake
 import platform.Foundation.NSNumber
 import platform.Foundation.NSURL
@@ -20,7 +23,11 @@ import platform.Photos.PHImageContentModeAspectFit
 import platform.Photos.PHLivePhoto
 import platform.Photos.PHLivePhotoInfoIsDegradedKey
 import platform.PhotosUI.PHLivePhotoView
+import platform.PhotosUI.PHLivePhotoViewDelegateProtocol
+import platform.PhotosUI.PHLivePhotoViewPlaybackStyle
+import platform.PhotosUI.PHLivePhotoViewPlaybackStyleFull
 import platform.PhotosUI.PHLivePhotoViewPlaybackStyleHint
+import platform.darwin.NSObject
 import platform.UIKit.UIColor
 import platform.UIKit.UIViewContentMode
 
@@ -41,25 +48,32 @@ import platform.UIKit.UIViewContentMode
  * not there and Compose's still is what a person sees.
  *
  * The press-and-hold that plays it is `PHLivePhotoView`'s own gesture. On arrival it plays a
- * brief hint once, which is what tells a person a photograph has motion in it.
+ * brief hint once, which is what tells a person a photograph has motion in it. The hint is
+ * silent; a hold is heard under [IosAudio]'s rules — with sound when the switch says ring, and
+ * even on silent once this viewer session was unmuted ([ViewerSound]).
  */
 internal class PhLivePhotoSurface(
     /** What iOS last answered, for a Debug build's `/state`. Null in release. */
     private val report: ((String) -> Unit)? = null,
+    /** Each playback the view starts and ends, e.g. `hint-began`, for a Debug build's `/state`. */
+    private val playback: ((String) -> Unit)? = null,
 ) : LivePhotoSurface {
 
     @Composable
     override fun Render(still: String, video: String, modifier: Modifier) {
         key(still, video) {
             var photo by remember { mutableStateOf<PHLivePhoto?>(null) }
+            val sound = LocalViewerSound.current
+            // The view holds its delegate weakly, so the composition keeps it alive.
+            val delegate = remember { Playback(sound, playback) }
 
             DisposableEffect(Unit) {
                 var live = true
                 report?.invoke("requested")
                 val request = PHLivePhoto.requestLivePhotoWithResourceFileURLs(
                     fileURLs = listOf(
-                        NSURL.fileURLWithPath(Playable.liveStill(still)),
-                        NSURL.fileURLWithPath(Playable.liveVideo(video)),
+                        NSURL.fileURLWithPath(still),
+                        NSURL.fileURLWithPath(video),
                     ),
                     placeholderImage = null,
                     // Zero asks for the full-size asset; the view scales it to fit.
@@ -92,6 +106,7 @@ internal class PhLivePhotoSurface(
                             contentMode = UIViewContentMode.UIViewContentModeScaleAspectFit
                             backgroundColor = UIColor.clearColor
                             livePhoto = current
+                            this.delegate = delegate
                             startPlaybackWithStyle(PHLivePhotoViewPlaybackStyleHint)
                         }
                     },
@@ -99,9 +114,42 @@ internal class PhLivePhotoSurface(
                     // view rather than rebuilding it.
                     update = { view -> if (view.livePhoto != current) view.livePhoto = current },
                     modifier = modifier,
-                    onRelease = { view -> view.stopPlayback() },
+                    onRelease = { view ->
+                        view.stopPlayback()
+                        IosAudio.release(delegate)
+                    },
                 )
             }
         }
     }
+}
+
+/**
+ * Takes the audio session for a hold and gives it back when playback ends, and tells [report] —
+ * a Debug build's `/state` — each playback that starts and finishes, and in which style.
+ */
+private class Playback(
+    private val sound: ViewerSound,
+    private val report: ((String) -> Unit)?,
+) : NSObject(), PHLivePhotoViewDelegateProtocol {
+    @ObjCSignatureOverride
+    override fun livePhotoView(livePhotoView: PHLivePhotoView, willBeginPlaybackWithStyle: PHLivePhotoViewPlaybackStyle) {
+        if (willBeginPlaybackWithStyle == PHLivePhotoViewPlaybackStyleFull) {
+            IosAudio.claim(this, if (sound.unmuted) IosAudio.Mode.Audible else IosAudio.Mode.FollowSwitch)
+        }
+        report?.invoke("${willBeginPlaybackWithStyle.label}-began")
+    }
+
+    @ObjCSignatureOverride
+    override fun livePhotoView(livePhotoView: PHLivePhotoView, didEndPlaybackWithStyle: PHLivePhotoViewPlaybackStyle) {
+        if (didEndPlaybackWithStyle == PHLivePhotoViewPlaybackStyleFull) IosAudio.release(this)
+        report?.invoke("${didEndPlaybackWithStyle.label}-ended")
+    }
+
+    private val PHLivePhotoViewPlaybackStyle.label: String
+        get() = when (this) {
+            PHLivePhotoViewPlaybackStyleHint -> "hint"
+            PHLivePhotoViewPlaybackStyleFull -> "full"
+            else -> "style$this"
+        }
 }

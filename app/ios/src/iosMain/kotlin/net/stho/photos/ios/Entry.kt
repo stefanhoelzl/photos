@@ -51,6 +51,10 @@ public class PhotosRoot(
      * passes nothing and the view reports to no one.
      */
     private val onLivePhoto: ((String) -> Unit)? = null,
+    /** Told each time the open Live Photo's view begins or ends playing. Debug only, as above. */
+    private val onLivePlayback: ((String) -> Unit)? = null,
+    /** Told whether the open video plays muted. Debug only, as above. */
+    private val onVideoSound: ((String) -> Unit)? = null,
 ) {
     private val cacheRoot = PhotosApp.defaultCacheRoot()
 
@@ -65,8 +69,8 @@ public class PhotosRoot(
                 // The two things on the viewer no shared code can draw (§6's interop table).
                 CompositionLocalProvider(
                     LocalBaseMap provides MaplibreBaseMap,
-                    LocalVideoSurface provides AvVideoSurface(),
-                    LocalLivePhotoSurface provides PhLivePhotoSurface(onLivePhoto),
+                    LocalVideoSurface provides AvVideoSurface(onVideoSound),
+                    LocalLivePhotoSurface provides PhLivePhotoSurface(onLivePhoto, onLivePlayback),
                     LocalOrientationPolicy provides IosOrientation,
                 ) {
                     Photos(launcher)

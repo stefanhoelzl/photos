@@ -27,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -114,56 +115,60 @@ public fun Viewer(
     val chrome = if (landscape) 0.dp else FILMSTRIP_BAR
     // Zoomed in, a one-finger drag pans the photograph instead of paging away from it.
     var zoomed by remember { mutableStateOf(false) }
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
-        HorizontalPager(
-            state = pager,
-            modifier = Modifier.fillMaxSize().padding(bottom = chrome),
-            userScrollEnabled = !zoomed,
-            key = { photos[it].id.toString() },
-        ) { page ->
-            if (page == index) {
-                // The neighbour's decode as well as the model's preview: for the frames between the
-                // pager settling and the model catching up, the model's preview is still null.
-                val open = preview ?: nearby[photo.id]
-                if (photo.mediaType == MediaType.PHOTO) {
-                    Zoomable(photo.id, onZoomed = { zoomed = it }) {
+    // One per viewer session: an unmute carries across swipes and is forgotten on the way out.
+    val sound = remember { ViewerSound() }
+    CompositionLocalProvider(LocalViewerSound provides sound) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
+            HorizontalPager(
+                state = pager,
+                modifier = Modifier.fillMaxSize().padding(bottom = chrome),
+                userScrollEnabled = !zoomed,
+                key = { photos[it].id.toString() },
+            ) { page ->
+                if (page == index) {
+                    // The neighbour's decode as well as the model's preview: for the frames between the
+                    // pager settling and the model catching up, the model's preview is still null.
+                    val open = preview ?: nearby[photo.id]
+                    if (photo.mediaType == MediaType.PHOTO) {
+                        Zoomable(photo.id, onZoomed = { zoomed = it }) {
+                            OpenPhoto(photo, open, videoPath, livePair, moving)
+                        }
+                    } else {
+                        // A video and a Live Photo play in the platform's own views, which a Compose
+                        // layer cannot scale, so zooming is for stills.
                         OpenPhoto(photo, open, videoPath, livePair, moving)
                     }
                 } else {
-                    // A video and a Live Photo play in the platform's own views, which a Compose
-                    // layer cannot scale, so zooming is for stills.
-                    OpenPhoto(photo, open, videoPath, livePair, moving)
-                }
-            } else {
-                val neighbour = nearby[photos[page].id]
-                if (neighbour != null) {
-                    Image(neighbour.image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-                } else {
-                    Placeholder(moving = false)
+                    val neighbour = nearby[photos[page].id]
+                    if (neighbour != null) {
+                        Image(neighbour.image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                    } else {
+                        Placeholder(moving = false)
+                    }
                 }
             }
-        }
 
-        Row(
-            Modifier.align(Alignment.TopStart).padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (landscape) BarButton(Icons.back, "Back", onBack)
-            // A video's mark stands on its poster only: once the player is up, its own controls
-            // take this corner and it plainly is a video.
-            if (photo.mediaType != MediaType.VIDEO || videoPath == null) ViewerMark(photo.mediaType)
-        }
+            Row(
+                Modifier.align(Alignment.TopStart).padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (landscape) BarButton(Icons.back, "Back", onBack)
+                // A video's mark stands on its poster only: once the player is up, its own controls
+                // take this corner and it plainly is a video.
+                if (photo.mediaType != MediaType.VIDEO || videoPath == null) ViewerMark(photo.mediaType)
+            }
 
-        if (!landscape) {
-            Column(Modifier.align(Alignment.BottomStart)) {
-                Filmstrip(photos, index, thumbnails, onSelect)
-                Text(
-                    photo.takenAt?.toString()?.substringBefore('T') ?: "undated",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                )
+            if (!landscape) {
+                Column(Modifier.align(Alignment.BottomStart)) {
+                    Filmstrip(photos, index, thumbnails, onSelect)
+                    Text(
+                        photo.takenAt?.toString()?.substringBefore('T') ?: "undated",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    )
+                }
             }
         }
     }

@@ -18,14 +18,15 @@ import net.stho.photos.app.BlobStore
  * §4's layout keeps two directories, and the split is policy rather than tidiness: a pack is
  * always kept so that every grid opens instantly and offline, while `blobs/` is what a clear
  * empties. A pack is recognised by having been *written* as one — [packs] is consulted first on
- * every lookup, so an id that arrived as a pack is never later mistaken for media.
+ * every lookup, so an id that arrived as a pack is never later mistaken for media. A media blob
+ * lands under the extension its bytes call for ([MediaFiles]).
  */
 public class FileBlobStore(
     private val s3: S3Client,
     cacheRoot: Path,
 ) : BlobStore {
 
-    private val media = Path(cacheRoot, "blobs")
+    private val media = MediaFiles(cacheRoot)
     private val packs = Path(cacheRoot, "packs")
 
     /**
@@ -38,7 +39,6 @@ public class FileBlobStore(
     private val knownPacks = mutableSetOf<ObjectId>()
 
     init {
-        SystemFileSystem.createDirectories(media)
         SystemFileSystem.createDirectories(packs)
     }
 
@@ -50,17 +50,18 @@ public class FileBlobStore(
     /** Where a pack ends up, for the reader that opens it as a SQLite file. */
     public fun packPath(id: ObjectId): Path = Path(packs, "$id.db")
 
-    override fun has(id: ObjectId): Boolean = SystemFileSystem.exists(pathFor(id))
+    override fun has(id: ObjectId): Boolean =
+        if (id in knownPacks) SystemFileSystem.exists(packPath(id)) else media.find(id) != null
 
     override suspend fun fetch(id: ObjectId) {
-        val target = pathFor(id)
-        if (SystemFileSystem.exists(target)) return
+        if (has(id)) return
+        val pack = id in knownPacks
         // A scratch name per attempt, so two fetches of one blob can never rename each other's
         // file out from under themselves.
-        val partial = Path(target.parent!!, "${target.name}.${Uuid.random()}.part")
+        val partial = Path(if (pack) packs else media.directory, "$id.${Uuid.random()}.part")
         try {
             s3.download(id.blobKey, to = partial)
-            SystemFileSystem.atomicMove(partial, target)
+            SystemFileSystem.atomicMove(partial, if (pack) packPath(id) else media.named(id, partial))
         } catch (failure: Throwable) {
             // Cancellation included: an abandoned fetch must not leave a partial file behind for
             // the next `present()` to count as held. The queue decides what a failure means.
@@ -70,7 +71,7 @@ public class FileBlobStore(
     }
 
     override fun delete(id: ObjectId) {
-        SystemFileSystem.delete(Path(media, id.toString()), mustExist = false)
+        media.delete(id)
     }
 
     /**
@@ -81,15 +82,8 @@ public class FileBlobStore(
      * skipped: a fetch in flight is not something the rows should count as held.
      */
     override fun present(): Set<ObjectId> = buildSet {
-        for (directory in listOf(media, packs)) {
-            for (entry in SystemFileSystem.list(directory)) {
-                val name = entry.name
-                if (name.endsWith(".part")) continue
-                ObjectId.parse(name.removeSuffix(".db"))?.let(::add)
-            }
+        for (directory in listOf(media.directory, packs)) {
+            for (entry in SystemFileSystem.list(directory)) media.idOf(entry.name)?.let(::add)
         }
     }
-
-    private fun pathFor(id: ObjectId): Path =
-        if (id in knownPacks) packPath(id) else Path(media, id.toString())
 }
