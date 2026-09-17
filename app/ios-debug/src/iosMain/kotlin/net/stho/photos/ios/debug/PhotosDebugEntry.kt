@@ -33,15 +33,26 @@ public object PhotosDebugEntry {
      */
     private val livePhoto = AtomicReference("none")
 
+    /** Every playback the Live Photo view has begun or ended since launch, oldest first. */
+    private val livePlayback = AtomicReference("")
+
+    /** Whether the open video plays `muted` or `unmuted`; empty before any video opened. */
+    private val videoSound = AtomicReference("")
+
     public fun viewController(): UIViewController {
-        val root = PhotosRoot(onLivePhoto = { livePhoto.value = it })
+        val root = PhotosRoot(
+            onLivePhoto = { livePhoto.value = it },
+            // Written on the main queue only, so read-then-write cannot race another write.
+            onLivePlayback = { event -> livePlayback.value = livePlayback.value.let { if (it.isEmpty()) event else "$it,$event" } },
+            onVideoSound = { videoSound.value = it },
+        )
         // The view controller first: building it is what runs `launcher.start()`, which reads the
         // Keychain. The launcher's state starts as `Setup`, so a server started before that read
         // answers `/state` with "setup" for an app that is in fact set up -- measured, as the iOS
         // suite's relaunch check failing on a slow runner and passing on faster ones.
         val controller = root.viewController()
         getenv("PHOTOS_CONTROL_PORT")?.toKString()?.toIntOrNull()?.let { port ->
-            server = ControlServer(port, root.launcher, extras = { mapOf("livePhoto" to livePhoto.value) })
+            server = ControlServer(port, root.launcher, extras = { mapOf("livePhoto" to livePhoto.value, "livePlayback" to livePlayback.value, "videoSound" to videoSound.value) })
                 .also { it.start() }
         }
         return controller

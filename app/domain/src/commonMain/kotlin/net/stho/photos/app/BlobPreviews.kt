@@ -12,7 +12,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.io.files.Path
-import kotlinx.io.files.SystemFileSystem
 import net.stho.photos.model.PhotoRow
 
 /**
@@ -32,7 +31,7 @@ public class BlobPreviews(
     private val scope: CoroutineScope,
 ) : Previews, Videos {
 
-    private val directory = Path(cacheRoot, "blobs")
+    private val media = MediaFiles(cacheRoot)
 
     /**
      * The decoded cache, as an immutable map behind a `StateFlow`.
@@ -61,10 +60,6 @@ public class BlobPreviews(
     private val inFlight = mutableMapOf<Uuid, Deferred<Preview?>>()
     private val guard = Mutex()
 
-    init {
-        SystemFileSystem.createDirectories(directory)
-    }
-
     override fun cached(photo: PhotoRow): Preview? = decoded.value[photo.id]
 
     override suspend fun load(photo: PhotoRow): Preview? {
@@ -90,7 +85,8 @@ public class BlobPreviews(
     private suspend fun fetchAndDecode(photo: PhotoRow): Preview? {
         val blob = photo.imageId ?: return null
         queue.awaitHeld(blob)
-        val image = decoder.decode(Path(directory, blob.toString())) ?: return null
+        // Null only when a clear removed it between landing and here.
+        val image = decoder.decode(media.find(blob) ?: return null) ?: return null
         return Preview(photo.id, image).also { preview -> remember(photo.id, preview) }
     }
 
@@ -118,19 +114,20 @@ public class BlobPreviews(
     override suspend fun localFile(photo: PhotoRow): String? {
         val blob = photo.videoId ?: return null
         queue.awaitHeld(blob)
-        return Path(directory, blob.toString()).toString()
+        return media.find(blob)?.toString()
     }
 
     /**
      * Both halves of a Live Photo, once the queue holds both. They are already tier 0 — the open
-     * photo's `objectIds` include them — so this only waits, exactly as [localFile] does.
+     * photo's `objectIds` include them — so this only waits, exactly as [localFile] does. The
+     * paths are the blobs themselves, whose extensions are what `PHLivePhoto` pairs by (§6).
      */
     override suspend fun livePair(photo: PhotoRow): LivePair? {
         val still = photo.liveStillId ?: return null
         val video = photo.liveVideoId ?: return null
         queue.awaitHeld(still)
         queue.awaitHeld(video)
-        return LivePair(Path(directory, still.toString()).toString(), Path(directory, video.toString()).toString())
+        return LivePair(media.find(still)?.toString() ?: return null, media.find(video)?.toString() ?: return null)
     }
 
     /** Leaving the album abandons the queue *and* whatever it had already started. */

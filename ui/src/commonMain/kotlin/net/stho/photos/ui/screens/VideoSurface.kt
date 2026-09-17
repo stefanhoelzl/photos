@@ -1,6 +1,10 @@
 package net.stho.photos.ui.screens
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 
@@ -44,3 +48,20 @@ public fun interface LivePhotoSurface {
 /** Provided by the composition root. The default draws nothing, for the reason [LocalVideoSurface]'s does. */
 public val LocalLivePhotoSurface: androidx.compose.runtime.ProvidableCompositionLocal<LivePhotoSurface> =
     staticCompositionLocalOf { LivePhotoSurface { _, _, _ -> } }
+
+/**
+ * Whether sound was asked for in this viewer session.
+ *
+ * A video opens muted; unmuting one is a person saying they want to hear it, so the videos and
+ * Live Photos after it in the same viewer play with sound too — even with the phone on silent,
+ * since unmuting is that override. The [Viewer] owns it, so leaving for the grid mutes again.
+ * Only the platform surfaces read and write it; shared code draws no sound control.
+ */
+@Stable
+public class ViewerSound {
+    public var unmuted: Boolean by mutableStateOf(false)
+}
+
+/** Provided by the [Viewer]. The default is a session nobody unmuted. */
+public val LocalViewerSound: androidx.compose.runtime.ProvidableCompositionLocal<ViewerSound> =
+    staticCompositionLocalOf { ViewerSound() }

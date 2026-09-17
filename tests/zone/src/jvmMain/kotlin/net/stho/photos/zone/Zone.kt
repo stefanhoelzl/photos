@@ -268,6 +268,9 @@ public class MediaAlbum(
 
     public fun bytesOf(id: ObjectId): ByteArray = files.getValue(id).readBytes()
 
+    /** Each blob as the app's cache names it on disk: `<id>.<ext>`, the extension its bytes call for. */
+    public val cachedNames: Set<String> get() = objectIds.map { "$it.${files.getValue(it).extension}" }.toSet()
+
     public fun row(type: MediaType): PhotoRow = rows.single { it.mediaType == type }
 }
 

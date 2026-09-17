@@ -15,7 +15,7 @@ class CacheTest {
 
         post("/cache?album=${album.id}&action=download")
         awaitState("the album to be held") { it.album("Weekend").cache().flag("complete") }
-        assertEquals(album.objectIds.map { it.toString() }.toSet(), blobsOnDisk(), "exactly the rows' six objects")
+        assertEquals(album.cachedNames, blobsOnDisk(), "exactly the rows' six objects, each under its own extension")
         screenshot("cache-downloaded")
 
         post("/cache?album=${album.id}&action=clear")

@@ -25,6 +25,7 @@ import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.storage.S3Client
 import net.stho.photos.storage.StorageUrl
 import net.stho.photos.storage.retryStorageFailures
+import platform.Foundation.NSFileManager
 
 /**
  * The composition root, as a value — `:app:desktop`'s `PhotosApp` with four lines changed.
@@ -81,6 +82,11 @@ public class PhotosApp(
     override val uploads: UploadModel = UploadModel(gallery, upload, scope)
 
     init {
+        // Playback used to reach blobs through symbolic links here; blobs now carry their own
+        // extension (`MediaFiles`), so what an earlier build left is only dead links.
+        @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+        NSFileManager.defaultManager.removeItemAtPath(Path(cacheRoot, "playable").toString(), error = null)
+
         // The nav bar counts packs down as they land. The queue knows what is held; only this
         // root knows which of those ids are packs, so the counting happens here.
         scope.launch {
