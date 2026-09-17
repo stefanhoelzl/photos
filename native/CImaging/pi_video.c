@@ -288,57 +288,57 @@ int pi_video_transcode(const char *in_path, const char *out_path,
         }
     }
 
+    /* From here a soundtrack we can decode is kept or the file fails. Dropping it quietly is how
+     * every transcode once came out silent: the graph below needs `aformat`, the ffmpeg build did
+     * not enable it, and each failure here fell back to video only without a word. */
     if (a.dec) {
         const AVCodec *aenc_codec = avcodec_find_encoder(AV_CODEC_ID_AAC);
-        if (aenc_codec) {
-            a.enc = avcodec_alloc_context3(aenc_codec);
-            av_channel_layout_default(&a.enc->ch_layout,
-                                      a.dec->ch_layout.nb_channels > 2 ? 2 : a.dec->ch_layout.nb_channels);
-            a.enc->sample_rate = a.dec->sample_rate > 0 ? a.dec->sample_rate : 44100;
-            const enum AVSampleFormat *sfmts = NULL;
-            int nsfmts = 0;
-            a.enc->sample_fmt = AV_SAMPLE_FMT_FLTP;
-            if (avcodec_get_supported_config(NULL, aenc_codec, AV_CODEC_CONFIG_SAMPLE_FORMAT,
-                                             0, (const void **)&sfmts, &nsfmts) >= 0
-                && sfmts && nsfmts > 0)
-                a.enc->sample_fmt = sfmts[0];
-            a.enc->bit_rate = 128000;
-            a.enc->time_base = (AVRational){ 1, a.enc->sample_rate };
-            if (ofmt->oformat->flags & AVFMT_GLOBALHEADER)
-                a.enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+        if (!aenc_codec) { rc = pi_fail(err, PI_ERR_UNSUPPORTED, "aac encoder not built in"); goto done; }
+        a.enc = avcodec_alloc_context3(aenc_codec);
+        av_channel_layout_default(&a.enc->ch_layout,
+                                  a.dec->ch_layout.nb_channels > 2 ? 2 : a.dec->ch_layout.nb_channels);
+        a.enc->sample_rate = a.dec->sample_rate > 0 ? a.dec->sample_rate : 44100;
+        const enum AVSampleFormat *sfmts = NULL;
+        int nsfmts = 0;
+        a.enc->sample_fmt = AV_SAMPLE_FMT_FLTP;
+        if (avcodec_get_supported_config(NULL, aenc_codec, AV_CODEC_CONFIG_SAMPLE_FORMAT,
+                                         0, (const void **)&sfmts, &nsfmts) >= 0
+            && sfmts && nsfmts > 0)
+            a.enc->sample_fmt = sfmts[0];
+        a.enc->bit_rate = 128000;
+        a.enc->time_base = (AVRational){ 1, a.enc->sample_rate };
+        if (ofmt->oformat->flags & AVFMT_GLOBALHEADER)
+            a.enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
-            if (avcodec_open2(a.enc, aenc_codec, NULL) < 0) {
-                avcodec_free_context(&a.enc);
-                avcodec_free_context(&a.dec);
-                a.in_index = -1;
-            } else {
-                char layout[64];
-                av_channel_layout_describe(&a.dec->ch_layout, layout, sizeof(layout));
-                snprintf(args, sizeof(args),
-                         "time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=%s",
-                         ifmt->streams[as]->time_base.num, ifmt->streams[as]->time_base.den,
-                         a.dec->sample_rate, av_get_sample_fmt_name(a.dec->sample_fmt), layout);
-                char adesc[256];
-                char outlayout[64];
-                av_channel_layout_describe(&a.enc->ch_layout, outlayout, sizeof(outlayout));
-                snprintf(adesc, sizeof(adesc),
-                         "aresample=%d,aformat=sample_fmts=%s:channel_layouts=%s",
-                         a.enc->sample_rate, av_get_sample_fmt_name(a.enc->sample_fmt), outlayout);
-                if (pi_build_graph(&a, args, adesc, "abuffer", "abuffersink",
-                                   AVMEDIA_TYPE_AUDIO, err) != PI_OK) {
-                    avcodec_free_context(&a.enc);
-                    avcodec_free_context(&a.dec);
-                    avfilter_graph_free(&a.graph);
-                    a.in_index = -1;
-                    pi_ok(err);
-                } else {
-                    AVStream *os = avformat_new_stream(ofmt, NULL);
-                    avcodec_parameters_from_context(os->codecpar, a.enc);
-                    os->time_base = a.enc->time_base;
-                    a.out_index = os->index;
-                }
-            }
+        if (avcodec_open2(a.enc, aenc_codec, NULL) < 0) {
+            rc = pi_fail(err, PI_ERR_ENCODE, "cannot open aac encoder");
+            goto done;
         }
+        char layout[64];
+        av_channel_layout_describe(&a.dec->ch_layout, layout, sizeof(layout));
+        snprintf(args, sizeof(args),
+                 "time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=%s",
+                 ifmt->streams[as]->time_base.num, ifmt->streams[as]->time_base.den,
+                 a.dec->sample_rate, av_get_sample_fmt_name(a.dec->sample_fmt), layout);
+        char adesc[256];
+        char outlayout[64];
+        av_channel_layout_describe(&a.enc->ch_layout, outlayout, sizeof(outlayout));
+        snprintf(adesc, sizeof(adesc),
+                 "aresample=%d,aformat=sample_fmts=%s:channel_layouts=%s",
+                 a.enc->sample_rate, av_get_sample_fmt_name(a.enc->sample_fmt), outlayout);
+        if (pi_build_graph(&a, args, adesc, "abuffer", "abuffersink",
+                           AVMEDIA_TYPE_AUDIO, err) != PI_OK) {
+            rc = err ? err->code : PI_ERR_DECODE;
+            goto done;
+        }
+        /* AAC takes exactly frame_size samples per frame, and a resampler hands over whatever it
+         * has; without this the encoder refuses frames of any other length. */
+        if (!(aenc_codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE) && a.enc->frame_size > 0)
+            av_buffersink_set_frame_size(a.sink, (unsigned)a.enc->frame_size);
+        AVStream *os = avformat_new_stream(ofmt, NULL);
+        avcodec_parameters_from_context(os->codecpar, a.enc);
+        os->time_base = a.enc->time_base;
+        a.out_index = os->index;
     }
 
     if (!(ofmt->oformat->flags & AVFMT_NOFILE)) {
@@ -381,9 +381,15 @@ int pi_video_transcode(const char *in_path, const char *out_path,
                                                  AV_BUFFERSRC_FLAG_KEEP_REF) >= 0) {
                     while (av_buffersink_get_frame(s->sink, filtered) >= 0) {
                         filtered->pts = filtered->best_effort_timestamp;
-                        pi_encode_and_write(ofmt, s, filtered, opkt,
-                                            av_buffersink_get_time_base(s->sink));
+                        int wrc = pi_encode_and_write(ofmt, s, filtered, opkt,
+                                                      av_buffersink_get_time_base(s->sink));
                         av_frame_unref(filtered);
+                        if (wrc < 0 && s == &a) {
+                            av_frame_unref(frame);
+                            av_packet_unref(pkt);
+                            rc = pi_fail(err, PI_ERR_ENCODE, "audio encode failed");
+                            goto done;
+                        }
                     }
                 }
                 av_frame_unref(frame);

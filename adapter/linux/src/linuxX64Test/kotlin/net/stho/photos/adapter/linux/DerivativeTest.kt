@@ -19,6 +19,7 @@ import net.stho.photos.exif.Dimensions
 import net.stho.photos.fixtures.readBytes
 import net.stho.photos.fixtures.syntheticJpeg
 import net.stho.photos.fixtures.withScratchDirectory
+import net.stho.photos.fixtures.writeSyntheticVideo
 import net.stho.photos.fixtures.write
 import net.stho.photos.model.MediaType
 import net.stho.photos.pipeline.MediaItem
@@ -231,6 +232,20 @@ class PipelineTest {
         assertEquals(MediaType.PHOTO, derived.row.mediaType)
         assertNull(derived.video)
         assertNull(derived.liveStill)
+    }
+
+    @Test
+    fun aVideoKeepsItsSoundtrack() = withScratchDirectory("sound") { directory ->
+        // Every transcode once came out silent: the audio graph needed a filter the ffmpeg build
+        // left out, and the transcoder fell back to video only without saying so.
+        val source = Path(directory, "clip.mov")
+        writeSyntheticVideo(source, width = 64, height = 48, frames = 25, audio = true)
+        assertTrue(probeVideo(source.toString()).hasAudio, "the fixture carries a soundtrack")
+
+        val derived = CImagingPipeline(workDirectory = directory.toString())
+            .derive(MediaItem(source.toString(), MediaItem.Kind.Video, byteCount = 0))
+
+        assertTrue(probeVideo(requireNotNull(derived.video)).hasAudio, "and so does its transcode")
     }
 
     @Test
