@@ -2007,7 +2007,8 @@ verified.
 and its photos" when an album was chosen. It goes only when it holds nothing besides the uploaded
 assets: a photo added to it after it was chosen keeps its album, and nothing that did not go up is
 touched. The album is decided before the change, and the assets and the album are deleted in *one*
-PhotoKit change, so iOS still asks once and a refusal keeps both. An album an app may not delete —
+PhotoKit change, which iOS confirms with two alerts — one for the album, one for its photos — and
+which applies whole or not at all. An album an app may not delete —
 synced from a computer, or shared — is left without a word. The gallery album's id is part of the
 upload's persisted request, so a resumed upload deletes it too; a request written before this
 carries none and deletes the photos alone. On the desktop stand-in the album's folder goes once it
