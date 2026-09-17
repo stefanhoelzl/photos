@@ -23,6 +23,10 @@ public interface Gallery {
      *
      * **Newest first** (§8): the picker answers "what did I just shoot". An upload sends the other
      * way, which [Naming] takes care of.
+     *
+     * The picker's year headings are drawn wherever the year changes from one row to the next, so
+     * they follow whichever way this runs and a list in no order at all shows a year twice rather
+     * than claiming something untrue.
      */
     public suspend fun assets(album: GalleryAlbum?): List<GalleryAsset>
 
@@ -69,6 +73,13 @@ public data class GalleryAsset(
     /** The camera's name for it, whose stem the uploaded file keeps: `IMG_1234`. */
     val filename: String,
     val mediaType: MediaType,
+    /**
+     * The library's own date, which the picker groups by year (§8). Null when it has none.
+     *
+     * Provisional like [ExportedAsset.takenAt], and read from the record rather than the file:
+     * listing is one query for the whole library, and the year heading is worth no more than that.
+     */
+    val takenAt: Instant? = null,
 )
 
 /** One asset on disk, ready to become a row. */

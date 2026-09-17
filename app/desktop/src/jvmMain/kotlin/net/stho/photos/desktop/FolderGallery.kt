@@ -27,9 +27,10 @@ import net.stho.photos.model.MediaType
  *
  * Each subdirectory is a gallery album and each file an asset. A still and a video sharing a stem
  * are a Live Photo, which is how an iPhone's export names the pair. What the phone reads from
- * PhotoKit's record comes from the file here: the date is its modification time and there is no
- * location. Both are provisional on the phone too, since the laptop re-derives every row from
- * EXIF when it encodes the album.
+ * PhotoKit's record comes from the file here: the date is its modification time — which heads the
+ * picker's years and fills the uploaded row, though it orders neither — and there is no location.
+ * Both are provisional on the phone too, since the laptop re-derives every row from EXIF when it
+ * encodes the album.
  */
 internal class FolderGallery(private val root: File, private val imaging: FfmImaging?) : Gallery {
 
@@ -42,7 +43,8 @@ internal class FolderGallery(private val root: File, private val imaging: FfmIma
     /**
      * Newest first (§8), which here means name descending: a directory has no date of its own
      * worth trusting — a modification time is whatever last copied the file — and the camera's
-     * names already run in the order it shot them.
+     * names already run in the order it shot them. That is also why the order is the names' and
+     * not [GalleryAsset.takenAt]'s: the date is good enough to head a year with, not to sort by.
      */
     override suspend fun assets(album: GalleryAlbum?): List<GalleryAsset> =
         (if (album == null) folders() else listOf(File(root, album.id))).flatMap(::entries).reversed()
@@ -97,10 +99,11 @@ internal class FolderGallery(private val root: File, private val imaging: FfmIma
         val paired = files.filter(::isStill).mapNotNull(::pairOf).toSet()
         return files.mapNotNull { file ->
             val id = file.relativeTo(root).path
+            val takenAt = Instant.fromEpochMilliseconds(file.lastModified())
             when {
                 isStill(file) ->
-                    GalleryAsset(id, file.name, if (pairOf(file) != null) MediaType.LIVE_PHOTO else MediaType.PHOTO)
-                isVideo(file) && file !in paired -> GalleryAsset(id, file.name, MediaType.VIDEO)
+                    GalleryAsset(id, file.name, if (pairOf(file) != null) MediaType.LIVE_PHOTO else MediaType.PHOTO, takenAt)
+                isVideo(file) && file !in paired -> GalleryAsset(id, file.name, MediaType.VIDEO, takenAt)
                 else -> null
             }
         }

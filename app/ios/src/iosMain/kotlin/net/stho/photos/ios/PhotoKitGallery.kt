@@ -23,6 +23,7 @@ import platform.CoreGraphics.CGRectMake
 import platform.CoreGraphics.CGSize
 import platform.CoreGraphics.CGSizeMake
 import platform.Foundation.NSData
+import platform.Foundation.NSDate
 import platform.Foundation.NSError
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSSortDescriptor
@@ -168,7 +169,7 @@ internal class PhotoKitGallery : Gallery {
             mediaType = asset.mediaType,
             file = file,
             pairedVideo = paired,
-            takenAt = found.creationDate?.let { Instant.fromEpochMilliseconds((it.timeIntervalSince1970 * 1000).toLong()) },
+            takenAt = found.creationDate?.instant(),
             latitude = coordinate?.first,
             longitude = coordinate?.second,
             width = found.pixelWidth.toInt(),
@@ -292,7 +293,13 @@ internal class PhotoKitGallery : Gallery {
             (mediaSubtypes and PHAssetMediaSubtypePhotoLive) != 0uL -> MediaType.LIVE_PHOTO
             else -> MediaType.PHOTO
         },
+        // A property of the record the fetch already has — unlike the filename beside it, which
+        // would be a query per asset. It is the fetch's sort key too, so the picker's year
+        // headings follow the order they are drawn in.
+        takenAt = creationDate?.instant(),
     )
+
+    private fun NSDate.instant(): Instant = Instant.fromEpochMilliseconds((timeIntervalSince1970 * 1000).toLong())
 
     private inline fun <reified T> PHFetchResult.items(): List<T> =
         (0 until count.toInt()).mapNotNull { objectAtIndex(it.toULong()) as? T }
