@@ -1,5 +1,8 @@
+@file:OptIn(kotlin.concurrent.atomics.ExperimentalAtomicApi::class)
+
 package net.stho.photos.app
 
+import kotlin.concurrent.atomics.AtomicReference
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,6 +43,14 @@ public class PackFetcher(
     override val arrivals: StateFlow<Int> = _arrivals.asStateFlow()
     private val _outstanding = MutableStateFlow(0)
     override val outstanding: StateFlow<Int> = _outstanding.asStateFlow()
+
+    /**
+     * Every album as the catalog last stood, which arrivals are counted against — null until the
+     * launch read or the first sweep. Replaced on every sweep: a sync can give an album a pack it
+     * did not have, an addition landing (§8), and a count against a list read at launch never saw
+     * that pack arrive, so the grid it belongs to never reloaded.
+     */
+    private val albums = AtomicReference<List<Album>?>(null)
 
     init {
         SystemFileSystem.createDirectories(directory)
@@ -104,18 +115,33 @@ public class PackFetcher(
      * makes it acceptable for an explicit download to sit below it on the ladder.
      */
     public fun sweep(albums: List<Album>) {
+        this.albums.store(albums)
         val wanted = albums.flatMap { it.packRefs() }.filterNot { store.has(it.id) }
         wanted.forEach { store.expectPack(it.id) }
-        _outstanding.value = wanted.size
         queue.sweepPacks(wanted)
+        // Counted now as well as on the next arrival: a pack this sync added may already be on
+        // disk, and then no arrival is coming to count it.
+        count(albums) { store.has(it) }
+    }
+
+    /**
+     * The catalog as it stood at launch, so arrivals count before the first sync. Kept only while
+     * no sweep has run: a sweep's list is newer than any launch read.
+     */
+    public fun seed(albums: List<Album>) {
+        this.albums.compareAndSet(null, albums)
     }
 
     /** Called by the composition root as packs land, so the nav bar can count them down. */
-    public fun noteArrivals(held: Set<net.stho.photos.catalog.ObjectId>, albums: List<Album>) {
+    public fun noteArrivals(held: Set<net.stho.photos.catalog.ObjectId>) {
+        count(albums.load().orEmpty()) { it in held }
+    }
+
+    private fun count(albums: List<Album>, landed: (net.stho.photos.catalog.ObjectId) -> Boolean) {
         val packs = albums.flatMap { it.packs }
-        val landed = packs.count { it in held }
-        _arrivals.value = landed
-        _outstanding.value = (packs.size - landed).coerceAtLeast(0)
+        val done = packs.count(landed)
+        _arrivals.value = done
+        _outstanding.value = (packs.size - done).coerceAtLeast(0)
     }
 
     /**
