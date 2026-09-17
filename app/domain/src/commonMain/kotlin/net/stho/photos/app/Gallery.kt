@@ -18,7 +18,12 @@ public interface Gallery {
     /** The library's albums, in the order the platform lists them. */
     public suspend fun albums(): List<GalleryAlbum>
 
-    /** An album's assets, or every asset in the library when [album] is null — the loose picker. */
+    /**
+     * An album's assets, or every asset in the library when [album] is null — the loose picker.
+     *
+     * **Newest first** (§8): the picker answers "what did I just shoot". An upload sends the other
+     * way, which [Naming] takes care of.
+     */
     public suspend fun assets(album: GalleryAlbum?): List<GalleryAsset>
 
     /** One asset by id, or null once it has left the library — for an upload resumed after a kill. */

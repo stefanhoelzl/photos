@@ -120,12 +120,12 @@ internal class PhotoKitGallery : Gallery {
     }
 
     /**
-     * Oldest first, like an album here (§3). Listed without filenames: reading an asset's
-     * resources is a query per asset, and the picker never shows a name — [asset] fills it in.
+     * Newest first (§8). Listed without filenames: reading an asset's resources is a query per
+     * asset, and the picker never shows a name — [asset] fills it in.
      */
     override suspend fun assets(album: GalleryAlbum?): List<GalleryAsset> {
         val options = PHFetchOptions().apply {
-            sortDescriptors = listOf(NSSortDescriptor.sortDescriptorWithKey("creationDate", ascending = true))
+            sortDescriptors = listOf(NSSortDescriptor.sortDescriptorWithKey("creationDate", ascending = false))
         }
         val result = if (album == null) {
             PHAsset.fetchAssetsWithOptions(options)

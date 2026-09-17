@@ -1911,6 +1911,17 @@ upload icon               on the album list, a container, or inside an album
                           once it holds nothing else
 ```
 
+**The picker's grid is newest first**, the one order in the app that is — it answers *what did I
+just shoot*, not *how did this album go*, and a library's newest photo is the one being uploaded.
+It opens on it: the grid's scroll is its own and starts at the top, so there is nothing to scroll
+to. §3's rules are about the catalog, and the gallery is not the catalog — inside an album the
+photos stay oldest first, and there is no sort to choose in either place.
+
+**An upload still sends oldest first**, whichever way the grid was read. The order decides only
+which of two photos sharing a camera name keeps it and which gains ` (2)`, so it stays
+first-come-first-served, and a gallery album taken whole names its photos exactly as a loose pick
+of the same photos would. The album's own order comes from `taken_at` (§3) and never from this.
+
 **No prompt appears during the upload flow.** The password was read from the Keychain when the
 app launched (§1) and is already in memory; tapping Upload uses it to pre-sign every PUT for
 this album, and the background session then runs against those URLs alone.

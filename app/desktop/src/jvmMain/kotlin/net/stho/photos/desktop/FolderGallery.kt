@@ -39,8 +39,13 @@ internal class FolderGallery(private val root: File, private val imaging: FfmIma
     override suspend fun albums(): List<GalleryAlbum> =
         folders().map { GalleryAlbum(it.name, it.name, entries(it).size) }
 
+    /**
+     * Newest first (§8), which here means name descending: a directory has no date of its own
+     * worth trusting — a modification time is whatever last copied the file — and the camera's
+     * names already run in the order it shot them.
+     */
     override suspend fun assets(album: GalleryAlbum?): List<GalleryAsset> =
-        (if (album == null) folders() else listOf(File(root, album.id))).flatMap(::entries)
+        (if (album == null) folders() else listOf(File(root, album.id))).flatMap(::entries).reversed()
 
     override suspend fun asset(id: String): GalleryAsset? {
         val folder = File(root, id).parentFile ?: return null

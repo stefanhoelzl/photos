@@ -20,7 +20,7 @@ public data class PickerUi(
     /** Null until the platform has answered. */
     val access: GalleryAccess? = null,
     val albums: List<GalleryAlbum> = emptyList(),
-    /** Every asset, for picking loose photos. */
+    /** Every asset, for picking loose photos — newest first (§8). */
     val assets: List<GalleryAsset> = emptyList(),
     val selected: Set<String> = emptySet(),
     val thumbnails: Map<String, ByteArray> = emptyMap(),
@@ -33,6 +33,10 @@ public data class PickerUi(
 public data class Naming(
     /** The album field's text: a path from the library root, `Trips / Italy`. */
     val text: String,
+    /**
+     * Oldest first, whatever the picker showed (§8) — so a clashing filename is the newer photo's
+     * ` (2)`, and a whole gallery album and a loose pick name their photos the same way.
+     */
     val assetIds: List<String>,
     /** The albums the photos can go into, read when the dialog opened. */
     val targets: UploadTargets,
@@ -125,11 +129,16 @@ public class UploadModel(
         name(picker.assets.map(GalleryAsset::id).filter { it in picker.selected }, galleryAlbum = null)
     }
 
+    /**
+     * The dialog for [assetIds], and the one seam where the picker's order becomes an upload's:
+     * the grid reads newest first (§8) and what goes up is turned back, so both ways in here send
+     * the oldest photo first.
+     */
     private fun name(assetIds: List<String>, galleryAlbum: GalleryAlbum?) {
         val targets = targets()
         _picker.update { picker ->
             val text = targets.prefill(start = picker.parent, addTo = picker.addTo, galleryName = galleryAlbum?.name)
-            picker.copy(naming = Naming(text, assetIds, targets, galleryAlbum = galleryAlbum?.id).typed(text))
+            picker.copy(naming = Naming(text, assetIds.reversed(), targets, galleryAlbum = galleryAlbum?.id).typed(text))
         }
     }
 
