@@ -59,6 +59,21 @@ public data class Naming(
 }
 
 /**
+ * The key the picker's photo rows carry — the row's first asset — which a remembered [Scroll]
+ * names, and which [UploadModel] reads the asset back out of to fetch that part of the library
+ * first.
+ *
+ * Here rather than in the screen because both ends have to agree on it, the way `ListEntry.key`
+ * does for the album list. Which photos share a row stays the screen's own: that is its layout.
+ */
+public fun photoRowKey(assetId: String): String = ROW_KEY + assetId
+
+/** The asset [photoRowKey] names, or null for an album row or a section label. */
+private fun assetOfRowKey(key: String?): String? = key?.takeIf { it.startsWith(ROW_KEY) }?.removePrefix(ROW_KEY)
+
+private const val ROW_KEY = "row:"
+
+/**
  * What the upload screens call.
  *
  * Separate from [AppModel] because nothing else in the app reads the gallery, and the uploads
@@ -75,6 +90,16 @@ public class UploadModel(
 
     public val statuses: StateFlow<List<UploadStatus>> get() = uploads.statuses
 
+    /**
+     * Where the picker was left, for the next upload: §8's one position, in memory only.
+     *
+     * Outside [PickerUi] because [open] and [close] both replace that snapshot, and the whole
+     * point of this is to outlive them — a second upload carries on through the library where the
+     * first one stopped. Read once, when the picker restores; never scrolled to while it is up.
+     */
+    public var pickerScroll: Scroll? = null
+        private set
+
     private var loading: Job? = null
 
     /** The upload icon: on the album list or in a container ([parent]), or inside the album [addTo]. */
@@ -89,7 +114,15 @@ public class UploadModel(
                 val albums = gallery.albums()
                 val assets = gallery.assets(null)
                 _picker.update { it.copy(albums = albums, assets = assets) }
-                for (asset in assets) {
+                // From where the picker is about to stand rather than from the library's head:
+                // restored thousands of photos down, loading front to back leaves that screen grey
+                // until the loop reaches it. It wraps round, so every thumbnail is still fetched.
+                val start = assetOfRowKey(pickerScroll?.key)
+                    ?.let { id -> assets.indexOfFirst { it.id == id } }
+                    ?.coerceAtLeast(0)
+                    ?: 0
+                for (step in assets.indices) {
+                    val asset = assets[(start + step) % assets.size]
                     val jpeg = gallery.thumbnail(asset) ?: continue
                     _picker.update { it.copy(thumbnails = it.thumbnails + (asset.id to jpeg)) }
                 }
@@ -216,6 +249,11 @@ public class UploadModel(
                 addTo = target.id,
             ),
         )
+    }
+
+    /** Where a scroll came to rest in the picker: the first item on screen, by key and position. */
+    public fun scrolled(key: String?, index: Int, offset: Int) {
+        pickerScroll = Scroll(key = key, index = index, offset = offset)
     }
 
     public fun close() {

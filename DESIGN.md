@@ -1913,14 +1913,25 @@ upload icon               on the album list, a container, or inside an album
 
 **The picker's grid is newest first**, the one order in the app that is — it answers *what did I
 just shoot*, not *how did this album go*, and a library's newest photo is the one being uploaded.
-It opens on it: the grid's scroll is its own and starts at the top, so there is nothing to scroll
-to. §3's rules are about the catalog, and the gallery is not the catalog — inside an album the
-photos stay oldest first, and there is no sort to choose in either place.
+The first open lands on it, the grid's scroll being its own; where a later one lands is the
+paragraph below. §3's rules are about the catalog, and the gallery is not the catalog — inside an
+album the photos stay oldest first, and there is no sort to choose in either place.
 
 **An upload still sends oldest first**, whichever way the grid was read. The order decides only
 which of two photos sharing a camera name keeps it and which gains ` (2)`, so it stays
 first-come-first-served, and a gallery album taken whole names its photos exactly as a loose pick
 of the same photos would. The album's own order comes from `taken_at` (§3) and never from this.
+
+**A later open comes back where the picker was left.** One position for the session, in memory
+only — the first item on screen named by key, its position as a fallback — so working down a
+library a batch at a time does not mean scrolling past everything that has already gone up. It is
+kept on the upload model rather than on the back stack, which drops a screen's scroll as the
+screen is left (§6): here that is exactly the moment worth remembering. The library is re-read on
+every open, so photos taken since are waiting at the top, and the thumbnails are fetched from the
+remembered position outward — from the newest end would leave a restored screen grey until the
+loop reached it. Photos uploaded and deleted from the device take their row's key with them; the
+position then falls back to the same place in the list, which the rows below it — the older
+photos — moving up make the next photo the upload did not take.
 
 **No prompt appears during the upload flow.** The password was read from the Keychain when the
 app launched (§1) and is already in memory; tapping Upload uses it to pre-sign every PUT for

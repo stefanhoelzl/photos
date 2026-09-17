@@ -139,6 +139,8 @@ class PickerDragTest {
                 },
                 onSelection = { state.value = state.value.copy(selected = it) },
                 onUseSelection = {},
+                scroll = null,
+                onScrolled = { _, _, _ -> },
                 modifier = Modifier.fillMaxSize(),
             )
         }
