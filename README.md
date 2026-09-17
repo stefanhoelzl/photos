@@ -135,7 +135,8 @@ neither `PHOTOS_ENDPOINT`/`PHOTOS_PASSWORD` nor a `photos-cli login` has answere
 `:tests:app`, against the real Debug app, the Keychain included. It needs the fixture media the
 Linux build writes (`:tests:fixtures:fixtureMedia`), passed as `-Pphotos.fixtureMedia=<dir>`, and
 it fails rather than skips when anything it needs is missing. CI runs it on every pull request, in
-a macOS job that waits for the Linux job's media, and a failure blocks the merge like any other.
+a macOS job that waits only for a small Linux job writing that media — not for the Linux build —
+and a failure blocks the merge like any other.
 
 Some of what the phone does cannot be asked for over HTTP: iOS confirms every deletion from the
 photo library with a system alert, and a Live Photo can only be *edited* through PhotoKit. For
