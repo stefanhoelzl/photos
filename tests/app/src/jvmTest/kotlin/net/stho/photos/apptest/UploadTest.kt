@@ -12,6 +12,7 @@ import kotlinx.coroutines.runBlocking
 import net.stho.photos.app.Naming
 import net.stho.photos.app.Resolution
 import net.stho.photos.app.Screen
+import net.stho.photos.app.UploadModel
 import net.stho.photos.app.UploadTarget
 import net.stho.photos.app.UploadStage
 import net.stho.photos.catalog.AlbumState
@@ -248,6 +249,44 @@ class UploadTest {
             assertEquals(3, alps.photoCount)
         }
     }
+
+    /** The fixture gallery album's photos in the order an upload sends them. */
+    private val oldestFirst = listOf("IMG_0001.heic", "IMG_0002.mp4", "IMG_0003.heic")
+
+    /**
+     * §8's two orders. The grid shows the newest photo first — the picker answers "what did I just
+     * shoot" — while the upload it makes still sends the oldest first, so a clashing filename lands
+     * on the newer photo and a whole gallery album names its photos the same way a loose pick does.
+     */
+    @Test
+    fun thePickerShowsTheNewestFirstAndSendsTheOldestFirst() = runBlocking {
+        scenario("upload-order") {
+            zone.galleryAlbum(gallery, "Weekend")
+            launch(withGallery = true)
+
+            val screen = assertNotNull(model.openUpload())
+            uploads.open(screen.parent, screen.addTo)
+            awaitTrue("the gallery's albums and thumbnails") {
+                val picker = uploads.picker.value
+                picker.albums.isNotEmpty() && picker.thumbnails.size == picker.assets.size
+            }
+
+            val shown = uploads.picker.value.assets
+            assertEquals(listOf("IMG_0003.heic", "IMG_0002.mp4", "IMG_0001.heic"), shown.map { it.filename })
+
+            uploads.setSelection(shown.map { it.id }.toSet())
+            uploads.chooseSelected()
+            assertEquals(oldestFirst, uploads.namedFilenames(), "what the loose pick sends")
+
+            uploads.dismissNaming()
+            uploads.chooseAlbum(uploads.picker.value.albums.single())
+            assertEquals(oldestFirst, uploads.namedFilenames(), "and a whole gallery album alike")
+        }
+    }
+
+    /** The harness names an asset by its path under the gallery root, so a row's name is its last segment. */
+    private fun UploadModel.namedFilenames() =
+        assertNotNull(picker.value.naming).assetIds.map { it.substringAfterLast('/') }
 
     /**
      * Picks the gallery's one album whole, lets [choose] settle where it goes — the dialog as

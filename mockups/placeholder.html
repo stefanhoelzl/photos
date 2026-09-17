@@ -715,7 +715,7 @@ phone(`${st}${hdr('Choose photos','from your iPhone library',null,true)}
   <div style="padding:8px 16px;font-size:11px;color:var(--dim)">Drag across thumbnails to select a range — UICollectionView’s multiple-selection interaction (iOS 13+).</div>
  </div></div>`,
  'Upload 1 — pick from the gallery',
- 'Reached by the upload icon; the album you were in becomes the parent. A custom browser over PHAssetCollection, not PHPicker — PHPicker cannot list or name albums, which the prefill needs.');
+ 'Reached by the upload icon; the album you were in becomes the parent. A custom browser over PHAssetCollection, not PHPicker — PHPicker cannot list or name albums, which the prefill needs. <b>The photos run newest first</b> — the one you just shot is the first tile — though what goes up is still sent oldest first.');
 
 /* upload 2 — name + options */
 phone(`${st}<div class="body"><div class="scroll"><div class="alist">${D.albums.slice(0,4).map((a,i)=>arow(a,cache(i))).join('')}</div></div>
