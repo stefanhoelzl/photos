@@ -578,12 +578,19 @@ class ReconcilerTest {
      * `Reisen` and `reisen` side by side on a case-sensitive disk. Either could be the album, so
      * neither is — nor anything beneath them, which would otherwise lose its parent — and nothing
      * is deleted.
+     *
+     * Only a case-sensitive disk can hold the two at once, so only one can pose the question: on the
+     * simulator's case-insensitive volume the second `mkdir` lands in the first folder, and there is
+     * no clash to find. The Linux run is what asserts the rule.
      */
     @Test
     fun siblingFoldersNamedAlikeButForCaseAreLeftAloneWithTheirChildren() {
         val library = LibraryFixture()
         library.file("Reisen/Italien/a.jpg")
         library.file("reisen/Kroatien/b.jpg")
+        // `exists` cannot tell the two apart here — it asks the filesystem, which folds the case.
+        // What the walk *reports* can: one folder, or two.
+        if (library.walk().albums.none { it.relativePath.trim('/') == "reisen/Kroatien" }) return
         library.file("Garten/c.jpg")
         val container = library.shard("Reisen", photos = emptyList())
         val italy = library.shard("Reisen/Italien", photos = listOf("a.jpg"), parent = container.info.id)
