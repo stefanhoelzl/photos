@@ -2041,6 +2041,13 @@ foreground and recomputed on return. Background uploads must come from files on 
 (`uploadTask(with:fromFile:)`), which suits us since derivatives are written out anyway.
 Presented as a **bottom sheet, minimizable** to a progress pill.
 
+The pill and its sheet **take the bottom of the window rather than float over it**: the screen
+above them shrinks, and the sheet stops at half the window with its rows scrolling inside. Drawn
+over the screen — which is how it started — the pill covered whatever sat at a screen's bottom
+edge, and the picker's own "Upload N selected" button was then unreachable for exactly as long as
+an upload ran. A toast still floats, above the pill: it is transient, it never reflows a list, and
+a tap anywhere on it dismisses it, so unlike the pill it can never strand a control beneath it.
+
 This is the one HTTP path that does not go through Ktor, whose Darwin engine cannot drive a
 background session — so it is a **`BackgroundUploader` port**, with a Kotlin/Native adapter
 over `URLSession` on iOS and a plain foreground implementation everywhere else, one PUT at a

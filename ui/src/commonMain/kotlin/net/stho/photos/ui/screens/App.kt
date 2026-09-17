@@ -1,11 +1,13 @@
 package net.stho.photos.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
@@ -66,7 +68,16 @@ public fun App(
     // gear sat under the clock (measured on an SE2). On the desktop they are zero.
     BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing)) {
         val landscape = maxWidth > maxHeight
-        Column(Modifier.fillMaxSize()) {
+        AppChrome(
+            // The date filter's calendar, over the screen and its nav bar: it carries its own ✕.
+            over = ui.calendar?.let { calendar ->
+                { CalendarSheet(calendar, ui.range, onApply = { model.applyRange(it) }, onClose = model::closeCalendar) }
+            },
+            toast = ui.notice?.let { notice ->
+                { Toast(notice, onSettings = model::openSettings, onDismiss = model::dismissNotice) }
+            },
+            pill = if (uploads != null && !viewing) ({ UploadProgress(uploads) }) else null,
+        ) {
             when (val screen = ui.screen) {
                 is Screen.Albums -> {
                     NavBar("Albums", ui.subtitle, onBack = null) {
@@ -197,18 +208,39 @@ public fun App(
                 }
             }
         }
-        // The date filter's calendar, over the whole screen and its nav bar: it carries its own ✕.
-        ui.calendar?.let { calendar ->
-            CalendarSheet(calendar, ui.range, onApply = { model.applyRange(it) }, onClose = model::closeCalendar)
+    }
+}
+
+/**
+ * The window's furniture: one [screen], the transient things over it, and the upload pill under it.
+ *
+ * **The pill is in the layout, not over it.** It takes real height and the screen above shrinks by
+ * it. Drawn as an overlay — which is how it started — it covered whatever sat at a screen's bottom
+ * edge, and the picker's "Upload N selected" button was then unreachable for as long as an upload
+ * ran: the one control you needed, behind the thing telling you why you needed it. A list's last
+ * row was covered by the same overlay, less painfully. No screen knows the pill exists; this does.
+ *
+ * A toast stays an overlay, inside the screen's box so it floats *above* the pill rather than over
+ * it. That is not an exception: a toast is transient and never reflows a list (see [Toast]), and a
+ * tap anywhere on it dismisses it — so unlike the pill it can never strand a control beneath it.
+ *
+ * [over] — the calendar — covers the screen and its nav bar, and stops above the pill, so an
+ * upload in progress stays visible and countable while the date filter is open.
+ */
+@Composable
+internal fun AppChrome(
+    over: (@Composable () -> Unit)? = null,
+    toast: (@Composable () -> Unit)? = null,
+    pill: (@Composable () -> Unit)? = null,
+    screen: @Composable ColumnScope.() -> Unit,
+) {
+    Column(Modifier.fillMaxSize()) {
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            Column(Modifier.fillMaxSize(), content = screen)
+            over?.invoke()
+            toast?.let { Box(Modifier.align(Alignment.BottomCenter)) { it() } }
         }
-        // Along the bottom edge, the toast above the upload pill: both are transient, and neither
-        // may cover the nav bar a person needs to get away from them.
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
-            ui.notice?.let { notice ->
-                Toast(notice, onSettings = model::openSettings, onDismiss = model::dismissNotice)
-            }
-            if (uploads != null && !viewing) UploadProgress(uploads)
-        }
+        pill?.invoke()
     }
 }
 

@@ -7,6 +7,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,19 +15,21 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import kotlin.uuid.Uuid
 import net.stho.photos.app.UploadTarget
 import net.stho.photos.app.Resolution
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
@@ -495,64 +498,85 @@ private fun Tag(text: String) {
     )
 }
 
-/**
- * The uploads, as a pill that browsing continues around, expanding to a sheet (§8).
- *
- * The pill names the album moving now and how many wait behind it; the sheet lists them all, each
- * with a cancel and, once one has failed, a retry. Nothing shows once every upload is done.
- */
+/** The uploads still moving, from the model. Nothing shows once every one of them is done. */
 @Composable
 internal fun UploadProgress(uploads: UploadModel) {
     val statuses by uploads.statuses.collectAsState()
-    val shown = statuses.filter { it.stage != UploadStage.Done }
+    UploadBar(
+        statuses.filter { it.stage != UploadStage.Done },
+        onCancel = uploads::cancel,
+        onRetry = uploads::retry,
+    )
+}
+
+/**
+ * The uploads, as a pill the screen above shrinks for, expanding to a sheet (§8).
+ *
+ * The pill names where the album moving now is going and how many wait behind it; the sheet lists
+ * them all, each with a cancel and, once one has failed, a retry.
+ *
+ * It takes real height rather than floating over the screen: [AppChrome] says why. **The sheet is
+ * bounded at half the window** and its rows scroll inside it, so however many albums are queued the
+ * screen above keeps half its space — and the picker's own button, one bar up, stays where a thumb
+ * left it.
+ */
+@Composable
+internal fun UploadBar(shown: List<UploadStatus>, onCancel: (Uuid) -> Unit, onRetry: (Uuid) -> Unit) {
     if (shown.isEmpty()) return
     var expanded by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
-    Column(
-        Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
-            .background(scheme.surfaceContainerHigh),
-    ) {
-        if (expanded) {
-            Row(
-                Modifier.fillMaxWidth().clickable { expanded = false }.padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Uploads", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = scheme.onSurface, modifier = Modifier.weight(1f))
-                Icon(Icons.collapse, contentDescription = "Minimize", tint = scheme.onSurface, modifier = Modifier.size(20.dp))
-            }
-            for (status in shown) {
-                UploadRow(status, onCancel = { uploads.cancel(status.albumId) }, onRetry = { uploads.retry(status.albumId) })
-            }
-        } else {
-            val current = shown.firstOrNull { it.stage != UploadStage.Waiting } ?: shown.first()
-            val waiting = shown.count { it.stage == UploadStage.Waiting && it.albumId != current.albumId }
-            Row(
-                Modifier.fillMaxWidth().clickable { expanded = true }.padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Icon(Icons.upload, contentDescription = null, tint = scheme.onSurface, modifier = Modifier.size(18.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "Uploading to ${current.path}",
-                        fontSize = 12.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = scheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        current.caption() + if (waiting > 0) " · $waiting waiting" else "",
-                        fontSize = 11.sp,
-                        color = if (current.stage == UploadStage.Failed) scheme.error else scheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.fillMaxWidth()
+                .heightIn(max = maxHeight / 2)
+                .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
+                .background(scheme.surfaceContainerHigh),
+        ) {
+            if (expanded) {
+                Row(
+                    Modifier.fillMaxWidth().clickable { expanded = false }.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Uploads", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = scheme.onSurface, modifier = Modifier.weight(1f))
+                    Icon(Icons.collapse, contentDescription = "Minimize", tint = scheme.onSurface, modifier = Modifier.size(20.dp))
                 }
-                Icon(Icons.expand, contentDescription = "Expand", tint = scheme.onSurface, modifier = Modifier.size(20.dp))
+                // fill = false: the rows take what they need and no more, so two uploads make a short
+                // sheet rather than one padded out to the cap.
+                Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+                    for (status in shown) {
+                        UploadRow(status, onCancel = { onCancel(status.albumId) }, onRetry = { onRetry(status.albumId) })
+                    }
+                }
+            } else {
+                val current = shown.firstOrNull { it.stage != UploadStage.Waiting } ?: shown.first()
+                val waiting = shown.count { it.stage == UploadStage.Waiting && it.albumId != current.albumId }
+                Row(
+                    Modifier.fillMaxWidth().clickable { expanded = true }.padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Icon(Icons.upload, contentDescription = null, tint = scheme.onSurface, modifier = Modifier.size(18.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "Uploading to ${current.path}",
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = scheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            current.caption() + if (waiting > 0) " · $waiting waiting" else "",
+                            fontSize = 11.sp,
+                            color = if (current.stage == UploadStage.Failed) scheme.error else scheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Icon(Icons.expand, contentDescription = "Expand", tint = scheme.onSurface, modifier = Modifier.size(20.dp))
+                }
+                ProgressLine(current)
             }
-            ProgressLine(current)
         }
     }
 }
