@@ -7,7 +7,9 @@ on:
   # Every push to every branch, so a branch is checked before anyone opens a PR for it. A PR's
   # required checks are matched by commit and job name, so the push run on its head satisfies
   # them. On main this is also what fills the cache: `gradle/actions/setup-gradle` writes its
-  # Gradle home cache from the default branch alone and reads it everywhere else.
+  # Gradle home cache from the default branch alone and reads it everywhere else. That cache
+  # carries the build cache too, which is where `:native`'s libraries come from on a warm run:
+  # a branch that changes no native input restores them instead of compiling ffmpeg.
   #
   # Deliberately NOT also `pull_request`. That would run everything twice for every PR from a
   # branch here, and skipping the duplicate is not an option: a skipped job reports a passing
@@ -33,7 +35,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # 25 to match gradle/libs.versions.toml, so foojay has nothing to provision.
+      # 25 to match gradle/libs.versions.toml and gradle/gradle-daemon-jvm.properties, so neither
+      # the compile toolchain nor the daemon has anything to provision.
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -41,46 +44,15 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      # The Kotlin/Native distribution and its bundled gcc 8.3.0 / glibc 2.19 toolchain --
-      # ~2 GB on a cold runner, and the single longest thing before a first compile.
+      # The Kotlin/Native distribution -- ~2 GB on a cold runner, and the single longest thing
+      # before a first compile. The gcc toolchain the native libraries build with is not in
+      # here: `:native` resolves its own pinned copy through Gradle.
       - name: Cache the Kotlin/Native distribution
         uses: actions/cache@v4
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
           restore-keys: konan-${{ runner.os }}-
-
-      # The imaging prefix and the host tools that build it. Not all of `.tools`: the
-      # intermediate build trees and the fetched tarballs are 730 MB that a warm run never
-      # reads, because `$PREFIX/.stamp` is what makes each stage skip. cmake and nasm are
-      # guarded by `[ ! -x .tools/bin/<tool> ]` and nasm is compiled, so both are carried.
-      #
-      # No `restore-keys`, deliberately. Every pinned version lives in build-native.sh, so a
-      # near-miss key would restore stamps claiming a stage is built at a version the script
-      # no longer asks for -- and the stage would skip instead of rebuilding. Exact match or
-      # build it cold.
-      - name: Cache the native imaging prefix
-        uses: actions/cache@v4
-        with:
-          path: |
-            .tools/bin
-            .tools/cmake
-            .tools/nasm
-            .tools/native/konan
-            .tools/s3mock-*-exec.jar
-          key: native-${{ runner.os }}-${{ hashFiles('Scripts/build-native.sh') }}
-
-      # build-native.sh needs konan's gcc toolchain to already be on disk and exits 1 if it
-      # is not. COMPILING a linuxX64 target is what fetches it -- the compiler's own one-time
-      # "Downloading native dependencies (LLVM, sysroot etc)" pulls the gcc/glibc-2.19
-      # crosstool down before it compiles anything. Deliberately not a link: every linuxX64
-      # binary here, `:domain`'s own test binary included, links SQLDelight's native driver
-      # against the -lsqlite3 that lives in the prefix the NEXT step builds.
-      - name: Fetch konan's gcc toolchain
-        run: ./gradlew :domain:compileKotlinLinuxX64 -Pkotlin.native.enableKlibsCrossCompilation=false
-
-      - name: Build the native imaging prefix
-        run: Scripts/build-native.sh
 
       # Without iOS klib cross-compilation: on by default, it compiles every iOS module on Linux
       # -- ~85 tasks -- that the `ios` job compiles again on a Mac, where it can also link and run
@@ -125,8 +97,8 @@ jobs:
   # The media the app suites sync, and nothing else -- so the iOS scenarios wait minutes for it
   # rather than for the whole of `build`, which writes the same files for the desktop suite. No
   # Mac can run the linuxX64 generator, so the iOS suite gets these exact files from here: one
-  # generator, byte-identical media on both platforms. The generator links against the imaging
-  # prefix, so this job needs the same toolchain and prefix `build` does, from the same caches.
+  # generator, byte-identical media on both platforms. The generator links the native libraries,
+  # which it gets the way `build` does: from the Gradle build cache when main has built them.
   fixtures:
     runs-on: ubuntu-latest
     steps:
@@ -145,25 +117,6 @@ jobs:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
           restore-keys: konan-${{ runner.os }}-
-
-      # The same paths and key as `build`'s, for the reasons given there.
-      - name: Cache the native imaging prefix
-        uses: actions/cache@v4
-        with:
-          path: |
-            .tools/bin
-            .tools/cmake
-            .tools/nasm
-            .tools/native/konan
-            .tools/s3mock-*-exec.jar
-          key: native-${{ runner.os }}-${{ hashFiles('Scripts/build-native.sh') }}
-
-      # See `build`: compiling a linuxX64 target is what fetches the toolchain the prefix needs.
-      - name: Fetch konan's gcc toolchain
-        run: ./gradlew :domain:compileKotlinLinuxX64 -Pkotlin.native.enableKlibsCrossCompilation=false
-
-      - name: Build the native imaging prefix
-        run: Scripts/build-native.sh
 
       - name: Write the fixture media
         run: ./gradlew :tests:fixtures:fixtureMedia -Pkotlin.native.enableKlibsCrossCompilation=false

@@ -1,14 +1,15 @@
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.sqldelight)
+    id("photos.native-toolchain")
 }
 
-// The prefix's SQLite, not the distro's. `Scripts/PROVENANCE.md` records why: a distro's
+// `:native`'s SQLite, not the distro's. native/build.gradle.kts records why: a distro's
 // libsqlite3.so is built against that distro's glibc, and linking it would raise the shipped
 // binary's floor to whatever the build host happened to have. SQLDelight's native driver
 // (SQLiter) deliberately ships no `-lsqlite3` of its own, so the consumer supplies it — which
 // is exactly what lets us supply ours.
-val nativePrefix: File = rootProject.extra["nativePrefix"] as File
+native.link("sqlite")
 
 // DESIGN §7: everything a laptop/phone disagreement would corrupt. One flat module -- the
 // internal boundaries are package conventions, not module edges.
@@ -26,9 +27,7 @@ kotlin {
         compilations.getByName("main").defaultSourceSet.dependencies {
             implementation(libs.ktor.client.curl)
         }
-        binaries.all {
-            linkerOpts("-L${nativePrefix.resolve("lib")}", "-lsqlite3")
-        }
+        binaries.all { linkerOpts("-lsqlite3") }
     }
     // The phone (§6). Device and Apple-silicon simulator, and no `iosX64`: the build runner and
     // every iPhone this targets are arm64, so an Intel simulator slice would be a link nothing
@@ -89,6 +88,17 @@ kotlin {
         }
     }
 }
+
+// The library's directory reaches the linker lazily: `linkerOpts` above is a plain list, fixed
+// during configuration, and `:native` must not be resolved then -- nothing is built yet, and an
+// iOS build on a Mac must never resolve it at all.
+val nativeLibs: FileCollection = native.libraries
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinNativeLink>()
+    .matching { it.name.endsWith("LinuxX64") }
+    .configureEach {
+        dependsOn(nativeLibs)
+        toolOptions.freeCompilerArgs.addAll(native.libraryFlags.map { flags -> flags.flatMap { listOf("-linker-option", it) } })
+    }
 
 // The vendored AWS SigV4 vectors are 382 files under `testdata/sigv4`. Kotlin/Native bundles
 // no test resources, so the path arrives through the environment.

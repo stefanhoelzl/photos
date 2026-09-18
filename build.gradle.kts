@@ -2,62 +2,20 @@ plugins {
     // Declared, not applied: the root builds nothing. It is here so this file can name
     // KotlinNativeTest when wiring S3Mock into the module test tasks below.
     alias(libs.plugins.kotlin.multiplatform) apply false
+    id("photos.native-toolchain")
 }
 
-// Shared build vocabulary. The two facts every native module needs are where the imaging
-// prefix is and which toolchain built it -- see Scripts/PROVENANCE.md for why those must
-// be the same toolchain Kotlin/Native links with.
-
-/** `.tools/native/konan`, built by `Scripts/build-native.sh konan`. */
-val nativePrefix: File = rootDir.resolve(".tools/native/konan")
-
-/**
- * Kotlin/Native's own crosstool-NG toolchain (gcc 8.3.0 / glibc 2.19). The C shim is compiled
- * with *this*, not the host's gcc: a shim built against a modern glibc links today by luck and
- * breaks the moment it touches a symbol newer than 2.19.
- */
-val konanToolchain: File? = File(System.getProperty("user.home"), ".konan/dependencies")
-    .listFiles { f -> f.isDirectory && f.name.startsWith("x86_64-unknown-linux-gnu-gcc-") }
-    ?.sortedBy { it.name }?.lastOrNull()
-
-extra["nativePrefix"] = nativePrefix
-extra["konanToolchain"] = konanToolchain
-
-/**
- * The prefix's static archives, which every linuxX64 binary links in by `-L` and `-l`.
- *
- * Gradle cannot see through a linker flag, so without this a prefix rebuilt by
- * `Scripts/build-native.sh` -- a new ffmpeg, say -- left every link UP-TO-DATE and every binary
- * holding the old library. A file tree rather than `inputs.dir`, so that a checkout without the
- * prefix gets `checkNativePrefix`'s message instead of an input-validation error.
- */
-val nativePrefixArchives: FileCollection = fileTree(nativePrefix.resolve("lib")) { include("**/*.a") }
-extra["nativePrefixArchives"] = nativePrefixArchives
+// The native libraries' install directories, as an input of every linuxX64 link. A link takes
+// them through `-L` and `-l` flags in a cinterop klib, which Gradle cannot see through: without
+// this, a rebuilt ffmpeg left every link UP-TO-DATE and every binary holding the old library.
+// Resolving the directories also makes each link wait for `:native` to have built them.
+native.link("jpeg", "lcms2", "exif", "heif", "ffmpeg", "dbus", "sqlite")
+val nativeLibraryDirs: FileCollection = native.libraries
 
 subprojects {
     tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinNativeLink>()
         .matching { it.name.endsWith("LinuxX64") }
-        .configureEach { inputs.files(nativePrefixArchives).withPropertyName("nativePrefixArchives") }
-}
-
-tasks.register("checkNativePrefix") {
-    group = "verification"
-    description = "Fails with an actionable message if the native prefix has not been built."
-    // Locals, not the script's vals: a task action that names a script-level value captures the
-    // whole script object, which the configuration cache cannot store. The same holds for every
-    // `doFirst`/`doLast` below and in the module scripts.
-    val nativePrefix = nativePrefix
-    val konanToolchain = konanToolchain
-    doLast {
-        require(nativePrefix.resolve("lib/libheif.a").exists()) {
-            "native prefix missing -- run: Scripts/build-native.sh"
-        }
-        requireNotNull(konanToolchain) {
-            "konan gcc toolchain not found under ~/.konan/dependencies -- link a linuxX64 binary once to fetch it"
-        }
-        println("native prefix: $nativePrefix")
-        println("toolchain:     $konanToolchain")
-    }
+        .configureEach { inputs.files(nativeLibraryDirs).withPropertyName("nativeLibraries") }
 }
 
 // ---------------------------------------------------------------- S3Mock
@@ -65,34 +23,20 @@ tasks.register("checkNativePrefix") {
 // Round-trip tests need a real S3 server, and the build owns its lifecycle rather than the
 // tests: a test is handed an endpoint and never has to know how to spawn a JVM.
 //
-// S3Mock rather than a real server, for the reasons in Scripts/fetch-s3mock.sh: MinIO's
+// S3Mock rather than a real server: MinIO's
 // community edition was archived, SeaweedFS's conditional PUT is absent or broken, and
 // s3proxy answers 412 with a 500. `If-Match` is what guards §2's single-owner shard rule, so
 // a server that cannot do it proves nothing. S3Mock does NOT validate signatures — accepted,
 // because the vendored AWS vector suite is what proves the signer.
 
-val s3mockVersion = "4.11.0"
-val s3mockJar = layout.projectDirectory.file(".tools/s3mock-$s3mockVersion-exec.jar")
-
-val fetchS3Mock by tasks.registering {
-    group = "verification"
-    description = "Fetches the pinned S3Mock jar into .tools/ (gitignored)."
-    outputs.file(s3mockJar)
-    val jar = s3mockJar.asFile
-    val s3mockVersion = s3mockVersion
-    doLast {
-        if (jar.exists()) return@doLast
-        jar.parentFile.mkdirs()
-        val url = "https://repo1.maven.org/maven2/com/adobe/testing/s3mock/" +
-            "$s3mockVersion/s3mock-$s3mockVersion-exec.jar"
-        logger.lifecycle("fetching S3Mock $s3mockVersion")
-        val partial = File("${jar.path}.partial")
-        java.net.URI(url).toURL().openStream().use { input ->
-            partial.outputStream().use { input.copyTo(it) }
-        }
-        partial.renameTo(jar)
-    }
+// Resolved like any other dependency -- verified, and cached once per machine. `exec` is the
+// self-contained Spring Boot jar; nothing else is wanted from its graph.
+val s3mock: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isTransitive = false
 }
+dependencies { add(s3mock.name, variantOf(libs.s3mock) { classifier("exec") }) }
+val s3mockJar: FileCollection = s3mock
 
 /**
  * Starts S3Mock for [task] and exports `PHOTOS_S3MOCK_ENDPOINT` to it.
@@ -108,8 +52,10 @@ val fetchS3Mock by tasks.registering {
  * the other function is to `KotlinNativeTest`, which a `Test` is not.
  */
 fun configureS3MockJvm(task: Task) {
-    task.dependsOn(fetchS3Mock)
-    val jarPath = s3mockJar.asFile.path
+    task.dependsOn(s3mockJar)
+    // A local, so the action captures the file collection rather than the script. It resolves
+    // when the action runs, not while configuring.
+    val jar = s3mockJar
     var process: Process? = null
     task.doFirst {
         val javaOk = runCatching {
@@ -123,7 +69,7 @@ fun configureS3MockJvm(task: Task) {
         val started = ProcessBuilder(
             "java", "-Dhttp.port=$port", "-DinitialBuckets=my-photos",
             "-Dserver.port=${java.net.ServerSocket(0).use { it.localPort }}",
-            "-jar", jarPath,
+            "-jar", jar.singleFile.path,
         ).redirectOutput(ProcessBuilder.Redirect.DISCARD)
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start()
@@ -151,8 +97,10 @@ fun configureS3MockJvm(task: Task) {
 }
 
 fun configureS3Mock(task: Task) {
-    task.dependsOn(fetchS3Mock)
-    val jarPath = s3mockJar.asFile.path
+    task.dependsOn(s3mockJar)
+    // A local, so the action captures the file collection rather than the script. It resolves
+    // when the action runs, not while configuring.
+    val jar = s3mockJar
     var process: Process? = null
 
     task.doFirst {
@@ -179,7 +127,7 @@ fun configureS3Mock(task: Task) {
             "-DinitialBuckets=$bucket",
             // Keep the TLS connector off a port we might collide with.
             "-Dserver.port=${java.net.ServerSocket(0).use { it.localPort }}",
-            "-jar", jarPath,
+            "-jar", jar.singleFile.path,
         ).redirectOutput(ProcessBuilder.Redirect.DISCARD)
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start()

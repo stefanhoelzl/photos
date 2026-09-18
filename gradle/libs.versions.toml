@@ -20,6 +20,27 @@ dbus-java = "5.1.0"
 jdk = "25"
 # The map's basemap (DESIGN §6): MapLibre Native, drawn beneath the app's own pins.
 maplibre-compose = "0.16.0"
+# The S3 server the round-trip tests run against (build.gradle.kts says why this one).
+s3mock = "4.11.0"
+
+# The native build (`:native`). Why each library is here, and at this version, is written
+# beside its task in native/build.gradle.kts.
+#
+# The toolchain is the one Kotlin/Native links linuxX64 with. `checkKonanToolchain` fails when
+# a Kotlin upgrade moves Kotlin/Native to another, so bump this with it.
+native-toolchain = "8.3.0-glibc-2.19-kernel-4.9-2"
+native-cmake = "3.31.6"
+native-nasm = "2.16.03"
+native-libjpeg-turbo = "3.1.0"
+native-lcms2 = "2.16"
+native-libexif = "0.6.24"
+native-libde265 = "1.0.15"
+native-x265 = "3.6"
+native-libheif = "1.19.8"
+native-ffmpeg = "7.1.1"
+native-expat = "2.6.4"
+native-dbus = "1.14.10"
+native-sqlite = "3530400"
 
 [libraries]
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -54,6 +75,24 @@ clikt = { module = "com.github.ajalt.clikt:clikt-core", version.ref = "clikt" }
 maplibre-compose = { module = "org.maplibre.compose:maplibre-compose", version.ref = "maplibre-compose" }
 # The desktop's native renderer. One per OS, not a classifier; Vulkan is the documented Linux choice.
 maplibre-compose-runtime-linux = { module = "org.maplibre.compose:maplibre-compose-runtime-vulkan-linux-x64", version.ref = "maplibre-compose" }
+
+s3mock = { module = "com.adobe.testing:s3mock", version.ref = "s3mock" }
+
+# Tarballs, not Maven artifacts: each group is routed to its upstream's download site by an ivy
+# repository in settings.gradle.kts.
+native-toolchain = { module = "native.toolchain:x86_64-unknown-linux-gnu-gcc", version.ref = "native-toolchain" }
+native-cmake = { module = "native.cmake:cmake", version.ref = "native-cmake" }
+native-nasm = { module = "native.nasm:nasm", version.ref = "native-nasm" }
+native-jpeg = { module = "native.libjpeg-turbo:libjpeg-turbo", version.ref = "native-libjpeg-turbo" }
+native-lcms2 = { module = "native.lcms2:lcms2", version.ref = "native-lcms2" }
+native-exif = { module = "native.libexif:libexif", version.ref = "native-libexif" }
+native-de265 = { module = "native.libde265:libde265", version.ref = "native-libde265" }
+native-x265 = { module = "native.x265:x265", version.ref = "native-x265" }
+native-heif = { module = "native.libheif:libheif", version.ref = "native-libheif" }
+native-ffmpeg = { module = "native.ffmpeg:ffmpeg", version.ref = "native-ffmpeg" }
+native-expat = { module = "native.expat:expat", version.ref = "native-expat" }
+native-dbus = { module = "native.dbus:dbus", version.ref = "native-dbus" }
+native-sqlite = { module = "native.sqlite:sqlite-autoconf", version.ref = "native-sqlite" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

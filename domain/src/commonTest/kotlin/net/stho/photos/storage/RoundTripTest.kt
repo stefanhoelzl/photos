@@ -30,8 +30,8 @@ import net.stho.photos.scratchPath
  * variable is absent and these skip — a machine that cannot run a JVM should still be able to
  * run the signer vectors and everything offline.
  *
- * S3Mock does **not** validate signatures. That is accepted and stated in
- * `Scripts/fetch-s3mock.sh`: the vendored AWS vector suite is what proves the signer, and it
+ * S3Mock does **not** validate signatures. That is accepted and stated in the root
+ * `build.gradle.kts`: the vendored AWS vector suite is what proves the signer, and it
  * names the failing stage where a server could only say pass or fail.
  */
 class RoundTripTest {
