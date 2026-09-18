@@ -1655,7 +1655,9 @@ what the zone contains; the other two decide nothing at all.
   reconstruct. It is **never verified on a schedule**: a full pass is ~100 GiB of reads against
   a timer that fires hourly. A forensic record for a file already suspected of having changed,
   not a monitor.
-- **Parallelism:** one worker per core for encoding. Measured during milestone C on real
+- **Parallelism:** one encoder per two cores by default, and `--jobs` is the one concurrency a
+  caller sets; upload, download and delete connections are fixed properties of the link (§9).
+  Measured during milestone C on real
   18 MP photos, when the tier was 2048px: **2.7 s/photo serial**, **0.43 s/photo** wall with
   16 workers — so roughly **4 h for ~34k photos**, plus video. The HEIC encode was ~1.5 s of
   the 2.7 s and does not come down without trading image quality (x265 `superfast` saves 13%;
@@ -1816,6 +1818,14 @@ what the zone contains; the other two decide nothing at all.
   as it goes. It shows no total until it has watched enough items that one panorama cannot set
   the projection, and says `~` when it does. A hard-coded ratio would have been one more number
   to keep true the next time the profile moved.
+- **The counter restarts for each phase** — the uploads as a whole, then each pulled or merged
+  album, first downloading and then deriving — and counts files, so a Live Photo is two. A
+  phase's own total is the only honest one: pulls counted against the uploads' total once read
+  175/70, and one rate across downloading and encoding averages two unrelated speeds. A
+  download's totals are exact rather than projected, from the run's listing, and its bytes move
+  while a file is still arriving. The plan line says what the pulls and merges bring down, and
+  each pulled or merged album is one journal line carrying both directions: `v` for a pull,
+  `<` for a merge.
 
 - **A run says what it intends before it does it**, then a line per album as each commits, so
   a 39-hour job is legible in the journal while it is still going rather than at the end. On a
@@ -2187,8 +2197,9 @@ latency, and round trips overlap.
 
 > The number matters because of what §5 made routine. A profile bump re-derives every album,
 > orphaning ~34,000 blobs at once; serially that is about **thirteen hours** of deleting against
-> a three-hour import. `deleteJobs` therefore defaults to 64 where `uploadJobs` defaults to 1,
-> and the two carry opposite reasoning for it.
+> a three-hour import. Deletes therefore run 64 at a time where uploads run one at a time, and
+> the two carry opposite reasoning for it. Both are fixed in the code beside these numbers, not
+> flags: they describe the link, which no run changes.
 
 Design consequence: **the ingest tool's parallelism is for derivative generation (CPU-bound),
 not for uploading.** Overlap encoding with a small number of upload connections; adding upload

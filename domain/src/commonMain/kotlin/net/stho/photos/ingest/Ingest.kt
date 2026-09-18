@@ -96,9 +96,10 @@ public class Ingest(
     @OptIn(DelicateCoroutinesApi::class)
     private val encoders = lazy { newFixedThreadPoolContext(config.jobs, "photos-derive") }
 
-    private val uploadPermits = Semaphore(config.uploadJobs)
-    private val deletePermits = Semaphore(config.deleteJobs)
+    private val uploadPermits = Semaphore(UPLOAD_JOBS)
+    private val deletePermits = Semaphore(DELETE_JOBS)
     private val meter = ProgressMeter(clock)
+    private val downloadMeter = DownloadMeter(clock)
 
     // replay = 1 because the *plan* is the first thing emitted: a collector that subscribes
     // after `run()` has started would otherwise miss "to do: …" and never know it, which is a
@@ -194,30 +195,40 @@ public class Ingest(
         // be *sent* is far less (§5) and cannot be predicted here; the meter projects it from
         // the ratio the run observes as it goes.
         val bytes = work.sumOf { album -> album.uploads.sumOf { Body.File(it).byteCount ?: 0L } }
-        emit(
-            IngestEvent.Planned(
-                albums = work.size, files = files, bytes = bytes,
-                deletions = plan.deletions.size, pulls = plan.pulls.size, merges = plan.merges.size,
-            ),
-        )
-        meter.start(files, bytes)
 
         // Listed here rather than at the top of the run: §7 promises a run that changes nothing
         // costs exactly one request, and the early return above is what keeps that true. A run
         // with no work has nothing to skip-upload and nothing to sweep, so it needs no listing.
+        // Before the plan line, because the listing is what knows how much the pulls bring down.
         s3.list(prefix = BLOB_PREFIX).collect { listed ->
             if (!listed.isDirectoryMarker) blobsInZone[listed.key] = listed.size
         }
         report.blobsInZone = blobsInZone.size
 
+        val pulled = plan.pulls.flatMap { downloads(it.shard.photos) }
+        val merged = plan.merges.flatMap { downloads(it.addition.photos) }
+        emit(
+            IngestEvent.Planned(
+                albums = work.size, files = files, bytes = bytes,
+                deletions = plan.deletions.size, pulls = plan.pulls.size, merges = plan.merges.size,
+                pullFiles = pulled.size, pullBytes = pulled.sumOf(Download::bytes),
+                mergeFiles = merged.size, mergeBytes = merged.sumOf(Download::bytes),
+            ),
+        )
+        meter.start(files, bytes)
+
         SystemFileSystem.createDirectories(config.workRoot)
         try {
             for (album in work) commit(album, refreshed.etags, report)
             for (deletion in plan.deletions) delete(deletion, report)
-            for (pull in plan.pulls) archive(pull, report)
+            for ((index, pull) in plan.pulls.withIndex()) {
+                archive(pull, "pull ${index + 1}/${plan.pulls.size}", report)
+            }
             // Last: an addition goes into its album as that album stands after everything above,
             // including a pull of the album itself earlier in this run.
-            for (merge in plan.merges) merge(merge, report)
+            for ((index, merge) in plan.merges.withIndex()) {
+                merge(merge, "merge ${index + 1}/${plan.merges.size}", report)
+            }
 
             // The sweep reads every shard now on disk, so it must run after the writes above.
             val after = catalog.refresh()
@@ -283,12 +294,20 @@ public class Ingest(
 
     // -------------------------------------------------------------------------------- one album
 
-    /** Returns whether the album's shard was written. */
+    /**
+     * What was written, or null when the album's shard was not.
+     *
+     * [status] frames the counter for the phase it runs in — the album's name during the uploads,
+     * which pull and which step during a pull. [announce] is false where the caller writes the
+     * journal line itself, so a pulled album is one line rather than two.
+     */
     private suspend fun commit(
         album: AlbumPlan,
         etags: Map<Uuid, ETag>,
         report: ReportBuilder,
-    ): Boolean {
+        status: (String) -> String = { "$it  ${album.sourcePath}" },
+        announce: Boolean = true,
+    ): IngestReport.AlbumOutcome? {
         val started = clock.now()
 
         // The whole album, not just the new files: pairing is a property of the set. A Live
@@ -327,13 +346,24 @@ public class Ingest(
             items += item
         }
 
+        // The counter's total is in files, so every planned file has to be ticked off: those an
+        // item consumes as it finishes, and here those none will — a lone MOV whose still is
+        // already in the album, a file the classifier refused, a name that would clash.
+        val sizes = album.uploads.associate { it.name to (Body.File(it).byteCount ?: 0L) }
+        val consumed = items.flatMapTo(mutableSetOf()) { it.fileNames() }
+        val idle = sizes.filterKeys { it !in consumed }
+        if (idle.isNotEmpty()) {
+            meter.finished(files = idle.size, bytes = 0, source = idle.values.sum())
+                ?.let { emit(IngestEvent.Status(status(it))) }
+        }
+
         val produced = try {
-            derive(items, album, report)
+            derive(items, sizes, report, status)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
             report.failures += IngestReport.Failure(album.sourcePath, failure.describe())
-            return false
+            return null
         }
 
         // §3: `photo.id` is row identity and must survive re-encoding — it is what
@@ -362,7 +392,7 @@ public class Ingest(
                 // try once more — a blind retry would overwrite their work.
                 ShardWriteResult.StaleETag -> if (!rewriteAfterConflict(album, carried)) {
                     report.contendedAlbums += album.sourcePath
-                    return false
+                    return null
                 }
             }
 
@@ -376,7 +406,7 @@ public class Ingest(
             throw cancelled
         } catch (failure: Exception) {
             report.failures += IngestReport.Failure(album.sourcePath, failure.describe())
-            return false
+            return null
         }
 
         val outcome = IngestReport.AlbumOutcome(
@@ -388,8 +418,14 @@ public class Ingest(
             duration = clock.now() - started,
         )
         report.albums += outcome
-        emit(IngestEvent.Line(outcome.asLine()))
-        return true
+        if (announce) emit(IngestEvent.Line(outcome.asLine()))
+        return outcome
+    }
+
+    /** The files on disk this item is made from: a Live Photo is two. */
+    private fun MediaItem.fileNames(): List<String> = when (val kind = kind) {
+        is MediaItem.Kind.LivePhoto -> listOf(filename, kind.video.substringAfterLast('/'))
+        else -> listOf(filename)
     }
 
     /**
@@ -418,8 +454,9 @@ public class Ingest(
      */
     private suspend fun derive(
         items: List<MediaItem>,
-        album: AlbumPlan,
+        sizes: Map<String, Long>,
         report: ReportBuilder,
+        status: (String) -> String,
     ): List<Produced> {
         if (items.isEmpty()) return emptyList()
         val permits = Semaphore(config.jobs)
@@ -438,8 +475,9 @@ public class Ingest(
                         // Transient, and only where a person is watching: the journal gets the
                         // per-album lines and nothing else.
                         val uploaded = outcome.getOrNull()?.uploadedBytes ?: 0L
-                        meter.finished(uploaded, item.byteCount, album.sourcePath)
-                            ?.let { emit(IngestEvent.Status(it)) }
+                        val files = item.fileNames().filter { it in sizes }
+                        meter.finished(files.size, uploaded, files.sumOf { sizes.getValue(it) })
+                            ?.let { emit(IngestEvent.Status(status(it))) }
                         item to outcome
                     }
                 }
@@ -648,7 +686,7 @@ public class Ingest(
     }
 
     /**
-     * Deletes these keys, [IngestConfig.deleteJobs] at a time.
+     * Deletes these keys, [DELETE_JOBS] at a time.
      *
      * Concurrent for the opposite reason uploads are not (§9): a delete carries no bytes, so it
      * is not competing for the upstream link — it is a round trip, and round trips overlap.
@@ -706,7 +744,8 @@ public class Ingest(
      *
      * `.photosignore` is not consulted: the rules govern what goes up (§7).
      */
-    private suspend fun archive(pull: PullPlan, report: ReportBuilder) {
+    private suspend fun archive(pull: PullPlan, phase: String, report: ReportBuilder) {
+        val started = clock.now()
         val directory = libraryPath(pull.sourcePath)
         try {
             var addition = pull.shard
@@ -728,14 +767,16 @@ public class Ingest(
                 }
             }
 
-            val (downloaded, bytes) = download(addition.photos, directory)
-            report.pulledAlbums += IngestReport.PulledAlbum(pull.sourcePath, downloaded.size, bytes)
-            emit(IngestEvent.Line("v ${pull.sourcePath}  ${downloaded.size} files pulled"))
+            val label = "$phase  ${pull.sourcePath}"
+            val files = downloads(addition.photos)
+            val downloaded = fetch(files, directory, label)
+            val bytes = files.sumOf(Download::bytes)
 
             // Every file is now on disk, so the album is derived like any other — under the id the
             // phone minted, which every device already shows it by, with the name, parent and date
             // the addition recorded, and the phone's row identities carried onto the derived rows.
-            val written = commit(
+            meter.start(downloaded.size, downloaded.sumOf { Body.File(it).byteCount ?: 0L })
+            val outcome = commit(
                 AlbumPlan(
                     id = pull.albumId,
                     name = addition.info.name,
@@ -756,8 +797,15 @@ public class Ingest(
                 // Unconditional: no shard is at this key, or the one that was is deleted this run.
                 etags = emptyMap(),
                 report = report,
+                status = { "$label  deriving $it" },
+                announce = false,
+            ) ?: return
+            report.pulledAlbums += IngestReport.PulledAlbum(pull.sourcePath, files.size, bytes)
+            emit(
+                IngestEvent.Line(
+                    transferLine("v", pull.sourcePath, files.size, bytes, outcome, clock.now() - started),
+                ),
             )
-            if (!written) return
             catalog.deleteShard(addition)
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -766,23 +814,19 @@ public class Ingest(
         }
     }
 
+    /** One object a pull or merge brings down, and the name it takes in the album's folder. */
+    private class Download(val key: String, val filename: String, val bytes: Long)
+
     /**
-     * Every file these rows name, into [directory], skipping any already there — which is what
-     * makes an interrupted pull or merge resume rather than start again. The files and the bytes the
-     * rows say they hold.
+     * Every file these rows name. The size is the zone's, from the run's listing: a row's own
+     * `bytes` describes the viewing blob and says nothing of a Live Photo's MOV.
      */
-    private suspend fun download(rows: List<PhotoRow>, directory: Path): Pair<List<Path>, Long> {
-        val downloaded = mutableListOf<Path>()
-        var bytes = 0L
-        SystemFileSystem.createDirectories(directory)
+    private fun downloads(rows: List<PhotoRow>): List<Download> = buildList {
         for (row in rows) {
             // A Live Photo keeps an untouched still precisely so its identifier survives, so
             // that is the file to archive when there is one (§5).
             val primary = row.liveStillId ?: row.imageId ?: row.videoId ?: continue
-            val destination = Path(directory, row.filename)
-            if (!SystemFileSystem.exists(destination)) s3.download(primary.blobKey, destination)
-            downloaded += destination
-            bytes += row.bytes ?: 0
+            add(Download(primary.blobKey, row.filename, blobsInZone[primary.blobKey] ?: row.bytes ?: 0))
             // Since schema 4 the catalog names the paired MOV, so a pull restores the name
             // the file actually had. `<stem>.MOV` remains the fallback for a row written
             // before that column existed — the convention every pair in this library
@@ -790,12 +834,41 @@ public class Ingest(
             // walker re-pairs it either way.
             row.liveVideoId?.let { liveVideoId ->
                 val name = row.liveVideoFilename ?: row.filename.withExtension("MOV")
-                val path = Path(directory, name)
-                if (!SystemFileSystem.exists(path)) s3.download(liveVideoId.blobKey, path)
-                downloaded += path
+                add(Download(liveVideoId.blobKey, name, blobsInZone[liveVideoId.blobKey] ?: 0))
             }
         }
-        return downloaded to bytes
+    }
+
+    /**
+     * Every file into [directory], [DOWNLOAD_JOBS] at a time, skipping any already there — which
+     * is what makes an interrupted pull or merge resume rather than start again. The paths, in
+     * the order the rows name them.
+     */
+    private suspend fun fetch(files: List<Download>, directory: Path, label: String): List<Path> {
+        SystemFileSystem.createDirectories(directory)
+        downloadMeter.start(files.size, files.sumOf(Download::bytes))
+        val permits = Semaphore(DOWNLOAD_JOBS)
+        fun show(line: String?) {
+            if (line != null) emit(IngestEvent.Status("$label  downloading $line"))
+        }
+        return coroutineScope {
+            files.mapIndexed { slot, file ->
+                async {
+                    val destination = Path(directory, file.filename)
+                    if (SystemFileSystem.exists(destination)) {
+                        show(downloadMeter.finished(slot, file.bytes, fetched = false))
+                    } else {
+                        permits.withPermit {
+                            s3.download(file.key, destination) { received, _ ->
+                                show(downloadMeter.receiving(slot, received))
+                            }
+                        }
+                        show(downloadMeter.finished(slot, file.bytes, fetched = true))
+                    }
+                    destination
+                }
+            }.awaitAll()
+        }
     }
 
     // --------------------------------------------------------------------- merging an addition
@@ -820,7 +893,8 @@ public class Ingest(
      * may have written it earlier in this run. If it is not `encoded` by now the merge waits for a
      * run in which it is.
      */
-    private suspend fun merge(plan: MergePlan, report: ReportBuilder) {
+    private suspend fun merge(plan: MergePlan, phase: String, report: ReportBuilder) {
+        val started = clock.now()
         try {
             val target = catalog.cached(plan.target)
             if (target == null || target.info.isAddition || target.info.state != AlbumState.ENCODED) return
@@ -844,11 +918,16 @@ public class Ingest(
                 }
             }
 
-            val (downloaded, _) = download(addition.photos, directory)
+            val label = "$phase  ${plan.sourcePath}"
+            val files = downloads(addition.photos)
+            val downloaded = fetch(files, directory, label)
+            val bytes = files.sumOf(Download::bytes)
             val merged = target.photos.flatMapTo(mutableSetOf()) { it.claimedFilenames }
             val fresh = downloaded.filterNot { it.name in merged }
+            var outcome: IngestReport.AlbumOutcome? = null
             if (fresh.isNotEmpty()) {
-                val written = commit(
+                meter.start(fresh.size, fresh.sumOf { Body.File(it).byteCount ?: 0L })
+                outcome = commit(
                     AlbumPlan(
                         id = target.info.id,
                         name = target.info.name,
@@ -865,8 +944,9 @@ public class Ingest(
                     ),
                     etags = catalog.etag(target.info.id)?.let { mapOf(target.info.id to it) } ?: emptyMap(),
                     report = report,
-                )
-                if (!written) return
+                    status = { "$label  deriving $it" },
+                    announce = false,
+                ) ?: return
             }
 
             // The library holds every file now, and the album names them: the addition and the
@@ -874,7 +954,11 @@ public class Ingest(
             // so the next walk takes it up as the new photo it is.
             catalog.deleteShard(addition)
             report.mergedAdditions += IngestReport.MergedAddition(plan.sourcePath, addition.photos.size)
-            emit(IngestEvent.Line("+ ${plan.sourcePath}  ${addition.photos.size} added from the phone"))
+            emit(
+                IngestEvent.Line(
+                    transferLine("<", plan.sourcePath, files.size, bytes, outcome, clock.now() - started),
+                ),
+            )
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
@@ -983,6 +1067,35 @@ public class Ingest(
     /** Releases the encoder threads. A run that never encoded anything never made any. */
     override fun close() {
         if (encoders.isInitialized()) encoders.value.close()
+    }
+
+    private companion object {
+        /**
+         * Upload connections. **One**, because §9 measured 1.9 MB/s on one stream against
+         * 1.5 MB/s on eight — parallel uploads are slower, not faster.
+         */
+        const val UPLOAD_JOBS = 1
+
+        /**
+         * Download connections for a pull or merge. **One** until measured: a pull comes down
+         * the downlink, which is not the link §9 measured uploads on, so its answer does not
+         * carry over. Time a pull at 1, 2, 4 and 8 against the live zone and put the winner here
+         * with its numbers.
+         */
+        const val DOWNLOAD_JOBS = 1
+
+        /**
+         * Delete connections. **Sixty-four**, and the opposite reasoning to [UPLOAD_JOBS]: a
+         * delete carries no bytes, so it is not competing for the upstream link — it is one
+         * round trip to Frankfurt and back, and round trips overlap.
+         *
+         * Measured against the live zone while emptying it: a single delete costs **~1.4 s**,
+         * and 64 in flight sustained **~45/s**. Serially that is 34,000 blobs in about thirteen
+         * hours, which is what a profile bump orphans (§5) against a three-hour import. The
+         * retry policy covers 429 and 5xx, so a server that dislikes the rate says so and the
+         * run backs off.
+         */
+        const val DELETE_JOBS = 64
     }
 }
 

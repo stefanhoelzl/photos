@@ -72,7 +72,6 @@ class IngestCycleTest {
                 libraryRoot = library.root,
                 cacheRoot = cacheRoot,
                 jobs = 2,
-                uploadJobs = 1,
                 dryRun = dryRun,
                 sweepAge = 7.days,
             )
