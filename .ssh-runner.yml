@@ -24,12 +24,14 @@ steps:
       cache-read-only: true
 
   # The Kotlin/Native distribution and its dependencies -- ~2 GB fetched on a cold box, which
-  # is the single longest thing between `start` and a first compile.
-  - uses: actions/cache@v4
+  # is the single longest thing between `start` and a first compile. Restore only, from the
+  # entry CI's `ios` job writes: it links the device framework so the iosArm64 per-library
+  # caches are in there, which took ~8 minutes of a cold device archive when they were not.
+  - uses: actions/cache/restore@v4
     with:
       path: ~/.konan
-      key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
-      restore-keys: konan-${{ runner.os }}-
+      key: konan-${{ runner.os }}-device-${{ hashFiles('gradle/libs.versions.toml') }}
+      restore-keys: konan-${{ runner.os }}-device-
 
 sync:
   delete: true
