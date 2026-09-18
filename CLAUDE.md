@@ -11,3 +11,11 @@ install -m 755 app/cli/build/bin/linuxX64/releaseExecutable/photos-cli.kexe ~/.l
 
 Overwrite it in place. Do not keep a copy of the old binary (no `photos-cli.old`, no dated
 backups): any build can be rebuilt from its commit.
+
+# Build from this workspace only
+
+Never copy anything from another workspace or worktree -- not `.tools/`, not `build/`, not a
+compiled binary, not a file of any kind. Build everything this workspace needs yourself, from its
+own sources: `Scripts/build-native.sh` for the native prefix in `.tools/`, Gradle for the rest.
+Another workspace's artifacts were built from another branch's sources, and a copy carries that
+workspace's absolute paths with it.
