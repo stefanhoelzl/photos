@@ -23,6 +23,23 @@ val konanToolchain: File? = File(System.getProperty("user.home"), ".konan/depend
 extra["nativePrefix"] = nativePrefix
 extra["konanToolchain"] = konanToolchain
 
+/**
+ * The prefix's static archives, which every linuxX64 binary links in by `-L` and `-l`.
+ *
+ * Gradle cannot see through a linker flag, so without this a prefix rebuilt by
+ * `Scripts/build-native.sh` -- a new ffmpeg, say -- left every link UP-TO-DATE and every binary
+ * holding the old library. A file tree rather than `inputs.dir`, so that a checkout without the
+ * prefix gets `checkNativePrefix`'s message instead of an input-validation error.
+ */
+val nativePrefixArchives: FileCollection = fileTree(nativePrefix.resolve("lib")) { include("**/*.a") }
+extra["nativePrefixArchives"] = nativePrefixArchives
+
+subprojects {
+    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinNativeLink>()
+        .matching { it.name.endsWith("LinuxX64") }
+        .configureEach { inputs.files(nativePrefixArchives).withPropertyName("nativePrefixArchives") }
+}
+
 tasks.register("checkNativePrefix") {
     group = "verification"
     description = "Fails with an actionable message if the native prefix has not been built."

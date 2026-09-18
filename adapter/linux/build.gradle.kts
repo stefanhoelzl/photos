@@ -10,6 +10,14 @@ val shimSource: File = rootDir.resolve("native/CImaging")
 val shimOut = layout.buildDirectory.dir("shim")
 
 /**
+ * What the shim is compiled against. The prefix is built outside Gradle, by
+ * `Scripts/build-native.sh`, so nothing else would tell a task that ffmpeg's headers changed
+ * underneath it. A file tree rather than `inputs.dir`, because a checkout that has not built the
+ * prefix yet should reach `checkNativePrefix`'s message, not a validation error about a directory.
+ */
+val prefixHeaders = fileTree(nativePrefix.resolve("include"))
+
+/**
  * Compiles the C shim with konan's own gcc, into a static archive cinterop can absorb.
  *
  * Deliberately not the host's gcc: everything else in the link is built against glibc 2.19,
@@ -20,6 +28,7 @@ val buildShim by tasks.registering {
     group = "build"
     description = "Compiles native/CImaging into libphotosimaging.a"
     inputs.dir(shimSource)
+    inputs.files(prefixHeaders).withPropertyName("prefixHeaders")
     outputs.dir(shimOut)
     // Locals rather than the script's vals, so the action does not capture the script object --
     // which the configuration cache cannot store. The same goes for `buildHostShim`.
@@ -69,6 +78,10 @@ val buildHostShim by tasks.registering {
     group = "build"
     description = "Compiles CImaging's decode path into libphotosdecode.so for the JVM adapter"
     inputs.dir(shimSource)
+    inputs.files(prefixHeaders).withPropertyName("prefixHeaders")
+    // The prefix's archives are linked into the .so, so a rebuilt one is a different .so.
+    inputs.files(rootProject.extra["nativePrefixArchives"] as FileCollection)
+        .withPropertyName("prefixArchives")
     outputs.dir(hostShimOut)
     val hostShimOut = hostShimOut
     val shimSource = shimSource
@@ -289,8 +302,14 @@ kotlin {
         }
         compilations.getByName("main").cinterops.create("photosimaging") {
             definitionFile.set(defFileOnDisk)
-            // cinterop must not run before the static archive it absorbs exists.
-            tasks.named(interopProcessingTaskName) { dependsOn(buildShim) }
+            // cinterop absorbs the static archive into the klib, so the archive is an *input*,
+            // not just something to wait for. Ordering alone once left the klib holding the
+            // previous build of the shim: C edited, `buildShim` rerun, cinterop UP-TO-DATE, and
+            // a test binary that ran yesterday's pi_video.c while its sources said otherwise.
+            tasks.named(interopProcessingTaskName) {
+                inputs.files(buildShim).withPropertyName("shim")
+                inputs.files(prefixHeaders).withPropertyName("prefixHeaders")
+            }
         }
     }
     sourceSets {
