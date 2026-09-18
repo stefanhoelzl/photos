@@ -173,12 +173,23 @@ jobs:
 
       # Kotlin/Native again, and a different distribution from the Linux job's: `runner.os` is
       # in the key, so the two caches never collide.
+      #
+      # This job is the ONLY writer of the macOS entry; `ios-e2e` and the ssh-runner sessions
+      # restore it and never save. Beyond the distribution, `~/.konan` holds the per-library
+      # static caches Kotlin/Native builds for each target it links debug binaries for, and
+      # those are what cost a cold build: measured 2026-09-18, the iosArm64 set took ~8 of a
+      # 10-minute device archive, where rerunning every task took 65 s. So whatever this job
+      # links is what every other macOS consumer gets warm.
+      #
+      # `actions/cache` never re-saves a key it already has, so a new target linked here reaches
+      # the cache only when the key changes. `-device-` is that change -- it marks the entry
+      # that carries iosArm64 as well as the simulator. Rename it again if the set changes.
       - name: Cache the Kotlin/Native distribution
         uses: actions/cache@v4
         with:
           path: ~/.konan
-          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
-          restore-keys: konan-${{ runner.os }}-
+          key: konan-${{ runner.os }}-device-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: konan-${{ runner.os }}-device-
 
       # §3's open question, answered every run: the catalog rules execute against **iOS's own
       # SQLite** rather than the pinned one the CLI links. `:app:domain` brings the model, the
@@ -191,6 +202,13 @@ jobs:
           :app:domain:iosSimulatorArm64Test
           :adapter:ios:iosSimulatorArm64Test
           :ui:compileKotlinIosSimulatorArm64
+
+      # The phone's Debug framework, which nothing above builds: the simulator steps never touch
+      # iosArm64. Linked here for the cache step's sake -- so the device's Kotlin/Native caches
+      # land in the entry this job saves -- and because it proves the framework the device
+      # build embeds still links, on every branch rather than first on a phone.
+      - name: Link the device framework
+        run: ./gradlew :app:ios-debug:linkDebugFrameworkIosArm64
 
       # What the Gradle build cannot see. The framework compiling proves the Kotlin; it says
       # nothing about the Info.plist, the Run Script phase, the asset catalog or the Swift entry
@@ -225,12 +243,14 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Cache the Kotlin/Native distribution
-        uses: actions/cache@v4
+      # Restore only: `ios` owns this entry. Saving from here too would race it -- whichever job
+      # finished first would write the key, and this one links no iosArm64.
+      - name: Restore the Kotlin/Native distribution
+        uses: actions/cache/restore@v4
         with:
           path: ~/.konan
-          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
-          restore-keys: konan-${{ runner.os }}-
+          key: konan-${{ runner.os }}-device-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: konan-${{ runner.os }}-device-
 
       - name: Download the fixture media
         uses: actions/download-artifact@v8
