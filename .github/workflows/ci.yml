@@ -16,6 +16,14 @@ on:
   # closed, and a fork's pushes are what a maintainer would re-push from here anyway.
   push:
 
+# A newer push to a branch supersedes the run on the older one: nobody merges the older commit,
+# and its macOS jobs hold slots out of the ~5 an account gets at once -- measured as `ios-e2e`
+# queueing 5-6 minutes while pushes from several branches overlapped. Never on `main`, whose
+# runs are what write the caches every branch reads.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 permissions:
   contents: read
 
@@ -69,22 +77,26 @@ jobs:
       # binary here, `:domain`'s own test binary included, links SQLDelight's native driver
       # against the -lsqlite3 that lives in the prefix the NEXT step builds.
       - name: Fetch konan's gcc toolchain
-        run: ./gradlew :domain:compileKotlinLinuxX64
+        run: ./gradlew :domain:compileKotlinLinuxX64 -Pkotlin.native.enableKlibsCrossCompilation=false
 
       - name: Build the native imaging prefix
         run: Scripts/build-native.sh
 
+      # Without iOS klib cross-compilation: on by default, it compiles every iOS module on Linux
+      # -- ~85 tasks -- that the `ios` job compiles again on a Mac, where it can also link and run
+      # them. Here that is only time. The Linux jobs pass it to every Gradle call alike, so
+      # none of them builds a task graph the others did not.
       - name: Build and test
-        run: ./gradlew build
+        run: ./gradlew build -Pkotlin.native.enableKlibsCrossCompilation=false
 
       # Excluded from `build` on purpose, so it is asked for by name.
       - name: End-to-end scenarios
-        run: ./gradlew :tests:cli:e2e
+        run: ./gradlew :tests:cli:e2e -Pkotlin.native.enableKlibsCrossCompilation=false
 
       # What ships. `dist` strips the release binary the two steps above already linked and
       # tested, and drops Kotlin/Native's `.kexe` suffix.
       - name: Package the binary
-        run: ./gradlew :app:cli:dist
+        run: ./gradlew :app:cli:dist -Pkotlin.native.enableKlibsCrossCompilation=false
 
       # Last, and deliberately without `if: always()`: an artifact means the binary passed
       # everything, so a red run leaves none behind. The zip loses the exec bit -- `chmod +x`
@@ -137,13 +149,13 @@ jobs:
 
       # See `build`: compiling a linuxX64 target is what fetches the toolchain the prefix needs.
       - name: Fetch konan's gcc toolchain
-        run: ./gradlew :domain:compileKotlinLinuxX64
+        run: ./gradlew :domain:compileKotlinLinuxX64 -Pkotlin.native.enableKlibsCrossCompilation=false
 
       - name: Build the native imaging prefix
         run: Scripts/build-native.sh
 
       - name: Write the fixture media
-        run: ./gradlew :tests:fixtures:fixtureMedia
+        run: ./gradlew :tests:fixtures:fixtureMedia -Pkotlin.native.enableKlibsCrossCompilation=false
 
       - name: Upload the app suites' fixture media
         uses: actions/upload-artifact@v7
@@ -226,13 +238,20 @@ jobs:
 
   # The app's scenarios against the signed Debug app on a simulator (`:tests:ios`). Its own job,
   # so the compile and simulator unit tests above still run beside the Linux job rather than
-  # waiting for it. This one waits only for `fixtures`, and then runs beside `build` too.
+  # waiting for it.
+  #
+  # Deliberately NOT `needs: fixtures`, though it needs the media. The app build does not, and
+  # it takes longer than the whole `fixtures` job -- so the two run at once, and this job waits
+  # for the media only once the app is built.
   #
   # Safe on every branch for the same reason the job above is: the app is signed ad-hoc
   # for the simulator, which needs no certificate, and nothing here reads a secret.
   ios-e2e:
     runs-on: macos-26
-    needs: fixtures
+    permissions:
+      contents: read
+      # To read the `fixtures` job's state from this run while waiting for it.
+      actions: read
     steps:
       - uses: actions/checkout@v5
 
@@ -252,6 +271,27 @@ jobs:
           key: konan-${{ runner.os }}-device-${{ hashFiles('gradle/libs.versions.toml') }}
           restore-keys: konan-${{ runner.os }}-device-
 
+      - name: Build the signed Debug app
+        run: ./gradlew :tests:ios:iosApp
+
+      # What `needs: fixtures` would do, but only from here on. `filter=latest` so a re-run of
+      # this job alone finds the earlier attempt's `fixtures` rather than none. A `fixtures` that
+      # failed fails this job too: without the media there is nothing it can prove.
+      - name: Wait for the fixture media
+        timeout-minutes: 30
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          while :; do
+            state=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest" \
+              --jq '.jobs[] | select(.name == "fixtures") | "\(.status) \(.conclusion)"')
+            case "$state" in
+              "completed success") break ;;
+              completed*) echo "::error::the fixtures job ended $state"; exit 1 ;;
+            esac
+            sleep 10
+          done
+
       - name: Download the fixture media
         uses: actions/download-artifact@v8
         with:
@@ -260,8 +300,10 @@ jobs:
 
       # Fails rather than skips when anything it needs is missing -- a simulator, the media,
       # S3Mock -- so a green check here means the scenarios really ran.
+      # `-x iosApp` because an earlier step built it, and the task has no outputs Gradle
+      # could find up to date -- without it, xcodebuild would run a second time.
       - name: App scenarios on the simulator
-        run: ./gradlew :tests:ios:e2e -Pphotos.fixtureMedia=.fixture-media
+        run: ./gradlew :tests:ios:e2e -x :tests:ios:iosApp -Pphotos.fixtureMedia=.fixture-media
 
       # Whatever happened: a failing scenario's last frame is the first thing worth looking at.
       - name: Upload the scenario screenshots
