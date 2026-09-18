@@ -26,6 +26,11 @@ extra["konanToolchain"] = konanToolchain
 tasks.register("checkNativePrefix") {
     group = "verification"
     description = "Fails with an actionable message if the native prefix has not been built."
+    // Locals, not the script's vals: a task action that names a script-level value captures the
+    // whole script object, which the configuration cache cannot store. The same holds for every
+    // `doFirst`/`doLast` below and in the module scripts.
+    val nativePrefix = nativePrefix
+    val konanToolchain = konanToolchain
     doLast {
         require(nativePrefix.resolve("lib/libheif.a").exists()) {
             "native prefix missing -- run: Scripts/build-native.sh"
@@ -56,8 +61,9 @@ val fetchS3Mock by tasks.registering {
     group = "verification"
     description = "Fetches the pinned S3Mock jar into .tools/ (gitignored)."
     outputs.file(s3mockJar)
+    val jar = s3mockJar.asFile
+    val s3mockVersion = s3mockVersion
     doLast {
-        val jar = s3mockJar.asFile
         if (jar.exists()) return@doLast
         jar.parentFile.mkdirs()
         val url = "https://repo1.maven.org/maven2/com/adobe/testing/s3mock/" +
@@ -86,6 +92,7 @@ val fetchS3Mock by tasks.registering {
  */
 fun configureS3MockJvm(task: Task) {
     task.dependsOn(fetchS3Mock)
+    val jarPath = s3mockJar.asFile.path
     var process: Process? = null
     task.doFirst {
         val javaOk = runCatching {
@@ -99,7 +106,7 @@ fun configureS3MockJvm(task: Task) {
         val started = ProcessBuilder(
             "java", "-Dhttp.port=$port", "-DinitialBuckets=my-photos",
             "-Dserver.port=${java.net.ServerSocket(0).use { it.localPort }}",
-            "-jar", s3mockJar.asFile.path,
+            "-jar", jarPath,
         ).redirectOutput(ProcessBuilder.Redirect.DISCARD)
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start()
@@ -121,13 +128,14 @@ fun configureS3MockJvm(task: Task) {
             return@doFirst
         }
         logger.lifecycle("S3Mock listening on 127.0.0.1:$port, bucket 'my-photos'")
-        (task as Test).systemProperty("photos.s3mock.endpoint", "$url/my-photos")
+        (this as Test).systemProperty("photos.s3mock.endpoint", "$url/my-photos")
     }
     task.doLast { process?.destroy() }
 }
 
 fun configureS3Mock(task: Task) {
     task.dependsOn(fetchS3Mock)
+    val jarPath = s3mockJar.asFile.path
     var process: Process? = null
 
     task.doFirst {
@@ -154,7 +162,7 @@ fun configureS3Mock(task: Task) {
             "-DinitialBuckets=$bucket",
             // Keep the TLS connector off a port we might collide with.
             "-Dserver.port=${java.net.ServerSocket(0).use { it.localPort }}",
-            "-jar", s3mockJar.asFile.path,
+            "-jar", jarPath,
         ).redirectOutput(ProcessBuilder.Redirect.DISCARD)
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start()
@@ -191,7 +199,7 @@ fun configureS3Mock(task: Task) {
         // Deliberately not a safe cast. KotlinNativeHostTest is NOT a ProcessForkOptions -- an
         // `as?` here would silently do nothing, the variable would never reach the test, and
         // the round-trip tests would skip forever while the build stayed green.
-        val test = task as org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest
+        val test = this as org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest
         // The full storage URL, bucket included, so the name lives in one place.
         test.environment("PHOTOS_S3MOCK_ENDPOINT", "$url/$bucket")
     }

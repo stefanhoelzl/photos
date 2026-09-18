@@ -58,6 +58,11 @@ val dist by tasks.registering {
     dependsOn("linkReleaseExecutableLinuxX64")
     inputs.file(releaseBinary)
     outputs.file(distBinary)
+    // Locals, so the action does not capture the script object (configuration cache).
+    val konanToolchain = konanToolchain
+    val releaseBinary = releaseBinary
+    val distBinary = distBinary
+    val providers = providers
     doLast {
         // konan's binutils rather than the host's -- the same toolchain that linked the binary
         // and that Scripts/build-native.sh builds the imaging prefix with, so a checkout that

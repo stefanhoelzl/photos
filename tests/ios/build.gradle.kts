@@ -53,8 +53,14 @@ val e2e by tasks.registering {
     dependsOn(iosApp, tasks.named("jvmTest"))
 }
 
+// Whether `e2e` is in this build, decided once the graph is known rather than asked of it while
+// the test task runs: the configuration cache stores the answer, but cannot store `gradle`.
+val e2eRequested = objects.property<Boolean>().convention(false)
+gradle.taskGraph.whenReady { e2eRequested.set(hasTask(e2e.get())) }
+
 tasks.named<Test>("jvmTest") {
-    onlyIf { gradle.taskGraph.hasTask(e2e.get()) }
+    val requested = e2eRequested
+    onlyIf { requested.get() }
     mustRunAfter(iosApp)
     // One simulator for the whole run: scenarios reinstall the app, they do not boot devices.
     maxParallelForks = 1
