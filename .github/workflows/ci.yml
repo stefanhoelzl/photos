@@ -165,14 +165,32 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  # The phone (DESIGN §6). A second job rather than more steps on the first: nothing here needs
+  # The phone (DESIGN §6). A job of its own rather than more steps on `build`: nothing here needs
   # the imaging prefix or the Linux toolchain, and the two run at once instead of in sequence.
+  #
+  # ONE macOS job, not a unit-test job beside a scenario job. Both need a simulator, and a fresh
+  # runner's first boot is the costliest thing either does -- measured as the first scenario
+  # spending 4-6 minutes in boot, terminate and uninstall while the device settled. Here the unit
+  # tests run on that device first and take the settling, and each push holds one of the ~5 macOS
+  # slots an account gets instead of two.
   #
   # This repo is PUBLIC, so macOS minutes are free -- and every branch's push reaches this job.
   # It therefore holds no certificate and signs nothing: the archive and the TestFlight upload
-  # are a separate workflow that runs only on `main`.
+  # are a separate workflow that runs only on `main`. The app is signed ad-hoc for the simulator,
+  # which needs no certificate, and nothing here reads a secret.
+  #
+  # Deliberately NOT `needs: fixtures`, though the scenarios need the media: everything before
+  # them does not, and takes longer than the whole `fixtures` job. The job waits for the media
+  # only once the app is built.
   ios:
     runs-on: macos-26
+    permissions:
+      contents: read
+      # To read the `fixtures` job's state from this run while waiting for it.
+      actions: read
+    env:
+      # The one device the unit tests and the scenarios share.
+      PHOTOS_SIM_DEVICE: iPhone 17 Pro
     steps:
       - uses: actions/checkout@v5
 
@@ -186,12 +204,12 @@ jobs:
       # Kotlin/Native again, and a different distribution from the Linux job's: `runner.os` is
       # in the key, so the two caches never collide.
       #
-      # This job is the ONLY writer of the macOS entry; `ios-e2e` and the ssh-runner sessions
-      # restore it and never save. Beyond the distribution, `~/.konan` holds the per-library
-      # static caches Kotlin/Native builds for each target it links debug binaries for, and
-      # those are what cost a cold build: measured 2026-09-18, the iosArm64 set took ~8 of a
-      # 10-minute device archive, where rerunning every task took 65 s. So whatever this job
-      # links is what every other macOS consumer gets warm.
+      # This job is the ONLY writer of the macOS entry; the ssh-runner sessions restore it and
+      # never save. Beyond the distribution, `~/.konan` holds the per-library static caches
+      # Kotlin/Native builds for each target it links debug binaries for, and those are what cost
+      # a cold build: measured 2026-09-18, the iosArm64 set took ~8 of a 10-minute device archive,
+      # where rerunning every task took 65 s. So whatever this job links is what every other
+      # macOS consumer gets warm.
       #
       # `actions/cache` never re-saves a key it already has, so a new target linked here reaches
       # the cache only when the key changes. `-device-` is that change -- it marks the entry
@@ -203,10 +221,18 @@ jobs:
           key: konan-${{ runner.os }}-device-${{ hashFiles('gradle/libs.versions.toml') }}
           restore-keys: konan-${{ runner.os }}-device-
 
+      # Waited for here, alone. Booted while something compiled, it took the 3-core runner's
+      # compile from 2m19s to 8m48s -- measured -- for 2.7 minutes of boot saved.
+      - name: Boot the simulator
+        run: |
+          xcrun simctl boot "$PHOTOS_SIM_DEVICE"
+          xcrun simctl bootstatus "$PHOTOS_SIM_DEVICE" -b
+
       # §3's open question, answered every run: the catalog rules execute against **iOS's own
       # SQLite** rather than the pinned one the CLI links. `:app:domain` brings the model, the
       # scheduler and the cache, compiled for the same target; `:ui` holds only composables and
-      # so has nothing to run, but it still has to compile.
+      # so has nothing to run, but it still has to compile. `photos.simulator` runs them on the
+      # booted device instead of a standalone boot per test binary.
       - name: Catalog and app-domain suites on the simulator
         run: >-
           ./gradlew
@@ -214,63 +240,20 @@ jobs:
           :app:domain:iosSimulatorArm64Test
           :adapter:ios:iosSimulatorArm64Test
           :ui:compileKotlinIosSimulatorArm64
+          "-Pphotos.simulator=$PHOTOS_SIM_DEVICE"
 
-      # The phone's Debug framework, which nothing above builds: the simulator steps never touch
-      # iosArm64. Linked here for the cache step's sake -- so the device's Kotlin/Native caches
-      # land in the entry this job saves -- and because it proves the framework the device
+      # The phone's Debug framework, which nothing else here builds: the simulator steps never
+      # touch iosArm64. Linked here for the cache step's sake -- so the device's Kotlin/Native
+      # caches land in the entry this job saves -- and because it proves the framework the device
       # build embeds still links, on every branch rather than first on a phone.
       - name: Link the device framework
         run: ./gradlew :app:ios-debug:linkDebugFrameworkIosArm64
 
-      # What the Gradle build cannot see. The framework compiling proves the Kotlin; it says
-      # nothing about the Info.plist, the Run Script phase, the asset catalog or the Swift entry
-      # point -- and those fail at archive time, on main, where the upload gates. Building for a
-      # simulator destination exercises all four and needs no certificate, which is what makes
-      # it safe to run on every branch at all.
-      - name: Build the app for a simulator
-        run: >-
-          xcodebuild build
-          -project app/ios/Photos.xcodeproj
-          -scheme Photos
-          -destination 'generic/platform=iOS Simulator'
-          -derivedDataPath build/DerivedData
-          CODE_SIGNING_ALLOWED=NO
-
-  # The app's scenarios against the signed Debug app on a simulator (`:tests:ios`). Its own job,
-  # so the compile and simulator unit tests above still run beside the Linux job rather than
-  # waiting for it.
-  #
-  # Deliberately NOT `needs: fixtures`, though it needs the media. The app build does not, and
-  # it takes longer than the whole `fixtures` job -- so the two run at once, and this job waits
-  # for the media only once the app is built.
-  #
-  # Safe on every branch for the same reason the job above is: the app is signed ad-hoc
-  # for the simulator, which needs no certificate, and nothing here reads a secret.
-  ios-e2e:
-    runs-on: macos-26
-    permissions:
-      contents: read
-      # To read the `fixtures` job's state from this run while waiting for it.
-      actions: read
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "25"
-
-      - uses: gradle/actions/setup-gradle@v4
-
-      # Restore only: `ios` owns this entry. Saving from here too would race it -- whichever job
-      # finished first would write the key, and this one links no iosArm64.
-      - name: Restore the Kotlin/Native distribution
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.konan
-          key: konan-${{ runner.os }}-device-${{ hashFiles('gradle/libs.versions.toml') }}
-          restore-keys: konan-${{ runner.os }}-device-
-
+      # What the Gradle build cannot see as well as what the scenarios install. The framework
+      # compiling proves the Kotlin; it says nothing about the Info.plist, the Run Script phase,
+      # the asset catalog or the Swift entry point -- and those fail at archive time, on main,
+      # where the upload gates. `build-for-testing` for a simulator exercises all four, plus the
+      # UI test runner, and needs no certificate.
       - name: Build the signed Debug app
         run: ./gradlew :tests:ios:iosApp
 
@@ -298,19 +281,23 @@ jobs:
           name: fixture-media
           path: .fixture-media
 
-      # Fails rather than skips when anything it needs is missing -- a simulator, the media,
-      # S3Mock -- so a green check here means the scenarios really ran.
+      # The app's scenarios against the signed Debug app on the simulator (`:tests:ios`). Fails
+      # rather than skips when anything it needs is missing -- a simulator, the media, S3Mock --
+      # so a green check here means the scenarios really ran.
       # `-x iosApp` because an earlier step built it, and the task has no outputs Gradle
       # could find up to date -- without it, xcodebuild would run a second time.
       - name: App scenarios on the simulator
         run: ./gradlew :tests:ios:e2e -x :tests:ios:iosApp -Pphotos.fixtureMedia=.fixture-media
 
-      # Whatever happened: a failing scenario's last frame is the first thing worth looking at.
-      - name: Upload the scenario screenshots
+      # Whatever happened: a failing scenario's last frame is the first thing worth looking at, and
+      # the log of any UI test it started -- the alert-tapper's especially -- the second.
+      - name: Upload the scenario screenshots and UI test logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: ios-scenario-screenshots
-          path: tests/ios/build/scenarios/**/*.png
+          path: |
+            tests/ios/build/scenarios/**/*.png
+            tests/ios/build/scenarios/**/*.log
           retention-days: 7
           if-no-files-found: warn
