@@ -48,8 +48,9 @@ internal fun iosScenario(label: String, body: suspend IosScenario.() -> Unit) {
         deleteRecursively()
         mkdirs()
     }
-    val simulator = Simulator(required("photos.ios.device", "the build task passes it"))
-    runBlocking {
+    val timings = Timings()
+    val simulator = Simulator(required("photos.ios.device", "the build task passes it"), timings)
+    try { runBlocking {
         val s3 = S3Client(
             storage = endpoint.asStorageUrl(),
             secretAccessKey = PASSWORD,
@@ -58,7 +59,49 @@ internal fun iosScenario(label: String, body: suspend IosScenario.() -> Unit) {
         )
         val zone = Zone(s3, Path(File(scratch, "staging").absolutePath))
         zone.clear()
-        IosScenario(zone, endpoint, simulator, app, scratch, media).use { it.body() }
+        IosScenario(zone, endpoint, simulator, app, scratch, media, timings).use { scenario ->
+            timings.measure("body") { scenario.body() }
+        }
+    } } finally {
+        println(timings.report(label))
+    }
+}
+
+/**
+ * Where a scenario's time went, printed as one line when it ends, pass or fail.
+ *
+ * The suite runs every scenario serially on one simulator, so its length is the sum of what each
+ * one spends before it asserts anything -- booting, reinstalling, relaunching, starting
+ * `xcodebuild`. This is what says which of those is worth taking out.
+ *
+ * `body` is the whole scenario; every other entry is a part of it, so the parts need not add up.
+ */
+internal class Timings {
+    private val started = System.nanoTime()
+    private val spent = linkedMapOf<String, Long>()
+    private val calls = linkedMapOf<String, Int>()
+
+    inline fun <T> measure(what: String, block: () -> T): T {
+        val start = System.nanoTime()
+        try {
+            return block()
+        } finally {
+            record(what, System.nanoTime() - start)
+        }
+    }
+
+    fun record(what: String, nanos: Long) {
+        spent.merge(what, nanos, Long::plus)
+        calls.merge(what, 1, Int::plus)
+    }
+
+    fun report(label: String): String {
+        val seconds = { nanos: Long -> "%.1fs".format(nanos / 1e9) }
+        val parts = spent.entries.joinToString(" ") { (what, nanos) ->
+            val times = calls.getValue(what).takeIf { it > 1 }?.let { "x$it" }.orEmpty()
+            "$what=${seconds(nanos)}$times"
+        }
+        return "PHOTOS_TIMING $label total=${seconds(System.nanoTime() - started)} $parts"
     }
 }
 
@@ -75,13 +118,14 @@ internal class IosScenario(
     private val app: File,
     private val scratch: File,
     private val media: File,
+    private val timings: Timings,
 ) : AutoCloseable {
 
     /**
      * Full photo-library access for the installed app, as a person tapping Allow would give it
      * (§8). Granted after [install], which is what resets it.
      */
-    fun allowPhotos() {
+    fun allowPhotos() = timings.measure("allowPhotos") {
         // The UI test runner reads and writes the library too, when it seeds a Live Photo.
         simulator.grantPhotos(BUNDLE_ID, UI_TEST_RUNNER)
     }
@@ -111,9 +155,11 @@ internal class IosScenario(
         val xctestrun = products.listFiles { file -> file.name.endsWith(".xctestrun") }?.singleOrNull()
             ?: error("no .xctestrun in $products -- Scripts/ios-sim.sh build builds the app for testing")
         val log = File(scratch, "${test.replace('/', '-')}.log")
-        return UiTest.start(xctestrun, simulator.device, "PhotosUITests/$test", environment, log)
-            .also { uiTests += it }
-            .also { test -> ready?.let(test::awaitLine) }
+        return timings.measure("ui-test start") {
+            UiTest.start(xctestrun, simulator.device, "PhotosUITests/$test", environment, log, timings)
+                .also { uiTests += it }
+                .also { test -> ready?.let(test::awaitLine) }
+        }
     }
 
     /**
@@ -131,7 +177,7 @@ internal class IosScenario(
      * previous scenario stored — iOS keeps Keychain items across an uninstall, so without the
      * reset the next scenario would start already set up.
      */
-    fun install() {
+    fun install() = timings.measure("install") {
         simulator.boot()
         simulator.terminate()
         simulator.uninstall()
@@ -140,18 +186,18 @@ internal class IosScenario(
     }
 
     /** Launch (or relaunch) and wait until the control server answers. */
-    suspend fun launch(): JsonObject {
+    suspend fun launch(): JsonObject = timings.measure("launch") {
         simulator.terminate()
         val port = ServerSocket(0).use { it.localPort }
         control = Control("http://127.0.0.1:$port")
         simulator.launch(port)
-        return awaitState("the control server on port $port") { true }
+        awaitState("the control server on port $port") { true }
     }
 
     /** §1's setup through the real Keychain, against this scenario's S3Mock zone. */
-    suspend fun setUp(): JsonObject {
+    suspend fun setUp(): JsonObject = timings.measure("setUp") {
         control.post("/setup?url=${endpoint.encoded()}&password=${PASSWORD.encoded()}")
-        return settle()
+        settle()
     }
 
     /** Waits for the sync the setup started to finish, and requires that it succeeded. */
@@ -223,7 +269,11 @@ internal const val UI_TEST_RUNNER: String = "net.stho.photos.uitests.xctrunner"
 internal const val BUNDLE_ID: String = "net.stho.photos"
 
 /** An XCUITest running in its own `xcodebuild`, its output kept in a log beside the scenario. */
-internal class UiTest private constructor(private val process: Process, private val log: File) : AutoCloseable {
+internal class UiTest private constructor(
+    private val process: Process,
+    private val log: File,
+    private val timings: Timings,
+) : AutoCloseable {
     private val output = StringBuffer()
     private val reader = Thread {
         process.inputStream.bufferedReader().forEachLine { line ->
@@ -252,9 +302,8 @@ internal class UiTest private constructor(private val process: Process, private 
 
     /** Waits for the test to end, requires that it passed, and returns everything it printed. */
     fun awaitSuccess(seconds: Long = 600): String {
-        check(process.waitFor(seconds, java.util.concurrent.TimeUnit.SECONDS)) {
-            "the UI test did not finish within ${seconds}s; its log is $log"
-        }
+        val finished = timings.measure("ui-test finish") { process.waitFor(seconds, java.util.concurrent.TimeUnit.SECONDS) }
+        check(finished) { "the UI test did not finish within ${seconds}s; its log is $log" }
         reader.join(5_000)
         check(process.exitValue() == 0) { "the UI test failed (exit ${process.exitValue()}); its log is $log\n${summary()}" }
         return output.toString()
@@ -268,7 +317,14 @@ internal class UiTest private constructor(private val process: Process, private 
     }
 
     companion object {
-        fun start(xctestrun: File, device: String, test: String, environment: Map<String, String>, log: File): UiTest {
+        fun start(
+            xctestrun: File,
+            device: String,
+            test: String,
+            environment: Map<String, String>,
+            log: File,
+            timings: Timings,
+        ): UiTest {
             log.parentFile.mkdirs()
             val process = ProcessBuilder(
                 "xcodebuild", "test-without-building",
@@ -279,7 +335,7 @@ internal class UiTest private constructor(private val process: Process, private 
                 .redirectErrorStream(true)
                 .apply { environment().putAll(environment.mapKeys { (name, _) -> "TEST_RUNNER_$name" }) }
                 .start()
-            return UiTest(process, log)
+            return UiTest(process, log, timings)
         }
     }
 }
@@ -301,7 +357,7 @@ internal class Control(private val base: String) {
 }
 
 /** `xcrun simctl`, one device, and every failure loud. */
-internal class Simulator(val device: String) {
+internal class Simulator(val device: String, private val timings: Timings) {
 
     fun boot() {
         // Booting a booted device exits non-zero; `bootstatus -b` is what actually waits.
@@ -358,7 +414,13 @@ internal class Simulator(val device: String) {
 
     fun screenshot(file: File) = run("xcrun", "simctl", "io", device, "screenshot", "--type=png", file.absolutePath)
 
-    private fun run(vararg command: String, allowFailure: Boolean = false, environment: Map<String, String> = emptyMap()): String {
+    private fun run(vararg command: String, allowFailure: Boolean = false, environment: Map<String, String> = emptyMap()): String =
+        // Keyed by the verb -- `simctl install`, `sqlite3` -- so the report says which command the time went to.
+        timings.measure(if (command.first() == "xcrun") "simctl ${command[2]}" else command.first()) {
+            runTimed(*command, allowFailure = allowFailure, environment = environment)
+        }
+
+    private fun runTimed(vararg command: String, allowFailure: Boolean, environment: Map<String, String>): String {
         val process = try {
             ProcessBuilder(*command).redirectErrorStream(true).apply { environment().putAll(environment) }.start()
         } catch (missing: java.io.IOException) {

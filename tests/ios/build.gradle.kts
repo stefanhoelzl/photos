@@ -79,7 +79,8 @@ tasks.named<Test>("jvmTest") {
             .getOrElse(project(":tests:fixtures").layout.buildDirectory.dir("fixture-media").get().asFile.absolutePath),
     )
     testLogging {
-        events("failed")
+        // Standard out for the one `PHOTOS_TIMING` line each scenario prints: where its time went.
+        events("failed", "standard_out")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
         showStackTraces = false
     }
