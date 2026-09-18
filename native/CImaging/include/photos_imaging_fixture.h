@@ -23,11 +23,18 @@ extern "C" {
 /* content_identifier, when non-NULL, is written as
  * com.apple.quicktime.content.identifier -- the signal decision 14 pairs Live Photos on.
  *
- * with_audio adds an AAC tone as long as the clip, as a phone's own videos carry. Without one no
- * fixture had a soundtrack, which is how a transcoder that dropped every soundtrack passed. */
+ * with_audio adds a tone as long as the clip, as a phone's own videos carry. Without one no
+ * fixture had a soundtrack, which is how a transcoder that dropped every soundtrack passed.
+ *
+ * audio_sample_rate of 0 writes that tone the way a phone does, as AAC at 44100 Hz. Any other
+ * value writes it as PCM at exactly that rate, which is the only way to get a 2006 camcorder's
+ * soundtrack into a fixture: AAC exists at thirteen sample rates and the compact cameras in the
+ * library used none of them -- 7875 Hz off a Nikon, 11024 off a Canon. That broke the transcoder
+ * twice over, at the encoder it could not open and then at the resampling it had to do instead. */
 int pi_fixture_write_video(const char *path, int width, int height,
                            int frames, int rotation,
-                           const char *content_identifier, int with_audio, pi_error *err);
+                           const char *content_identifier, int with_audio,
+                           int audio_sample_rate, pi_error *err);
 
 /* Writes a HEIC carrying an EXIF block, given an APP1 payload ("Exif\0\0" + TIFF).
  *

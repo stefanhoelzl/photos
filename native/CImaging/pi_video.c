@@ -297,7 +297,28 @@ int pi_video_transcode(const char *in_path, const char *out_path,
         a.enc = avcodec_alloc_context3(aenc_codec);
         av_channel_layout_default(&a.enc->ch_layout,
                                   a.dec->ch_layout.nb_channels > 2 ? 2 : a.dec->ch_layout.nb_channels);
-        a.enc->sample_rate = a.dec->sample_rate > 0 ? a.dec->sample_rate : 44100;
+        /* AAC has only the thirteen MPEG-4 sample rates, and a 2006 camcorder was under no
+         * obligation to pick one of them: the Nikons in the library record at 7875 Hz and the
+         * Canons and the Fuji at 11024. Handing the encoder a rate off that list fails at
+         * avcodec_open2 and nowhere else, which is the whole of "cannot open aac encoder".
+         * Snap up to the nearest rate the encoder admits -- aresample is already in the graph
+         * below to get there, and rounding up rather than down keeps the whole band. */
+        int want_rate = a.dec->sample_rate > 0 ? a.dec->sample_rate : 44100;
+        a.enc->sample_rate = want_rate;
+        const int *rates = NULL;
+        int nrates = 0;
+        if (avcodec_get_supported_config(NULL, aenc_codec, AV_CODEC_CONFIG_SAMPLE_RATE,
+                                         0, (const void **)&rates, &nrates) >= 0
+            && rates && nrates > 0) {
+            int best = 0, highest = 0;
+            for (int i = 0; i < nrates; i++) {
+                if (rates[i] > highest) highest = rates[i];
+                if (rates[i] >= want_rate && (best == 0 || rates[i] < best)) best = rates[i];
+            }
+            /* Nothing at or above it means the source outruns every rate AAC has; the top of
+             * the list is then as close as we get. */
+            a.enc->sample_rate = best > 0 ? best : highest;
+        }
         const enum AVSampleFormat *sfmts = NULL;
         int nsfmts = 0;
         a.enc->sample_fmt = AV_SAMPLE_FMT_FLTP;
@@ -305,7 +326,11 @@ int pi_video_transcode(const char *in_path, const char *out_path,
                                          0, (const void **)&sfmts, &nsfmts) >= 0
             && sfmts && nsfmts > 0)
             a.enc->sample_fmt = sfmts[0];
-        a.enc->bit_rate = 128000;
+        /* AAC-LC carries at most 6144 bits per frame per channel, i.e. 6 bits per sample:
+         * at 8 kHz mono a flat 128 kbit/s asks for nearly three times what the format can
+         * hold, and the encoder clamps it -- loudly -- on every such file. */
+        long long bit_ceiling = 6LL * a.enc->sample_rate * a.enc->ch_layout.nb_channels;
+        a.enc->bit_rate = bit_ceiling < 128000 ? bit_ceiling : 128000;
         a.enc->time_base = (AVRational){ 1, a.enc->sample_rate };
         if (ofmt->oformat->flags & AVFMT_GLOBALHEADER)
             a.enc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
@@ -377,10 +402,22 @@ int pi_video_transcode(const char *in_path, const char *out_path,
 
         if (avcodec_send_packet(s->dec, pkt) >= 0) {
             while (avcodec_receive_frame(s->dec, frame) >= 0) {
+                /* On the way *in* is where best_effort_timestamp is the right answer: it is
+                 * the decoder's own reading of where this frame belongs, and AVI's pcm
+                 * streams have no parser to establish one any other way. */
+                frame->pts = frame->best_effort_timestamp;
                 if (av_buffersrc_add_frame_flags(s->src, frame,
                                                  AV_BUFFERSRC_FLAG_KEEP_REF) >= 0) {
                     while (av_buffersink_get_frame(s->sink, filtered) >= 0) {
-                        filtered->pts = filtered->best_effort_timestamp;
+                        /* What the sink hands over already carries the right pts -- the
+                         * sink's own time base, one per output frame -- and nothing else here
+                         * does. best_effort_timestamp is a *decoder* field, in the input
+                         * stream's time base, and the graph copies it along untouched. The
+                         * Casio AVIs count it in whole ADPCM blocks; and wherever one decoded
+                         * block becomes several of the 1024-sample frames AAC insists on, every
+                         * piece inherits the one timestamp. Either way dts stops advancing, the
+                         * muxer refuses the packet, and the file fails -- which is the whole of
+                         * "audio encode failed", 77 files of it. */
                         int wrc = pi_encode_and_write(ofmt, s, filtered, opkt,
                                                       av_buffersink_get_time_base(s->sink));
                         av_frame_unref(filtered);
@@ -405,12 +442,12 @@ int pi_video_transcode(const char *in_path, const char *out_path,
         if (!s->dec || s->out_index < 0) continue;
         avcodec_send_packet(s->dec, NULL);
         while (avcodec_receive_frame(s->dec, frame) >= 0) {
+            frame->pts = frame->best_effort_timestamp;
             /* A frame the graph refuses is a frame lost from the tail, not a reason to
              * abandon a file that has already been transcoded successfully. */
             int frc = av_buffersrc_add_frame_flags(s->src, frame, AV_BUFFERSRC_FLAG_KEEP_REF);
             (void)frc;
             while (av_buffersink_get_frame(s->sink, filtered) >= 0) {
-                filtered->pts = filtered->best_effort_timestamp;
                 pi_encode_and_write(ofmt, s, filtered, opkt,
                                     av_buffersink_get_time_base(s->sink));
                 av_frame_unref(filtered);
@@ -420,7 +457,6 @@ int pi_video_transcode(const char *in_path, const char *out_path,
         int eof_rc = av_buffersrc_add_frame_flags(s->src, NULL, 0);
         (void)eof_rc;
         while (av_buffersink_get_frame(s->sink, filtered) >= 0) {
-            filtered->pts = filtered->best_effort_timestamp;
             pi_encode_and_write(ofmt, s, filtered, opkt,
                                 av_buffersink_get_time_base(s->sink));
             av_frame_unref(filtered);

@@ -19,7 +19,8 @@
 
 int pi_fixture_write_video(const char *path, int width, int height,
                            int frames, int rotation,
-                           const char *content_identifier, int with_audio, pi_error *err) {
+                           const char *content_identifier, int with_audio,
+                           int audio_sample_rate, pi_error *err) {
     AVFormatContext *ofmt = NULL;
     AVCodecContext *enc = NULL;
     AVCodecContext *aenc = NULL;
@@ -77,19 +78,24 @@ int pi_fixture_write_video(const char *path, int width, int height,
         if (matrix) av_display_rotation_set((int32_t *)matrix, (double)rotation);
     }
 
+    /* A rate asks for the tone as raw PCM rather than AAC, which is the only way to get a
+     * camcorder's soundtrack into a fixture: AAC can only be written at one of thirteen rates,
+     * and the rates the library's cameras used are not among them. */
+    int pcm_audio = with_audio && audio_sample_rate > 0;
     if (with_audio) {
-        const AVCodec *acodec = avcodec_find_encoder(AV_CODEC_ID_AAC);
-        if (!acodec) { rc = pi_fail(err, PI_ERR_UNSUPPORTED, "fixture: aac missing"); goto done; }
+        const AVCodec *acodec = avcodec_find_encoder(pcm_audio ? AV_CODEC_ID_PCM_S16LE
+                                                               : AV_CODEC_ID_AAC);
+        if (!acodec) { rc = pi_fail(err, PI_ERR_UNSUPPORTED, "fixture: audio encoder missing"); goto done; }
         aenc = avcodec_alloc_context3(acodec);
-        aenc->sample_rate = 44100;
-        aenc->sample_fmt = AV_SAMPLE_FMT_FLTP;
+        aenc->sample_rate = pcm_audio ? audio_sample_rate : 44100;
+        aenc->sample_fmt = pcm_audio ? AV_SAMPLE_FMT_S16 : AV_SAMPLE_FMT_FLTP;
         av_channel_layout_default(&aenc->ch_layout, 1);
-        aenc->bit_rate = 64000;
+        if (!pcm_audio) aenc->bit_rate = 64000;
         aenc->time_base = (AVRational){ 1, aenc->sample_rate };
         if (ofmt->oformat->flags & AVFMT_GLOBALHEADER)
             aenc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
         if (avcodec_open2(aenc, acodec, NULL) < 0) {
-            rc = pi_fail(err, PI_ERR_ENCODE, "fixture: cannot open aac");
+            rc = pi_fail(err, PI_ERR_ENCODE, "fixture: cannot open audio encoder");
             goto done;
         }
         ast = avformat_new_stream(ofmt, NULL);
@@ -167,11 +173,16 @@ int pi_fixture_write_video(const char *path, int width, int height,
     }
 
     if (aenc) {
-        /* A 440 Hz tone for as long as the pictures last, in the encoder's fixed frame size. */
+        /* A 440 Hz tone for as long as the pictures last. AAC has a fixed frame size and PCM
+         * has none, so the block length is the encoder's where it has one and a whole second
+         * otherwise. The mov muxer will hand that back in 1024-sample packets whatever it was
+         * given, which is fine: what makes the resampled frames stop lining up with the source's
+         * is the rate change itself, and that is what the transcoder used to choke on. */
+        int chunk = aenc->frame_size > 0 ? aenc->frame_size : aenc->sample_rate;
         AVFrame *af = av_frame_alloc();
         if (!af) { rc = pi_fail(err, PI_ERR_MEMORY, "fixture: audio frame"); goto done; }
         af->format = aenc->sample_fmt;
-        af->nb_samples = aenc->frame_size;
+        af->nb_samples = chunk;
         af->sample_rate = aenc->sample_rate;
         av_channel_layout_copy(&af->ch_layout, &aenc->ch_layout);
         if (av_frame_get_buffer(af, 0) < 0) {
@@ -180,11 +191,13 @@ int pi_fixture_write_video(const char *path, int width, int height,
             goto done;
         }
         long total = (long)frames * aenc->sample_rate / 25;
-        for (long at = 0; at < total; at += aenc->frame_size) {
+        for (long at = 0; at < total; at += chunk) {
             if (av_frame_make_writable(af) < 0) break;
-            float *samples = (float *)af->data[0];
-            for (int i = 0; i < aenc->frame_size; i++)
-                samples[i] = 0.25f * (float)sin(2.0 * 3.141592653589793 * 440.0 * (double)(at + i) / aenc->sample_rate);
+            for (int i = 0; i < chunk; i++) {
+                double v = 0.25 * sin(2.0 * 3.141592653589793 * 440.0 * (double)(at + i) / aenc->sample_rate);
+                if (pcm_audio) ((int16_t *)af->data[0])[i] = (int16_t)(v * 32767.0);
+                else ((float *)af->data[0])[i] = (float)v;
+            }
             af->pts = at;
             if (avcodec_send_frame(aenc, af) < 0) break;
             while (avcodec_receive_packet(aenc, pkt) >= 0) {

@@ -269,7 +269,11 @@ if ! have ffmpeg; then
         --enable-decoder=png,tiff,bmp,gif
         # audio: 192 mp4a, 5 sowt(pcm), plus mp3 for older avi
         --enable-decoder=aac,aac_latm,mp3,pcm_s16le,pcm_s16be,pcm_u8,ac3,adpcm_ima_wav
-        --enable-encoder=libx265,aac
+        # pcm_s16le is the fixture writer's, not the pipeline's: a camcorder's soundtrack is
+        # PCM at a rate AAC has never had (7875 off a Nikon, 11024 off a Canon) in blocks that
+        # are not AAC's 1024 samples, and both of those broke the transcoder on real files. With
+        # only an AAC encoder in the build, no fixture could be written that had either property.
+        --enable-encoder=libx265,aac,pcm_s16le
         --enable-parser=h264,hevc,mpeg4video,mpegvideo,mjpeg,png
         # aformat: the audio graph ends in it. Left out once, and every transcode lost its sound.
         --enable-filter=scale,yadif,transpose,hflip,vflip,format,null,anull,aresample,aformat
