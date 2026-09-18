@@ -597,7 +597,7 @@ is therefore used as-is.**
 while the rest of the binary links against a glibc 2.19 sysroot to get §7's floor. Those cannot
 meet, so taking the platform's library would raise the shipped binary's floor to whatever the
 build host happened to have, making portability a property of the machine rather than of the
-build. It is one pinned tarball beside the imaging stack (`Scripts/PROVENANCE.md`), committed
+build. It is one pinned tarball beside the imaging stack (`native/build.gradle.kts`), committed
 nowhere.
 
 > The two builds can differ freely, because the floor above says they cannot disagree about
@@ -1579,15 +1579,15 @@ validation and exit codes, which are most of what a CLI is.
 would drag meson, libffi, PCRE2, proxy-libintl, libgcrypt and libgpg-error into the build
 prefix for about 8 MB — and glib `dlopen`s its GIO modules, which is a stub that always fails
 in a statically linked binary. The same reasoning already kept libvips out
-(`Scripts/PROVENANCE.md`).
+(`native/build.gradle.kts`).
 
 **libdbus-1 comes in, and it is not glib.** The Secret Service is a D-Bus protocol, and
 speaking it needs a D-Bus library, not a keyring library. libdbus-1 is the reference
 implementation, depends on nothing but libc, links statically, and costs 204 KB in the
 shipped binary. Its `configure` requires an XML parser even to build the client library, so
 expat comes with it — 377 KB of archive, no dependencies of its own, and nothing in our code
-includes it. Both are pinned in `build-native.sh`; dbus at 1.14.10 because 1.16 dropped
-autotools for meson.
+includes it. Both are pinned in `gradle/libs.versions.toml`; dbus at 1.14.10 because 1.16
+dropped autotools for meson.
 
 **There is no keyring library to reach for.** Nothing in Kotlin speaks the Secret Service, on
 any target. The JVM options either exec `secret-tool` — which the paragraph above rules out —

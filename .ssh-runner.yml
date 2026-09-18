@@ -43,8 +43,8 @@ steps:
 sync:
   delete: true
   # Everything here is either the runner's own output or Linux-only build state. `.tools` is
-  # the libjpeg/libheif prefix build-native.sh produces for linuxX64 -- gigabytes that mean
-  # nothing on macOS. The build dirs are excluded so that `--delete` does not wipe the
+  # where the native prefix used to be built, and old checkouts may still carry it --
+  # gigabytes that mean nothing on macOS. The build dirs are excluded so that `--delete` does not wipe the
   # runner's incremental state on every push (see SKILL.md "Traps worth knowing").
   exclude:
     - .git

@@ -1,21 +1,21 @@
-plugins { alias(libs.plugins.kotlin.multiplatform) }
+import photos.nativebuild.WriteText
+
+plugins {
+    alias(libs.plugins.kotlin.multiplatform)
+    id("photos.native-toolchain")
+}
 
 // The Linux half of DESIGN §7's ports: the imaging backend over native/CImaging, and later
 // the D-Bus keyring, the flock run lock and the XDG paths.
 
-val nativePrefix: File = rootProject.extra["nativePrefix"] as File
-val konanToolchain: File? = rootProject.extra["konanToolchain"] as File?
+// What the shim and the two interops include; `:native` brings along what these link against.
+native.link("heif", "ffmpeg", "jpeg", "lcms2", "exif", "sqlite", "dbus")
+
 val shimSource: File = rootDir.resolve("native/CImaging")
-
 val shimOut = layout.buildDirectory.dir("shim")
-
-/**
- * What the shim is compiled against. The prefix is built outside Gradle, by
- * `Scripts/build-native.sh`, so nothing else would tell a task that ffmpeg's headers changed
- * underneath it. A file tree rather than `inputs.dir`, because a checkout that has not built the
- * prefix yet should reach `checkNativePrefix`'s message, not a validation error about a directory.
- */
-val prefixHeaders = fileTree(nativePrefix.resolve("include"))
+val nativeLibs: FileCollection = native.libraries
+val nativeIncludes = native.includeFlags()
+val nativeLibraryPaths = native.libraryFlags
 
 /**
  * Compiles the C shim with konan's own gcc, into a static archive cinterop can absorb.
@@ -28,37 +28,34 @@ val buildShim by tasks.registering {
     group = "build"
     description = "Compiles native/CImaging into libphotosimaging.a"
     inputs.dir(shimSource)
-    inputs.files(prefixHeaders).withPropertyName("prefixHeaders")
+    inputs.files(nativeLibs)
     outputs.dir(shimOut)
+    dependsOn(native.toolchainHome, "checkKonanToolchain")
     // Locals rather than the script's vals, so the action does not capture the script object --
     // which the configuration cache cannot store. The same goes for `buildHostShim`.
-    val konanToolchain = konanToolchain
+    val gcc = native.tool("gcc")
+    val ar = native.tool("ar")
     val shimOut = shimOut
     val shimSource = shimSource
-    val nativePrefix = nativePrefix
+    val nativeIncludes = nativeIncludes
     val providers = providers
     doLast {
-        val tc = requireNotNull(konanToolchain) {
-            "konan gcc toolchain not found -- link a linuxX64 binary once to fetch it"
-        }
-        val gcc = tc.resolve("bin/x86_64-unknown-linux-gnu-gcc").absolutePath
-        val ar = tc.resolve("bin/x86_64-unknown-linux-gnu-ar").absolutePath
         val out = shimOut.get().asFile.apply { mkdirs() }
         val sources = shimSource.listFiles { f -> f.name.endsWith(".c") }!!.sortedBy { it.name }
 
         sources.forEach { c ->
             providers.exec {
                 commandLine(
-                    gcc, "-O2", "-fPIC", "-std=c11", "-c", c.absolutePath,
-                    "-I", shimSource.resolve("include").absolutePath,
-                    "-I", nativePrefix.resolve("include").absolutePath,
-                    "-o", out.resolve(c.nameWithoutExtension + ".o").absolutePath,
+                    listOf(gcc.get(), "-O2", "-fPIC", "-std=c11", "-c", c.absolutePath,
+                        "-I", shimSource.resolve("include").absolutePath) +
+                        nativeIncludes.get() +
+                        listOf("-o", out.resolve(c.nameWithoutExtension + ".o").absolutePath),
                 )
             }.standardOutput.asText.get()
         }
         providers.exec {
             commandLine(
-                listOf(ar, "rcs", out.resolve("libphotosimaging.a").absolutePath) +
+                listOf(ar.get(), "rcs", out.resolve("libphotosimaging.a").absolutePath) +
                     sources.map { out.resolve(it.nameWithoutExtension + ".o").absolutePath },
             )
         }.standardOutput.asText.get()
@@ -70,7 +67,7 @@ val buildShim by tasks.registering {
  *
  * Built with the host's gcc rather than konan's: this one is loaded by a JVM running on this
  * machine, so it links against this machine's glibc, and §7's 2.19 floor is the shipped CLI's
- * concern rather than a development surface's. The prefix's static archives are position
+ * concern rather than a development surface's. The libraries' static archives are position
  * independent, so they go into a `.so` unchanged.
  */
 val hostShimOut = layout.buildDirectory.dir("shim-host")
@@ -78,18 +75,15 @@ val buildHostShim by tasks.registering {
     group = "build"
     description = "Compiles CImaging's decode path into libphotosdecode.so for the JVM adapter"
     inputs.dir(shimSource)
-    inputs.files(prefixHeaders).withPropertyName("prefixHeaders")
-    // The prefix's archives are linked into the .so, so a rebuilt one is a different .so.
-    inputs.files(rootProject.extra["nativePrefixArchives"] as FileCollection)
-        .withPropertyName("prefixArchives")
+    inputs.files(nativeLibs)
     outputs.dir(hostShimOut)
     val hostShimOut = hostShimOut
     val shimSource = shimSource
-    val nativePrefix = nativePrefix
+    val nativeIncludes = nativeIncludes
+    val nativeLibraryPaths = nativeLibraryPaths
     val providers = providers
     doLast {
         val out = hostShimOut.get().asFile.apply { mkdirs() }
-        val lib = nativePrefix.resolve("lib")
         // Decode only, and deliberately so. The full shim cannot become a shared object at
         // all: ffmpeg's swscale and x265 both ship hand-written assembly with absolute
         // relocations, which a `.so` cannot carry. Neither is needed to *read* a photograph --
@@ -100,10 +94,10 @@ val buildHostShim by tasks.registering {
                 listOf("gcc", "-O2", "-fPIC", "-std=c11", "-shared",
                     "-o", out.resolve("libphotosdecode.so").absolutePath) +
                     units.map { shimSource.resolve(it).absolutePath } +
+                    listOf("-I", shimSource.resolve("include").absolutePath) +
+                    nativeIncludes.get() + nativeLibraryPaths.get() +
                     listOf(
-                        "-I", shimSource.resolve("include").absolutePath,
-                        "-I", nativePrefix.resolve("include").absolutePath,
-                        "-L$lib", "-Wl,--start-group",
+                        "-Wl,--start-group",
                         "-lheif", "-lde265", "-ljpeg", "-llcms2", "-lavutil",
                         "-Wl,--end-group", "-lstdc++", "-lm", "-lpthread", "-ldl",
                     ),
@@ -112,28 +106,10 @@ val buildHostShim by tasks.registering {
     }
 }
 
-/**
- * Registers a task that writes `build/<name>.def` from [text], and returns the file as its output.
- *
- * A task rather than a write during configuration: with the configuration cache, a build that
- * reuses its entry does not configure at all, so a def written as a side effect of configuring
- * would stay missing after a `clean`. The text is still computed while configuring -- it is a
- * pure function of paths -- and is the task's input, so a changed path rewrites the file.
- */
-fun defFile(name: String, text: () -> String): Provider<RegularFile> {
-    val file = layout.buildDirectory.file("$name.def")
-    val content = text()
-    val write = tasks.register("write${name.replaceFirstChar { it.uppercase() }}Def") {
-        inputs.property("text", content)
-        outputs.file(file)
-        doLast { file.get().asFile.writeText(content) }
-    }
-    return write.map { file.get() }
-}
-
-// The .def is generated rather than checked in, so the prefix path stays derived from the
-// build instead of pasted into a file that goes stale. Written during configuration because
-// its content is a pure function of paths -- cinterop wants it to exist before any task runs.
+// The .def is generated rather than checked in, so the library paths stay derived from the
+// build instead of pasted into a file that goes stale. Written by a task, because those paths
+// are only known once `:native` resolves -- and depending on that task is what makes cinterop
+// wait for the libraries to be built.
 //
 // `linkerOpts` reaches ld.lld directly -- no compiler driver -- so `-Wl,` prefixes are
 // rejected and `--start-group` is spelled plainly. The group is not decoration: these archives
@@ -143,19 +119,23 @@ fun defFile(name: String, text: () -> String): Provider<RegularFile> {
 //
 // libstdc++ comes from konan's toolchain as a static archive: linking it dynamically would put
 // libstdc++.so.6 on the runtime list for no reason (DESIGN §7).
-val defFileOnDisk = defFile("photosimaging") {
-    val libstdcxx = konanToolchain?.resolve("x86_64-unknown-linux-gnu/lib64/libstdc++.a")?.absolutePath
-        ?: "-lstdc++"
-    val lib = nativePrefix.resolve("lib")
-        """
-        headers = photos_imaging.h photos_imaging_fixture.h
-        headerFilter = photos_imaging*.h
-        compilerOpts = -I${shimSource.resolve("include")} -I${nativePrefix.resolve("include")}
-        staticLibraries = libphotosimaging.a
-        libraryPaths = ${shimOut.get().asFile}
-        linkerOpts = -L$lib --start-group -lheif -lde265 -lx265 -lavfilter -lavformat -lavcodec -lswscale -lswresample -lavutil -ljpeg -llcms2 -lexif -lsqlite3 -lz --end-group $libstdcxx -lm -lpthread -lrt -ldl
+val imagingDef by tasks.registering(WriteText::class) {
+    output = layout.buildDirectory.file("photosimaging.def")
+    // Locals, so the text's lambda does not capture the script object (configuration cache).
+    val shimInclude = shimSource.resolve("include")
+    val shimOut = shimOut
+    text = nativeIncludes.zip(nativeLibraryPaths) { includes, paths -> includes to paths }
+        .zip(native.libstdcxx) { (includes, paths), libstdcxx ->
+            """
+            headers = photos_imaging.h photos_imaging_fixture.h
+            headerFilter = photos_imaging*.h
+            compilerOpts = -I$shimInclude ${includes.joinToString(" ")}
+            staticLibraries = libphotosimaging.a
+            libraryPaths = ${shimOut.get().asFile}
+            linkerOpts = ${paths.joinToString(" ")} --start-group -lheif -lde265 -lx265 -lavfilter -lavformat -lavcodec -lswscale -lswresample -lavutil -ljpeg -llcms2 -lexif -lsqlite3 -lz --end-group $libstdcxx -lm -lpthread -lrt -ldl
 
-        """.trimIndent()
+            """.trimIndent()
+        }
 }
 
 /**
@@ -169,15 +149,17 @@ val defFileOnDisk = defFile("photosimaging") {
  * architecture and installed under libdir — so both are on the include path or `<dbus/dbus.h>`
  * fails to resolve its own include.
  */
-val dbusDefFile = defFile("photosdbus") {
-    val lib = nativePrefix.resolve("lib")
+val dbusDef by tasks.registering(WriteText::class) {
+    output = layout.buildDirectory.file("photosdbus.def")
+    text = native.includeFlags("include/dbus-1.0", "lib/dbus-1.0/include").zip(nativeLibraryPaths) { includes, paths ->
         """
         headers = dbus/dbus.h
         headerFilter = dbus/**
-        compilerOpts = -I${nativePrefix.resolve("include/dbus-1.0")} -I${lib.resolve("dbus-1.0/include")}
-        linkerOpts = -L$lib -ldbus-1 -lexpat -lpthread
+        compilerOpts = ${includes.joinToString(" ")}
+        linkerOpts = ${paths.joinToString(" ")} -ldbus-1 -lexpat -lpthread
 
         """.trimIndent()
+    }
 }
 
 /**
@@ -191,7 +173,9 @@ val dbusDefFile = defFile("photosdbus") {
  * fcntl record locks are not a substitute: they are released when *any* descriptor to the file
  * is closed, which is precisely the fragility §7 chose flock to avoid.
  */
-val flockDefFile = defFile("photosflock") {
+val flockDef by tasks.registering(WriteText::class) {
+    output = layout.buildDirectory.file("photosflock.def")
+    text = (
         """
         ---
         #include <sys/file.h>
@@ -204,6 +188,7 @@ val flockDefFile = defFile("photosflock") {
         }
 
         """.trimIndent()
+    )
 }
 
 /**
@@ -218,7 +203,9 @@ val flockDefFile = defFile("photosflock") {
  * the process outright however long the first one takes to unwind. That is the escape hatch from
  * a clean stop that is waiting on a transcode already inside the encoder.
  */
-val signalsDefFile = defFile("photossignals") {
+val signalsDef by tasks.registering(WriteText::class) {
+    output = layout.buildDirectory.file("photossignals.def")
+    text = (
         """
         ---
         #include <errno.h>
@@ -280,6 +267,7 @@ val signalsDefFile = defFile("photossignals") {
         }
 
         """.trimIndent()
+    )
 }
 
 kotlin {
@@ -292,23 +280,22 @@ kotlin {
     }
     linuxX64 {
         compilations.getByName("main").cinterops.create("photosdbus") {
-            definitionFile.set(dbusDefFile)
+            definitionFile.set(dbusDef.flatMap { it.output })
         }
         compilations.getByName("main").cinterops.create("photosflock") {
-            definitionFile.set(flockDefFile)
+            definitionFile.set(flockDef.flatMap { it.output })
         }
         compilations.getByName("main").cinterops.create("photossignals") {
-            definitionFile.set(signalsDefFile)
+            definitionFile.set(signalsDef.flatMap { it.output })
         }
         compilations.getByName("main").cinterops.create("photosimaging") {
-            definitionFile.set(defFileOnDisk)
+            definitionFile.set(imagingDef.flatMap { it.output })
             // cinterop absorbs the static archive into the klib, so the archive is an *input*,
             // not just something to wait for. Ordering alone once left the klib holding the
             // previous build of the shim: C edited, `buildShim` rerun, cinterop UP-TO-DATE, and
             // a test binary that ran yesterday's pi_video.c while its sources said otherwise.
             tasks.named(interopProcessingTaskName) {
                 inputs.files(buildShim).withPropertyName("shim")
-                inputs.files(prefixHeaders).withPropertyName("prefixHeaders")
             }
         }
     }

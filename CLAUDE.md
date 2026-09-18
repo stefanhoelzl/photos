@@ -16,6 +16,6 @@ backups): any build can be rebuilt from its commit.
 
 Never copy anything from another workspace or worktree -- not `.tools/`, not `build/`, not a
 compiled binary, not a file of any kind. Build everything this workspace needs yourself, from its
-own sources: `Scripts/build-native.sh` for the native prefix in `.tools/`, Gradle for the rest.
+own sources, with Gradle -- which builds the native libraries too, in `:native`.
 Another workspace's artifacts were built from another branch's sources, and a copy carries that
 workspace's absolute paths with it.

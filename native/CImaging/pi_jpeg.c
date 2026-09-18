@@ -10,7 +10,7 @@
  * ICC profile has its own accessor, but APP1, and therefore the EXIF orientation tag, is
  * simply unreachable. Reading it here is what makes DESIGN section 3's promise -- stored
  * dimensions are already rotated, no consumer applies orientation -- true for the 94% of the
- * library that is JPEG. See Scripts/PROVENANCE.md.
+ * library that is JPEG. See native/build.gradle.kts.
  */
 #include <stdio.h>
 #include <stdlib.h>

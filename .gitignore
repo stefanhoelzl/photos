@@ -3,6 +3,8 @@ mockups/index.html
 # The desktop app's cache: shards, packs and browsed blobs for this checkout (§4).
 .cache/
 .build/
+# Where Scripts/build-native.sh used to build the native prefix. Nothing writes it any more, but
+# older checkouts still hold one, and un-ignoring it would let `git add -A` stage it there.
 .tools/
 
 # Gradle

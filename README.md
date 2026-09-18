@@ -21,6 +21,7 @@ download queue and no screen to keep in order.
 | `:ui` | one Compose UI, compiled for the desktop and the phone. Composables and nothing else |
 | `:app:map` | the map's basemap and nothing else: MapLibre Native drawing VersaTiles' vector tiles behind `:ui`'s `BaseMap` port. The desktop window and the phone install it; a headless render — `/screenshot`, `:tests:app` — keeps `:ui`'s plain stand-in, since MapLibre needs a window to present into |
 | `:adapter:linux` | the imaging backend over `native/CImaging`, the Secret Service — one protocol over two transports, libdbus for the CLI and dbus-java for the app — the flock run lock, XDG paths |
+| `:native` | the native libraries `:adapter:linux` and `:domain` link — libjpeg-turbo, lcms2, libexif, libde265, x265, libheif, ffmpeg, expat, libdbus and SQLite — each built from a pinned tarball with Kotlin/Native's gcc toolchain, one task per library, and served from the build cache after the first build |
 | `:adapter:ios` | the phone's half of the same ports: the SQL driver over the platform SQLite, and the app container's directories |
 | `:app:cli` | the shipped `photos-cli`: argument parsing, a composition root, exit codes |
 | `:app:control` | the control server both roots start when driven by a test or an agent — `/state`, navigation, cache actions, the date filter (`/calendar`, `/range`), the map (`/map` and its camera, taps and sheet), `/upload/…`, `/setup`, `/logout`; kept out of the iOS release build |
@@ -107,8 +108,7 @@ an estimate.
 ## Build and test
 
 ```sh
-Scripts/build-native.sh          # once: imaging stack, sqlite, openssl, curl, dbus
-./gradlew build                  # 348 tests
+./gradlew build                  # 348 tests; builds the native libraries on first use
 ./gradlew :app:cli:linkReleaseExecutableLinuxX64
 ./gradlew :tests:cli:e2e         # 22 scenarios against the shipped binary — opt-in
 ```
@@ -159,14 +159,37 @@ a zone, forks `photos-cli` against S3Mock, and asserts the library and zone that
 library open-world, naming only what matters, and the zone exhaustively, so an unexpected row
 fails without anyone having predicted it.
 
-The native stack **must** be built with Kotlin/Native's own bundled toolchain, which is what
-`build-native.sh` does and why it takes no argument any more. Built with the host's gcc instead,
-the prefix pulls in symbols konan's glibc-2.19 sysroot has never had — libmvec, `__isoc23_strtol`,
+The native libraries — the imaging stack, SQLite and libdbus — are built by `:native` from
+pinned source tarballs, one task per library, and linked by whatever asks for them. They
+**must** be built with Kotlin/Native's own bundled toolchain, so the build resolves that
+toolchain itself rather than trusting the host's gcc. Built with the host's gcc instead, a
+library pulls in symbols konan's glibc-2.19 sysroot has never had — libmvec, `__isoc23_strtol`,
 `__libc_single_threaded`, the modern libstdc++ `__cxx11` ABI — and the link fails. Building it
-that way is also what gives the shipped binary its low glibc floor.
-`./gradlew checkNativePrefix` says whether the prefix is there.
+that way is also what gives the shipped binary its low glibc floor. `checkKonanToolchain` fails
+the build if a Kotlin upgrade moves Kotlin/Native to a different toolchain than the one pinned.
 
-The round-trip tests need `java`: the build fetches adobe/S3Mock into the gitignored `.tools/`,
+A cold build compiles the libraries once; the build cache then serves them to every other
+worktree on the machine. From the host they need `make`, `pkg-config` and a `tar` that reads
+gzip, bzip2 and xz — nothing else, and nothing installed system-wide.
+
+Every dependency — Maven artifacts, the native tarballs, Kotlin/Native's toolchain — is checked
+against `gradle/verification-metadata.xml`, so a version bump fails until its checksums are
+recorded. Record them with the same tasks CI runs, which is what makes Gradle resolve them —
+and from a cold resolution, because a warm daemon does not re-resolve the settings and plugin
+classpaths, and whatever it does not resolve it does not record:
+
+```sh
+./gradlew --stop
+./gradlew --no-daemon --no-configuration-cache --refresh-dependencies \
+    --write-verification-metadata sha256 build :tests:cli:e2e :app:cli:dist
+```
+
+Review the diff before committing it: a changed checksum for an unchanged version is exactly
+what verification exists to catch. Only a Mac resolves the macOS Kotlin/Native distribution, so
+a Kotlin bump also needs its `macos-aarch64` entry, from a Mac or checked against Maven
+Central's published sha1.
+
+The round-trip tests need `java`: the build resolves adobe/S3Mock as a dependency,
 starts it on a free port with the bucket already declared, and stops it afterwards. Without java
 they skip and everything else still runs. The keyring tests do the same with `dbus-daemon`, each
 getting a private bus with a stub Secret Service on it — so the real wire protocol is exercised
