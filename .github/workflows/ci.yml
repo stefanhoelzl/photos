@@ -89,6 +89,17 @@ jobs:
       - name: Build and test
         run: ./gradlew build -Pkotlin.native.enableKlibsCrossCompilation=false
 
+      # A failing test's full stack trace. The log carries the first frame in the test class and no
+      # more, which for a failure inside `runTest` is the line the test starts on.
+      - name: Upload the test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-linux
+          path: "**/build/test-results/**/*.xml"
+          retention-days: 7
+          if-no-files-found: ignore
+
       # Excluded from `build` on purpose, so it is asked for by name.
       - name: End-to-end scenarios
         run: ./gradlew :tests:cli:e2e -Pkotlin.native.enableKlibsCrossCompilation=false
