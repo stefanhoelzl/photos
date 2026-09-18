@@ -21,8 +21,8 @@ public interface Gallery {
     /**
      * An album's assets, or every asset in the library when [album] is null — the loose picker.
      *
-     * **Newest first** (§8): the picker answers "what did I just shoot". An upload sends the other
-     * way, which [Naming] takes care of.
+     * **Oldest first** (§8), as the Photos app lists a library, and as an upload sends it: the
+     * picker opens at the end, so the newest photo is still the one it lands on.
      *
      * The picker's year headings are drawn wherever the year changes from one row to the next, so
      * they follow whichever way this runs and a list in no order at all shows a year twice rather

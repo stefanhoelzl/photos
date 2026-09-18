@@ -1897,8 +1897,9 @@ Settings. There is no reduced mode: it would be a second picker to build and to 
 
 ```
 upload icon               on the album list, a container, or inside an album
-  → gallery picker        album, or loose photos with drag-across-to-select,
-                          under a pinned year heading;
+  → gallery picker        loose photos with drag-across-to-select, oldest first
+                          and opened at the end, under a pinned year heading;
+                          or, below them, an album whole;
                           Live Photos and videos carry the tile mark (§6)
   → album dialog          one field: an album's path, picked from a list or typed,
                           pre-filled from where you started,
@@ -1912,27 +1913,40 @@ upload icon               on the album list, a container, or inside an album
                           once it holds nothing else
 ```
 
-**The picker's grid is newest first**, the one order in the app that is — it answers *what did I
-just shoot*, not *how did this album go*, and a library's newest photo is the one being uploaded.
-The first open lands on it, the grid's scroll being its own; where a later one lands is the
-paragraph below. §3's rules are about the catalog, and the gallery is not the catalog — inside an
-album the photos stay oldest first, and there is no sort to choose in either place.
+**The picker's grid is oldest first, and opens at its end** — the Photos app's own layout, so the
+library reads the way it does everywhere else on the phone, and the newest photo, the one being
+uploaded, is still what the picker lands on. The grid's scroll is its own. §3's rules are about the
+catalog, and the gallery is not the catalog; there is no sort to choose.
 
-**An upload still sends oldest first**, whichever way the grid was read. The order decides only
-which of two photos sharing a camera name keeps it and which gains ` (2)`, so it stays
-first-come-first-served, and a gallery album taken whole names its photos exactly as a loose pick
-of the same photos would. The album's own order comes from `taken_at` (§3) and never from this.
+**The albums come after the photos.** Above them they would sit thousands of rows up, out of reach
+from where the picker opens; below, they are in view at the end, under the newest photos, headed
+*Or upload a whole album*. The end is the list's true end — the albums in view, however many there
+are — and the photos carry no label of their own: the nav bar counts what is selected, and a year
+heading heads them.
+
+**An upload sends oldest first**, the grid's own order. The order decides only which of two photos
+sharing a camera name keeps it and which gains ` (2)`, so it stays first-come-first-served, and a
+gallery album taken whole names its photos exactly as a loose pick of the same photos would. The
+album's own order comes from `taken_at` (§3) and never from this.
 
 **A later open comes back where the picker was left.** One position for the session, in memory
-only — the first item on screen named by key, its position as a fallback — so working down a
+only — the first item on screen named by key, its position as a fallback — so working through a
 library a batch at a time does not mean scrolling past everything that has already gone up. It is
 kept on the upload model rather than on the back stack, which drops a screen's scroll as the
-screen is left (§6): here that is exactly the moment worth remembering. The library is re-read on
-every open, so photos taken since are waiting at the top, and the thumbnails are fetched from the
-remembered position outward — from the newest end would leave a restored screen grey until the
-loop reached it. Photos uploaded and deleted from the device take their row's key with them; the
-position then falls back to the same place in the list, which the rows below it — the older
-photos — moving up make the next photo the upload did not take.
+screen is left (§6): here that is exactly the moment worth remembering. **A picker left at its end
+opens at its end again**, remembered as the end rather than as the row it put first: the library is
+re-read on every open, and the photos taken since land below that row, out of sight. The
+thumbnails are fetched outward from where the picker opens, nearest first on either side — from
+the library's head would leave the screen grey until the loop reached it. Photos uploaded and
+deleted from the device take their row's key with them; the position then falls back to the same
+place in the list, which the rows below it — the newer photos — moving up make the next photo the
+upload did not take.
+
+**The Upload bar takes its room from the top.** It comes with the first photo selected and goes
+with the last, and the list keeps its bottom edge where it was rather than its top: a photo just
+tapped near the bottom stays in view, and a list at its end stays at its end. During a drag that
+selects, the list holds still until the finger lifts — moved under the finger, the range would
+carry on from another photo than the one the finger is on.
 
 **The loose photos are marked by year.** A heading is drawn wherever the year changes from the row
 above — so it follows the grid's order rather than assuming one — and stays pinned while any of
@@ -1946,8 +1960,8 @@ band overlap.
 
 The date is PhotoKit's `creationDate`, a property of the fetch the picker already makes — unlike
 an asset's filename, which is a query apiece and is why the picker shows none. Photos the library
-has no date for are one *Undated* group, left where PhotoKit puts them, which under the newest-first
-fetch is last. **§3's calendar decides the year**, with no time zone applied, so a photo's year here
+has no date for are one *Undated* group, left where PhotoKit puts them, which under the oldest-first
+fetch is first. **§3's calendar decides the year**, with no time zone applied, so a photo's year here
 is its year everywhere else in the app; a photo taken in the first hours of 1 January local time can
 therefore sit under the year before, which is a price worth one date rule rather than two. On the
 harness the date is the file's modification time — enough to head a year with, and deliberately not
