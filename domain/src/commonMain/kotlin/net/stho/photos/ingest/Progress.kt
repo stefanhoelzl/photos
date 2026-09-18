@@ -17,6 +17,11 @@ import kotlinx.coroutines.sync.withLock
  * Deciding that here would mean this type knowing what a journal is.
  */
 public sealed interface IngestEvent {
+    /**
+     * [files] and [bytes] are what the uploads read off the disk; [pullFiles] and friends what
+     * the pulls and merges bring down from the zone — exact, from the run's listing, so the pull
+     * phase can be judged before it starts.
+     */
     public data class Planned(
         public val albums: Int,
         public val files: Int,
@@ -24,6 +29,10 @@ public sealed interface IngestEvent {
         public val deletions: Int,
         public val pulls: Int,
         public val merges: Int = 0,
+        public val pullFiles: Int = 0,
+        public val pullBytes: Long = 0,
+        public val mergeFiles: Int = 0,
+        public val mergeBytes: Long = 0,
     ) : IngestEvent
 
     /**
@@ -45,6 +54,14 @@ public sealed interface IngestEvent {
 
 /**
  * Files done, bytes moved, and what that implies about when this finishes.
+ *
+ * Restarted for every phase — the uploads as a whole, then each pulled or merged album — because
+ * a phase's total is the only one that is honest: counting a pull's files against the uploads'
+ * total is what once showed 175/70. And one rate across encoding and downloading would be the
+ * average of two unrelated speeds.
+ *
+ * Counts *files*, the unit the total is known in before anything is classified: an item ticks
+ * by the files it consumed, so a Live Photo counts two and the counter reaches its total.
  *
  * Throttled to one update a second: a status line redrawn once per uploaded photo would be several
  * a second at the start of a small album and pointless the rest of the time.
@@ -81,40 +98,35 @@ internal class ProgressMeter(private val clock: Clock) {
     }
 
     /**
-     * The line to redraw, or null when it is too soon to bother.
+     * The counter to redraw, or null when it is too soon to bother. The caller says what it is
+     * counting — the album, or which pull — around it.
      *
-     * [bytes] is what this item produced and [source] what it was made from. Both, because the
-     * total that matters — how much goes to the zone — cannot be known before deriving, and a
-     * constant guessing at it would be one more number to keep true as §5's profile changes.
-     * The run measures its own ratio instead, and re-projects the remainder from it.
+     * [files] is how many of the planned files this item consumed, [bytes] what it produced and
+     * [source] what it was made from. Both byte counts, because the total that matters — how much
+     * goes to the zone — cannot be known before deriving, and a constant guessing at it would be
+     * one more number to keep true as §5's profile changes. The run measures its own ratio
+     * instead, and re-projects the remainder from it.
      */
-    suspend fun finished(bytes: Long, source: Long, album: String): String? = mutex.withLock {
-        doneFiles++
+    suspend fun finished(files: Int, bytes: Long, source: Long): String? = mutex.withLock {
+        doneFiles += files
         doneBytes += bytes
         doneSource += source
         if (totalFiles == 0) return@withLock null
         val now = clock.now()
-        if (now - lastEmit < 1.seconds && doneFiles != totalFiles) return@withLock null
+        if (now - lastEmit < 1.seconds && doneFiles < totalFiles) return@withLock null
         lastEmit = now
 
         val elapsed = (now - started).toDouble(DurationUnit.SECONDS)
         val rate = if (elapsed > 0) doneBytes / elapsed else 0.0
         val projected = projectedTotal()
         buildString {
-            append(doneFiles).append('/').append(totalFiles)
+            append(doneFiles).append('/').append(totalFiles).append(" files")
             append("  ").append(formatBytes(doneBytes))
             // `~` because the far end is projected from this run's own ratio, not measured.
             // Absent entirely until there is enough of a sample to project from: a total that
             // is one photograph's guess is worse than no total.
             if (projected != null) append(" of ~").append(formatBytes(projected))
-            if (rate > 0) {
-                append("  ").append((rate / 1_000_000).fixed(2)).append(" MB/s")
-                val remaining = projected?.let { (it - doneBytes) / rate }
-                if (remaining != null && remaining > 0 && remaining.isFinite()) {
-                    append("  ~").append(formatDuration(remaining.seconds)).append(" left")
-                }
-            }
-            append("  ").append(album)
+            appendRate(rate, projected?.let { it - doneBytes })
         }
     }
 
@@ -141,6 +153,89 @@ internal class ProgressMeter(private val clock: Clock) {
          * single outlier — a panorama, a 200 MB video — cannot set the projection on its own.
          */
         const val SAMPLE_BEFORE_PROJECTING = 16
+    }
+}
+
+/**
+ * Files and bytes coming down for one pulled or merged album.
+ *
+ * Unlike the upload side the total is exact — the run's listing has every object's size — so
+ * there is nothing to project. Bytes are counted while a file is still arriving, because a
+ * counter that moved only between files would sit still for the whole of a 200 MB video.
+ *
+ * Several files may be in flight: each reports under its own slot, and the line adds them up.
+ * A file already on disk from an interrupted run counts as done but not towards the rate, which
+ * is what the link managed and nothing else.
+ */
+internal class DownloadMeter(private val clock: Clock) {
+
+    private val mutex = Mutex()
+    private var totalFiles = 0
+    private var totalBytes = 0L
+    private var doneFiles = 0
+
+    /** Bytes of the files that are finished, fetched or found. */
+    private var doneBytes = 0L
+
+    /** Bytes of finished files that actually came over the link. */
+    private var fetchedBytes = 0L
+
+    /** Bytes so far of each file still arriving, by slot. */
+    private val arriving = mutableMapOf<Int, Long>()
+    private var started: Instant = Instant.DISTANT_PAST
+    private var lastEmit: Instant = Instant.DISTANT_PAST
+
+    suspend fun start(files: Int, bytes: Long): Unit = mutex.withLock {
+        totalFiles = files
+        totalBytes = bytes
+        doneFiles = 0
+        doneBytes = 0
+        fetchedBytes = 0
+        arriving.clear()
+        started = clock.now()
+        lastEmit = Instant.DISTANT_PAST
+    }
+
+    /** [received] bytes of the file in [slot] so far. The line to redraw, or null. */
+    suspend fun receiving(slot: Int, received: Long): String? = mutex.withLock {
+        arriving[slot] = received
+        line()
+    }
+
+    /** The file in [slot] is on disk, [bytes] long; [fetched] unless it already was. */
+    suspend fun finished(slot: Int, bytes: Long, fetched: Boolean): String? = mutex.withLock {
+        arriving.remove(slot)
+        doneFiles++
+        doneBytes += bytes
+        if (fetched) fetchedBytes += bytes
+        line()
+    }
+
+    private fun line(): String? {
+        if (totalFiles == 0) return null
+        val now = clock.now()
+        if (now - lastEmit < 1.seconds && doneFiles < totalFiles) return null
+        lastEmit = now
+
+        val inFlight = arriving.values.sum()
+        val done = doneBytes + inFlight
+        val elapsed = (now - started).toDouble(DurationUnit.SECONDS)
+        val rate = if (elapsed > 0) (fetchedBytes + inFlight) / elapsed else 0.0
+        return buildString {
+            append(doneFiles).append('/').append(totalFiles).append(" files")
+            append("  ").append(formatBytes(done)).append(" of ").append(formatBytes(totalBytes))
+            appendRate(rate, totalBytes - done)
+        }
+    }
+}
+
+/** `  0.33 MB/s  ~14m left`, the estimate only when there is a remainder to estimate. */
+private fun StringBuilder.appendRate(rate: Double, remainingBytes: Long?) {
+    if (rate <= 0) return
+    append("  ").append((rate / 1_000_000).fixed(2)).append(" MB/s")
+    val remaining = remainingBytes?.let { it / rate }
+    if (remaining != null && remaining > 0 && remaining.isFinite()) {
+        append("  ~").append(formatDuration(remaining.seconds)).append(" left")
     }
 }
 
@@ -186,6 +281,28 @@ internal fun Double.fixed(places: Int): String {
     val fraction = (scaled % scale).toString().padStart(places, '0')
     return "${scaled / scale}.$fraction"
 }
+
+/**
+ * The journal's line for an album that came down from the zone: `v` for a pull, `<` for a merge.
+ *
+ * One line, written once the album has committed, carrying both halves — what came down and what
+ * went back up derived — rather than a line for each that reads as two albums.
+ */
+internal fun transferLine(
+    marker: String,
+    path: String,
+    files: Int,
+    downloaded: Long,
+    album: IngestReport.AlbumOutcome?,
+    duration: Duration,
+): String = buildList {
+    add("$marker $path")
+    add(if (downloaded > 0) "$files files, ${formatBytes(downloaded)} down" else "$files files")
+    if (album != null && album.uploaded > 0) {
+        add("${album.uploaded} photos, ${formatBytes(album.bytes)} up")
+    }
+    add("${duration.toDouble(DurationUnit.SECONDS).fixed(1)}s")
+}.joinToString("  ")
 
 /** The per-album line the journal records once an album has committed. */
 internal fun IngestReport.AlbumOutcome.asLine(): String = buildList {

@@ -167,14 +167,22 @@ private fun plan(event: IngestEvent.Planned): String {
             // "to read", not "to upload": since §5 far less goes up than comes off the disk, and
             // how much less is not knowable until it has been derived. The counter projects the
             // upload once it has watched enough of this run to know.
-            add("${event.albums} album(s), ${event.files} photos, ${formatBytes(event.bytes)} to read")
+            add("${event.albums} album(s), ${event.files} files, ${formatBytes(event.bytes)} to read")
         }
         if (event.deletions > 0) add("${event.deletions} album(s) to delete")
-        if (event.pulls > 0) add("${event.pulls} album(s) to pull")
-        if (event.merges > 0) add("${event.merges} addition(s) to merge")
+        if (event.pulls > 0) {
+            add("${event.pulls} album(s) to pull${download(event.pullFiles, event.pullBytes)}")
+        }
+        if (event.merges > 0) {
+            add("${event.merges} addition(s) to merge${download(event.mergeFiles, event.mergeBytes)}")
+        }
     }
     return if (parts.isEmpty()) "nothing to do" else "to do: " + parts.joinToString(", ")
 }
+
+/** ` (156 files, 350.1 MB)`: what a pull or merge brings down, exact from the zone's listing. */
+private fun download(files: Int, bytes: Long): String =
+    if (files == 0) "" else " ($files files, ${formatBytes(bytes)})"
 
 /** The one line somebody skimming the journal for "did anything happen" reads. */
 private fun summary(report: IngestReport): List<String> = buildList {

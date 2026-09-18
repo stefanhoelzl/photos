@@ -31,9 +31,8 @@ internal class PhotosCli : CoreCliktCommand("photos-cli") {
 
 
         // Plain text, and defaults shown. Subcommands inherit this context, so it is set once.
-        // `--jobs` defaults to the core count and `--upload-jobs` to one for reasons §7 measured;
-        // a help page that hides both leaves the reader guessing at the two numbers most likely to
-        // be worth changing.
+        // `--jobs` defaults to half the core count; a help page that hides it leaves the reader
+        // guessing at the number most likely to be worth changing.
         context { helpFormatter = { PlaintextHelpFormatter(it, showDefaultValues = true) } }
     }
 

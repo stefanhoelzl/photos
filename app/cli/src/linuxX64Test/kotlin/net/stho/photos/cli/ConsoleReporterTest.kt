@@ -121,13 +121,17 @@ class ConsoleReporterTest {
         val reporter = ConsoleReporter(recorder.console)
 
         reporter.show(
-            IngestEvent.Planned(albums = 2, files = 30, bytes = 1024, deletions = 1, pulls = 1),
+            IngestEvent.Planned(
+                albums = 2, files = 30, bytes = 1024, deletions = 1, pulls = 1, merges = 1,
+                pullFiles = 156, pullBytes = 350_100_000, mergeFiles = 3, mergeBytes = 12_000_000,
+            ),
         )
         reporter.show(IngestEvent.Planned(albums = 0, files = 0, bytes = 0, deletions = 0, pulls = 0))
 
         assertEquals(
             listOf(
-                "to do: 2 album(s), 30 photos, 1.0 KB to read, 1 album(s) to delete, 1 album(s) to pull",
+                "to do: 2 album(s), 30 files, 1.0 KB to read, 1 album(s) to delete, " +
+                    "1 album(s) to pull (156 files, 350.1 MB), 1 addition(s) to merge (3 files, 12.0 MB)",
                 "nothing to do",
             ),
             recorder.out,

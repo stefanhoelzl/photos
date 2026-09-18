@@ -12,7 +12,7 @@ import kotlinx.io.files.Path
  * and wiring — and every rule that matters is reachable from a test that never builds a command
  * line.
  *
- * Not a `data class`, because [jobs] and [uploadJobs] are clamped rather than stored as given.
+ * Not a `data class`, because [jobs] is clamped rather than stored as given.
  */
 public class IngestConfig(
     /**
@@ -30,29 +30,16 @@ public class IngestConfig(
      */
     public val cacheRoot: Path,
     /**
-     * Encoder workers. One per core, measured at 0.43 s/photo wall on 16 (§7).
+     * Encoder workers, and the one concurrency a caller chooses. Measured at 0.43 s/photo wall
+     * on 16 (§7). The CLI defaults to half the cores.
      *
      * No default: the core count is a platform question, and reaching for it from the domain is
      * the third of §7's three reasons a seam becomes a port. The CLI passes it.
+     *
+     * Upload, download and delete connections are not here: each is a property of the link that
+     * was measured once, not a knob (see [Ingest]).
      */
     jobs: Int,
-    /**
-     * Upload connections. **One**, because §9 measured 1.9 MB/s on one stream against 1.5 MB/s on
-     * eight — parallel uploads are slower, not faster. The knob is here for a different link, not
-     * for this one.
-     */
-    uploadJobs: Int = 1,
-    /**
-     * Delete connections. **Sixty-four**, and the opposite reasoning to [uploadJobs]: a delete
-     * carries no bytes, so it is not competing for the upstream link — it is one round trip to
-     * Frankfurt and back, and round trips overlap.
-     *
-     * Measured against the live zone while emptying it: a single delete costs **~1.4 s**, and
-     * 64 in flight sustained **~45/s**. Serially that is 34,000 blobs in about thirteen hours,
-     * which is what a profile bump orphans (§5) against a three-hour import. The retry policy
-     * covers 429 and 5xx, so a server that dislikes the rate says so and the run backs off.
-     */
-    deleteJobs: Int = 64,
     /**
      * Restricts the run to albums whose source path contains this, case-insensitively. It scopes
      * deletions and pulls as well as uploads: a scoped run that deleted everything outside its
@@ -74,8 +61,6 @@ public class IngestConfig(
     public val sweepAge: Duration = 7.days,
 ) {
     public val jobs: Int = jobs.coerceAtLeast(1)
-    public val uploadJobs: Int = uploadJobs.coerceAtLeast(1)
-    public val deleteJobs: Int = deleteJobs.coerceAtLeast(1)
 
     /**
      * Where derivatives are staged before upload. Emptied when the run starts and again when it

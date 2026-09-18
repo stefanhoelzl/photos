@@ -52,7 +52,6 @@ class WorkRootTest {
             libraryRoot = library.root,
             cacheRoot = cacheRoot,
             jobs = 2,
-            uploadJobs = 1,
         )
 
         val events: MutableList<IngestEvent> = mutableListOf()
@@ -103,7 +102,6 @@ class WorkRootTest {
             libraryRoot = library.root,
             cacheRoot = cacheRoot,
             jobs = 2,
-            uploadJobs = 1,
             dryRun = true,
         )
 

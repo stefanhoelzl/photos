@@ -72,12 +72,7 @@ internal class SyncCommand(private val console: Console = Console()) : CoreClikt
 
     private val jobs by option("--jobs", help = "Encoder workers. Budget ~400 MB each.")
         .int()
-        .default(availableProcessors())
-
-    private val uploadJobs by option(
-        "--upload-jobs",
-        help = "Upload connections. One is fastest on a domestic link; more measured slower.",
-    ).int().default(1)
+        .default((availableProcessors() / 2).coerceAtLeast(1))
 
     private val albumFilter by option(
         "--album",
@@ -123,7 +118,6 @@ internal class SyncCommand(private val console: Console = Console()) : CoreClikt
             libraryRoot = libraryRoot,
             cacheRoot = cacheDir?.let(::Path) ?: Path(paths.cacheRoot),
             jobs = jobs,
-            uploadJobs = uploadJobs,
             albumFilter = albumFilter,
             dryRun = dryRun,
         )
