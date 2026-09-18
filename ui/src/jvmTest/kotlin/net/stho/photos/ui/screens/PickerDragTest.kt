@@ -26,18 +26,19 @@ import net.stho.photos.model.MediaType
  * that took the drag as a scroll. These press, move and release as a finger would, and assert the
  * selection the picker hands back.
  *
- * At density 1 the grid is 400 px wide: four 100 px tiles a row, with two labels above the first
- * row and a 40 px year mark above each year's. Points are aimed at tile centres, well inside their
- * tiles.
+ * At density 1 the grid is 400 px wide: four 100 px tiles a row, with a 40 px year mark above each
+ * year's first row and nothing above that — the albums label is below the photos, and there are no
+ * albums here. Points are aimed at tile centres, well inside their tiles. The list is shorter than
+ * the window, so opening at its end is opening at its top.
  *
- * Six photos in 2020 and six in 2019, newest first as the picker lists them (§8), so every year
+ * Six photos in 2019 and six in 2020, oldest first as the picker lists them (§8), so every year
  * has a short last row and there is a boundary to drag across — and, in the one test that scrolls,
  * a mark pinned over the photos it names.
  */
 class PickerDragTest {
 
     private val assets = (0 until 12).map {
-        val day = Day.of(if (it < 6) 2020 else 2019, 6, 1 + it % 6)
+        val day = Day.of(if (it < 6) 2019 else 2020, 6, 1 + it % 6)
         GalleryAsset("a$it", "IMG_$it.heic", MediaType.PHOTO, day.midnight)
     }
 
@@ -104,11 +105,12 @@ class PickerDragTest {
     }
 
     /**
-     * Scrolled to the end in a 300 px window, 2020's mark is pinned over 2020's last row — and the
-     * finger in that band is on those photos, which is what keeps selecting-while-scrolling working.
+     * At the end in a 300 px window, 2019's mark is pinned over 2019's last row — and the finger in
+     * that band is on those photos, which is what keeps selecting-while-scrolling working.
      *
      * The window is bottom-aligned once the list is at its end, so where that row sits is fixed by
-     * the rows and marks below it, not by the section labels above.
+     * the rows and marks below it. The Upload bar that comes with the first photo selected leaves
+     * it there until the finger lifts: moved under the finger, the drag would carry on elsewhere.
      */
     @Test
     fun theFingerIsOnThePhotosUnderAPinnedYearMark() = picker(height = 300) {
@@ -194,7 +196,7 @@ class PickerDragTest {
                 onSelection = { state.value = state.value.copy(selected = it) },
                 onUseSelection = {},
                 scroll = null,
-                onScrolled = { _, _, _ -> },
+                onScrolled = { _, _, _, _ -> },
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -209,8 +211,8 @@ class PickerDragTest {
     }
 
     /**
-     * The centre of the [index]th photo tile: 100 px columns, rows of 100 px below the two labels and
-     * the year marks above it — one for 2020's photos, two for 2019's, whose rows start afresh.
+     * The centre of the [index]th photo tile: 100 px columns, rows of 100 px below the year marks
+     * above it — one for 2019's photos, two for 2020's, whose rows start afresh.
      */
     private fun tile(index: Int): Offset {
         val within = if (index < 6) index else index - 6
@@ -225,13 +227,13 @@ class PickerDragTest {
     private companion object {
         const val STEPS = 6
 
-        /** Two section labels, each 13 sp of text with 22 px of padding: about 40 px apiece. */
-        const val FIRST_ROW_TOP = 80f
+        /** Nothing above the first year mark: the list starts with the photos. */
+        const val FIRST_ROW_TOP = 0f
 
         /** [YEAR_MARK_HEIGHT] in pixels, at this scene's density of 1. */
         val YEAR_MARK = YEAR_MARK_HEIGHT.value
 
-        /** The middle of 2019's mark where the list draws it, between 2020's last row and 2019's first. */
+        /** The middle of 2020's mark where the list draws it, between 2019's last row and 2020's first. */
         val INLINE_YEAR_MARK = Offset(200f, FIRST_ROW_TOP + YEAR_MARK + 2 * 99.5f + YEAR_MARK / 2)
 
         /** The first column of the band a pinned mark covers. */

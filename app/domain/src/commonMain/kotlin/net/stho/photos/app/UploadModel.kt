@@ -20,7 +20,7 @@ public data class PickerUi(
     /** Null until the platform has answered. */
     val access: GalleryAccess? = null,
     val albums: List<GalleryAlbum> = emptyList(),
-    /** Every asset, for picking loose photos — newest first (§8). */
+    /** Every asset, for picking loose photos — oldest first, opened at the end (§8). */
     val assets: List<GalleryAsset> = emptyList(),
     val selected: Set<String> = emptySet(),
     val thumbnails: Map<String, ByteArray> = emptyMap(),
@@ -34,7 +34,7 @@ public data class Naming(
     /** The album field's text: a path from the library root, `Trips / Italy`. */
     val text: String,
     /**
-     * Oldest first, whatever the picker showed (§8) — so a clashing filename is the newer photo's
+     * Oldest first, as the picker shows them (§8) — so a clashing filename is the newer photo's
      * ` (2)`, and a whole gallery album and a loose pick name their photos the same way.
      */
     val assetIds: List<String>,
@@ -91,7 +91,9 @@ public class UploadModel(
     public val statuses: StateFlow<List<UploadStatus>> get() = uploads.statuses
 
     /**
-     * Where the picker was left, for the next upload: §8's one position, in memory only.
+     * Where the picker was left, for the next upload: §8's one position, in memory only. Null is
+     * the list's end — where the first open lands, and where a picker left there opens again, so
+     * the photos taken since are in view rather than just below it.
      *
      * Outside [PickerUi] because [open] and [close] both replace that snapshot, and the whole
      * point of this is to outlive them — a second upload carries on through the library where the
@@ -115,14 +117,15 @@ public class UploadModel(
                 val assets = gallery.assets(null)
                 _picker.update { it.copy(albums = albums, assets = assets) }
                 // From where the picker is about to stand rather than from the library's head:
-                // restored thousands of photos down, loading front to back leaves that screen grey
-                // until the loop reaches it. It wraps round, so every thumbnail is still fetched.
+                // thousands of photos from it, loading front to back leaves that screen grey until
+                // the loop reaches it. The end, unless a row is remembered — a remembered album or
+                // mark is at or near the end too, or one row's worth from it.
                 val start = assetOfRowKey(pickerScroll?.key)
                     ?.let { id -> assets.indexOfFirst { it.id == id } }
-                    ?.coerceAtLeast(0)
-                    ?: 0
-                for (step in assets.indices) {
-                    val asset = assets[(start + step) % assets.size]
+                    ?.takeIf { it >= 0 }
+                    ?: assets.lastIndex
+                for (index in outwardFrom(start, assets.size)) {
+                    val asset = assets[index]
                     val jpeg = gallery.thumbnail(asset) ?: continue
                     _picker.update { it.copy(thumbnails = it.thumbnails + (asset.id to jpeg)) }
                 }
@@ -163,15 +166,14 @@ public class UploadModel(
     }
 
     /**
-     * The dialog for [assetIds], and the one seam where the picker's order becomes an upload's:
-     * the grid reads newest first (§8) and what goes up is turned back, so both ways in here send
-     * the oldest photo first.
+     * The dialog for [assetIds], oldest first: the order the gallery lists them in (§8), and the
+     * one an upload sends — so a loose pick and a whole gallery album name their photos alike.
      */
     private fun name(assetIds: List<String>, galleryAlbum: GalleryAlbum?) {
         val targets = targets()
         _picker.update { picker ->
             val text = targets.prefill(start = picker.parent, addTo = picker.addTo, galleryName = galleryAlbum?.name)
-            picker.copy(naming = Naming(text, assetIds.reversed(), targets, galleryAlbum = galleryAlbum?.id).typed(text))
+            picker.copy(naming = Naming(text, assetIds, targets, galleryAlbum = galleryAlbum?.id).typed(text))
         }
     }
 
@@ -251,9 +253,12 @@ public class UploadModel(
         )
     }
 
-    /** Where a scroll came to rest in the picker: the first item on screen, by key and position. */
-    public fun scrolled(key: String?, index: Int, offset: Int) {
-        pickerScroll = Scroll(key = key, index = index, offset = offset)
+    /**
+     * Where a scroll came to rest in the picker: the first item on screen, by key and position —
+     * or [atEnd], the list's end, which is remembered as that rather than as the item it put first.
+     */
+    public fun scrolled(key: String?, index: Int, offset: Int, atEnd: Boolean = false) {
+        pickerScroll = if (atEnd) null else Scroll(key = key, index = index, offset = offset)
     }
 
     public fun close() {
@@ -266,6 +271,17 @@ public class UploadModel(
     public fun retry(albumId: Uuid): Unit = uploads.retry(albumId)
 
     public fun openSettings(): Unit = gallery.openSettings()
+}
+
+/**
+ * Every index below [size], [start] first and then outward from it: the nearest on either side
+ * next, so the rows around where the picker stands fill before the far ends of the library.
+ */
+internal fun outwardFrom(start: Int, size: Int): List<Int> = buildList {
+    for (distance in 0 until size) {
+        if (start + distance < size) add(start + distance)
+        if (distance > 0 && start - distance >= 0) add(start - distance)
+    }
 }
 
 /** [text] as the field now holds, with the selection following it (see [UploadModel.type]). */

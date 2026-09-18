@@ -41,13 +41,13 @@ internal class FolderGallery(private val root: File, private val imaging: FfmIma
         folders().map { GalleryAlbum(it.name, it.name, entries(it).size) }
 
     /**
-     * Newest first (§8), which here means name descending: a directory has no date of its own
+     * Oldest first (§8), which here means by name: a directory has no date of its own
      * worth trusting — a modification time is whatever last copied the file — and the camera's
      * names already run in the order it shot them. That is also why the order is the names' and
      * not [GalleryAsset.takenAt]'s: the date is good enough to head a year with, not to sort by.
      */
     override suspend fun assets(album: GalleryAlbum?): List<GalleryAsset> =
-        (if (album == null) folders() else listOf(File(root, album.id))).flatMap(::entries).reversed()
+        (if (album == null) folders() else listOf(File(root, album.id))).flatMap(::entries)
 
     override suspend fun asset(id: String): GalleryAsset? {
         val folder = File(root, id).parentFile ?: return null

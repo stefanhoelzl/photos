@@ -121,12 +121,12 @@ internal class PhotoKitGallery : Gallery {
     }
 
     /**
-     * Newest first (§8). Listed without filenames: reading an asset's resources is a query per
+     * Oldest first (§8), which sorts a photo with no date ahead of every other. Listed without filenames: reading an asset's resources is a query per
      * asset, and the picker never shows a name — [asset] fills it in.
      */
     override suspend fun assets(album: GalleryAlbum?): List<GalleryAsset> {
         val options = PHFetchOptions().apply {
-            sortDescriptors = listOf(NSSortDescriptor.sortDescriptorWithKey("creationDate", ascending = false))
+            sortDescriptors = listOf(NSSortDescriptor.sortDescriptorWithKey("creationDate", ascending = true))
         }
         val result = if (album == null) {
             PHAsset.fetchAssetsWithOptions(options)

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -72,6 +73,8 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import net.stho.photos.app.Day
@@ -133,15 +136,19 @@ internal fun UploadScreen(uploads: UploadModel, onClose: () -> Unit) {
 }
 
 /**
- * The library's albums, then its photos to pick loosely (§8).
+ * The library's photos to pick loosely, then its albums to take whole (§8).
+ *
+ * **Oldest first, opened at the end**, the way the Photos app shows a library: the newest photo is
+ * still what the picker lands on, with the albums below it. So the albums come after the photos
+ * rather than before them, where they would sit thousands of rows up.
  *
  * **The photos are marked by year.** A heading is drawn wherever the year changes from the row
- * before, so it follows whichever way the port runs — newest first, as §8 has it — rather than
+ * before, so it follows whichever way the port runs — oldest first, as §8 has it — rather than
  * assuming one, and a list in no order shows a year twice rather than filing photos under a year
  * they were not taken in. The heading stays pinned while any of its year is on screen, which is
  * the only way to know where you are in a library of thousands. Photos the library has no date for
- * are one *Undated* group, left where the platform put them; on iOS that is the end, since
- * `NSSortDescriptor` sorts a nil date first and the fetch runs descending.
+ * are one *Undated* group, left where the platform put them; on iOS that is the top, since
+ * `NSSortDescriptor` sorts a nil date first and the fetch runs ascending.
  *
  * **Dragging across the photos selects a range**, the way the Photos app does: a drag that starts
  * sideways — or a press held still — selects every photo from the one it started on to the one
@@ -163,7 +170,12 @@ internal fun UploadScreen(uploads: UploadModel, onClose: () -> Unit) {
  * **It opens where it was last left** (§8): [scroll] names the first item that was on screen, by
  * key, so an upload that took photos out of the library still comes back to the one after them.
  * A heading is an item like any other, so it is named among the keys too — a position remembered
- * against rows alone would sit one mark short for every year above it.
+ * against rows alone would sit one mark short for every year above it. Nothing remembered is the
+ * end, and a picker left at the end is remembered as that, so the photos taken since are in view.
+ *
+ * **Its bottom edge stays put** when the list's height changes — the Upload bar below it coming
+ * with the first photo selected and going with the last — rather than its top, as a list's would:
+ * a photo just tapped near the bottom stays in view, and a list at its end stays at its end.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -173,10 +185,13 @@ internal fun GalleryPicker(
     onToggle: (String) -> Unit,
     onSelection: (Set<String>) -> Unit,
     onUseSelection: () -> Unit,
-    /** Where the picker was left last time it was open, or null for the top. */
+    /** Where the picker was left last time it was open, or null for the end. */
     scroll: Scroll?,
-    /** Where a scroll came to rest: the first item on screen, by key and position, and how far past it. */
-    onScrolled: (key: String?, index: Int, offset: Int) -> Unit,
+    /**
+     * Where a scroll came to rest: the first item on screen, by key and position, and how far past
+     * it — and whether that is the list's end.
+     */
+    onScrolled: (key: String?, index: Int, offset: Int, atEnd: Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val list = rememberLazyListState()
@@ -188,8 +203,8 @@ internal fun GalleryPicker(
     // would shift it by one.
     val keys = rememberUpdatedState(
         remember(picker.albums, entries) {
-            listOf(ALBUMS_LABEL) + picker.albums.map { "album:${it.id}" } + PHOTOS_LABEL +
-                entries.map { it.key }
+            entries.map { it.key } +
+                if (picker.albums.isEmpty()) emptyList() else listOf(ALBUMS_LABEL) + picker.albums.map { "album:${it.id}" }
         },
     )
     val report by rememberUpdatedState(onScrolled)
@@ -201,16 +216,57 @@ internal fun GalleryPicker(
     val drag = remember { DragSelection() }
     val edge = with(LocalDensity.current) { AUTOSCROLL_EDGE.toPx() }
 
-    // Back where the last upload left it, once there is a list to go back into: the picker is
-    // composed the moment access is granted, while the library is still being read, and restoring
-    // against the two section labels alone would land at the top — and then report that over the
-    // very position being restored. So it waits for the photo rows to be laid out. Nothing
-    // remembered has nothing to wait for, and reports from the start.
+    // Back where the last upload left it, or at the end, once there is a list to go into: the
+    // picker is composed the moment access is granted, while the library is still being read, and
+    // scrolling in an empty list would land at the top — and then report that over the very
+    // position being restored. So it waits for the photo rows to be laid out; a library with no
+    // photos at all has nowhere to scroll to, and reports nothing.
     LaunchedEffect(Unit) {
-        if (scroll != null) {
-            snapshotFlow { latestIds.isNotEmpty() && list.layoutInfo.totalItemsCount >= keys.value.size }.first { it }
+        snapshotFlow { latestIds.isNotEmpty() && list.layoutInfo.totalItemsCount >= keys.value.size }.first { it }
+        if (scroll == null) {
+            // The last item first, which the list then pulls back until its end meets the bottom.
+            list.scrollToItem(keys.value.lastIndex)
+        } else {
+            val (index, offset) = scroll.target(keys.value)
+            list.scrollToItem(index, offset)
         }
-        list.follow(scroll, keys) { key, index, offset -> report(key, index, offset) }
+        snapshotFlow {
+            if (list.isScrollInProgress) null
+            else Triple(list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset, !list.canScrollForward)
+        }
+            .filterNotNull()
+            .distinctUntilChanged()
+            .collect { (index, offset, atEnd) -> report(keys.value.getOrNull(index), index, offset, atEnd) }
+    }
+
+    // The bottom edge held where it was as the height changes. The list keeps its first item where
+    // it was, so it is moved back by however far the bottom-most item it had then has moved from
+    // the bottom edge — or, that item shrunk out of view, by the whole change.
+    //
+    // Not while a selection drag is under way, though, but once the finger lifts: the bar comes
+    // with the first photo a drag selects, and moving the list then would put another photo under
+    // the finger than the one it is on.
+    LaunchedEffect(Unit) {
+        var height = 0
+        // The bottom-most item on screen, and how far its bottom edge sits above the viewport's.
+        var anchor: Pair<Any, Int>? = null
+        var pending = 0f
+        snapshotFlow { list.layoutInfo to (drag.point != null) }.collect { (layout, dragging) ->
+            val now = layout.viewportSize.height
+            fun gap(item: LazyListItemInfo) = layout.viewportEndOffset - (item.offset + item.size)
+            if (height != 0 && now != height) {
+                val was = anchor
+                val item = was?.let { (key, _) -> layout.visibleItemsInfo.lastOrNull { it.key == key } }
+                pending += if (was != null && item != null) was.second - gap(item) else height - now
+            } else {
+                anchor = layout.visibleItemsInfo.lastOrNull()?.let { it.key to gap(it) }
+            }
+            height = now
+            if (!dragging && pending != 0f) {
+                list.dispatchRawDelta(pending)
+                pending = 0f
+            }
+        }
     }
 
     fun indexAt(at: Offset): Int? {
@@ -291,9 +347,6 @@ internal fun GalleryPicker(
                 }
             },
         ) {
-            item(key = ALBUMS_LABEL) { SectionLabel("Albums") }
-            items(picker.albums, key = { "album:${it.id}" }) { album -> GalleryAlbumRow(album) { onAlbum(album) } }
-            item(key = PHOTOS_LABEL) { SectionLabel("Or pick individual photos · ${picker.selected.size} selected") }
             // In [entries]' order, so the heading a photo is drawn under is the year it was taken in.
             for (entry in entries) {
                 when (entry) {
@@ -313,6 +366,11 @@ internal fun GalleryPicker(
                         }
                     }
                 }
+            }
+            // No label over the photos: the nav bar counts what is selected, and a year mark heads them.
+            if (picker.albums.isNotEmpty()) {
+                item(key = ALBUMS_LABEL) { SectionLabel("Or upload a whole album") }
+                items(picker.albums, key = { "album:${it.id}" }) { album -> GalleryAlbumRow(album) { onAlbum(album) } }
             }
         }
         if (picker.selected.isNotEmpty()) {
@@ -344,7 +402,7 @@ private sealed interface PickerEntry {
  * The photos, cut into years and then into rows.
  *
  * A run at a time, so a heading is drawn wherever the year changes rather than once per year: this
- * then holds for a list read either way — the picker's runs newest first (§8) — and a list in no
+ * then holds for a list read either way — the picker's runs oldest first (§8) — and a list in no
  * order at all shows a year twice instead of drawing photos under a year they were not taken in.
  * Cutting the rows per run is what keeps that honest — a row never spans two years, so no photo is
  * drawn under the wrong heading.
@@ -769,9 +827,8 @@ private fun Long.megabytes(): String {
 
 private const val COLUMNS = 4
 
-/** The section labels' keys: every item is named, so a remembered scroll can name any of them. */
+/** The albums label's key: every item is named, so a remembered scroll can name any of them. */
 private const val ALBUMS_LABEL = "albums"
-private const val PHOTOS_LABEL = "photos"
 
 /** The calendar's heading height: the same element, so it is drawn the same size. */
 internal val YEAR_MARK_HEIGHT = 40.dp

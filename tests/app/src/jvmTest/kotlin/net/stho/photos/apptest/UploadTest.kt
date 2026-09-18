@@ -180,10 +180,10 @@ class UploadTest {
     }
 
     /**
-     * §8's remembered position: the picker opens where it was left, so a second upload carries on
-     * through the library where the first one stopped — and the thumbnails are fetched from there
-     * rather than from the library's head, which would leave that screen grey until the loop
-     * reached it.
+     * §8's remembered position: the picker opens at its end — the newest photo — and later where it
+     * was left, so a second upload carries on through the library where the first one stopped. The
+     * thumbnails are fetched from there rather than from the library's head, which would leave that
+     * screen grey until the loop reached it.
      */
     @Test
     fun thePickerComesBackWhereItWasLeftAndLoadsThatPartFirst() = runBlocking {
@@ -192,22 +192,30 @@ class UploadTest {
             launch(withGallery = true)
 
             uploads.open(parent = null)
-            awaitTrue("the gallery's assets") { uploads.picker.value.assets.isNotEmpty() }
-            val last = uploads.picker.value.assets.last().id
+            assertNull(uploads.pickerScroll, "nothing remembered: the first open is at the end")
+            awaitTrue("the first thumbnail") { uploads.picker.value.thumbnails.isNotEmpty() }
+            val assets = uploads.picker.value.assets
+            assertEquals(assets.last().id, uploads.picker.value.thumbnails.keys.first(), "the end's thumbnail first")
+            val first = assets.first().id
 
             // What the picker reports as a scroll comes to rest on that photo's row.
-            uploads.scrolled(photoRowKey(last), index = 4, offset = 12)
+            uploads.scrolled(photoRowKey(first), index = 1, offset = 12)
             uploads.close()
-            assertEquals(Scroll(photoRowKey(last), 4, 12), uploads.pickerScroll, "kept when the picker closes")
+            assertEquals(Scroll(photoRowKey(first), 1, 12), uploads.pickerScroll, "kept when the picker closes")
 
             uploads.open(parent = null)
-            assertEquals(Scroll(photoRowKey(last), 4, 12), uploads.pickerScroll, "and when it opens again")
+            assertEquals(Scroll(photoRowKey(first), 1, 12), uploads.pickerScroll, "and when it opens again")
             awaitTrue("the first thumbnail of the reopened picker") { uploads.picker.value.thumbnails.isNotEmpty() }
             assertEquals(
-                last,
+                first,
                 uploads.picker.value.thumbnails.keys.first(),
-                "the thumbnails start at the remembered row, not at the library's first photo",
+                "the thumbnails start at the remembered row, not at the library's end",
             )
+
+            // Left at the end, it goes back to the end — past the row it put first, since photos
+            // taken meanwhile would land below that row, out of sight.
+            uploads.scrolled(photoRowKey(first), index = 1, offset = 12, atEnd = true)
+            assertNull(uploads.pickerScroll, "the end is remembered as the end")
         }
     }
 
@@ -288,12 +296,13 @@ class UploadTest {
     private val oldestFirst = listOf("IMG_0001.heic", "IMG_0002.mp4", "IMG_0003.heic")
 
     /**
-     * §8's two orders. The grid shows the newest photo first — the picker answers "what did I just
-     * shoot" — while the upload it makes still sends the oldest first, so a clashing filename lands
-     * on the newer photo and a whole gallery album names its photos the same way a loose pick does.
+     * §8's one order. The grid shows the oldest photo first, as the Photos app does — opened at its
+     * end, so the newest is still what it lands on — and the upload it makes sends them the same
+     * way, so a clashing filename lands on the newer photo and a whole gallery album names its
+     * photos the same way a loose pick does.
      */
     @Test
-    fun thePickerShowsTheNewestFirstAndSendsTheOldestFirst() = runBlocking {
+    fun thePickerShowsAndSendsTheOldestFirst() = runBlocking {
         scenario("upload-order") {
             zone.galleryAlbum(gallery, "Weekend")
             launch(withGallery = true)
@@ -306,7 +315,7 @@ class UploadTest {
             }
 
             val shown = uploads.picker.value.assets
-            assertEquals(listOf("IMG_0003.heic", "IMG_0002.mp4", "IMG_0001.heic"), shown.map { it.filename })
+            assertEquals(oldestFirst, shown.map { it.filename })
 
             uploads.setSelection(shown.map { it.id }.toSet())
             uploads.chooseSelected()

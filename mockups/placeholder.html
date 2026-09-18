@@ -700,30 +700,29 @@ phone(`${st}${hdr('Settings','',null,true)}
  'The confirm sheet sits on the real Settings screen, dimmed behind it. Confirming clears the saved keys, catalog, shards and cached previews, then returns to setup — so connecting to a different zone is just logging out and setting up again.');
 
 /* upload 1 — pick from gallery */
-/* One picker tile, selected when the drag carrying on from 2026 into 2025 took it. */
+/* One picker tile, selected when the drag carrying on from 2025 into 2026 took it. */
 const tile=(p,i)=>[4,5,6,7].includes(i)
   ? `<div class="sel"><img src="${p}"><span class="tick">${I.check}</span></div>`
   : `<img src="${p}">`;
-phone(`${st}${hdr('Choose photos','from your iPhone library',null,true)}
+phone(`${st}${hdr('Choose photos','4 selected',null,true)}
  <div class="body"><div class="scroll">
-  <div class="sechdr">Albums</div>
+  <div class="grid g4" style="position:relative">
+   <div class="pickyh">2025</div>
+   ${g.slice(0,6).map((p,i)=>tile(p,i)).join('')}
+   <div class="pickyh">2026</div>
+   ${g.slice(6,12).map((p,i)=>tile(p,i+6)).join('')}
+   <div class="dragpath"></div></div>
+  <div class="sechdr">Or upload a whole album</div>
   <div class="alist">
    ${[['Hiking Sep 26','214 photos · 8 Sep 2026',0],['Recents','12,431 photos',1],['Favourites','318 photos',2],['Live Photos','187 photos',3]]
      .map(([n,m,i])=>`<div class="arow"><img src="${D.albums[i].cover}">
       <div class="t"><div class="n">${n}</div><div class="m"><span>${m}</span></div></div>
       <span class="chev">›</span></div>`).join('')}
   </div>
-  <div class="sechdr">Or pick individual photos · 4 selected</div>
-  <div class="grid g4" style="position:relative">
-   <div class="pickyh">2026</div>
-   ${g.slice(0,6).map((p,i)=>tile(p,i)).join('')}
-   <div class="pickyh">2025</div>
-   ${g.slice(6,12).map((p,i)=>tile(p,i+6)).join('')}
-   <div class="dragpath"></div></div>
   <div style="padding:8px 16px;font-size:11px;color:var(--dim)">Drag across thumbnails to select a range — UICollectionView’s multiple-selection interaction (iOS 13+) — and on across a year mark, which is a label and not a target.</div>
  </div></div>`,
  'Upload 1 — pick from the gallery',
- 'Reached by the upload icon; the album you were in becomes the parent. A custom browser over PHAssetCollection, not PHPicker — PHPicker cannot list or name albums, which the prefill needs. <b>The photos run newest first</b> — the one you just shot is the first tile — though what goes up is still sent oldest first. They are <b>marked by year</b> wherever the year changes, each mark pinned over its photos while they scroll — the year alone, because a whole year is nobody’s album. Photos the library has no date for are one <i>Undated</i> group, last.');
+ 'Reached by the upload icon; the album you were in becomes the parent. A custom browser over PHAssetCollection, not PHPicker — PHPicker cannot list or name albums, which the prefill needs. <b>The photos run oldest first and the picker opens at the end</b>, as the Photos app does — the one you just shot is the last tile, with the albums below it — and what goes up is sent in the same order. They are <b>marked by year</b> wherever the year changes, each mark pinned over its photos while they scroll — the year alone, because a whole year is nobody’s album. Photos the library has no date for are one <i>Undated</i> group, first.');
 
 /* upload 2 — name + options */
 phone(`${st}<div class="body"><div class="scroll"><div class="alist">${D.albums.slice(0,4).map((a,i)=>arow(a,cache(i))).join('')}</div></div>
