@@ -38,7 +38,7 @@ class UploadTest {
         val ids = picker.getValue("assets").jsonArray.map { it.jsonObject.string("id") }
 
         post("/upload/select?ids=${ids.joinToString(",").encoded()}")
-        post("/upload/name?album=${NAME.encoded()}&new=true")
+        post("/upload/name?album=${NAME.encoded()}&new=true&delete=false")
         val upload = post("/upload/confirm").uploads().single()
         val uploadId = Uuid.parse(upload.string("album"))
         val albumId = Uuid.parse(upload.string("target"))
@@ -104,6 +104,7 @@ class UploadTest {
         assertEquals(alps.toString(), awaitState("the album pre-selected") { state ->
             state.picker()["naming"] is JsonObject
         }.picker().getValue("naming").jsonObject.getValue("selected").jsonObject.string("id"))
+        post("/upload/name?delete=false")
         val additionId = confirmAndLand()
 
         val addition = assertNotNull(zone.shard(additionId))
@@ -154,7 +155,7 @@ class UploadTest {
         }.picker().assets().map { it.string("id") }.filterNot { it in before }
 
         post("/upload/select?ids=${added.joinToString(",").encoded()}")
-        post("/upload/name?album=${NAME.encoded()}&new=true&delete=true")
+        post("/upload/name?album=${NAME.encoded()}&new=true")
         val albumId = confirmAndLand()
         assertTrue("PHOTOS_TAPPED Delete" in tapper.awaitSuccess(), "iOS asked, and Delete was tapped")
 
@@ -199,7 +200,7 @@ class UploadTest {
         val naming = post("/upload/album?id=${galleryAlbum.encoded()}").picker().getValue("naming").jsonObject
         assertEquals(GALLERY_ALBUM, naming.string("text"), "the path is pre-filled from the gallery album")
         assertEquals(galleryAlbum, naming.string("album"))
-        post("/upload/name?new=true&delete=true")
+        post("/upload/name?new=true")
         val albumId = confirmAndLand()
         val taps = Regex("PHOTOS_TAPPED Delete").findAll(tapper.awaitSuccess()).count()
         assertEquals(2, taps, "iOS asked for the album and for its photos, and Delete was tapped on both")
@@ -250,7 +251,7 @@ class UploadTest {
         }.picker().assets().single { it.string("id") == assetId }
         assertEquals("LIVE_PHOTO", asset.string("type"))
         post("/upload/select?ids=${assetId.encoded()}")
-        post("/upload/name?album=${NAME.encoded()}&new=true")
+        post("/upload/name?album=${NAME.encoded()}&new=true&delete=false")
         val uploadId = confirmAndLand()
 
         val addition = assertNotNull(zone.shard(uploadId))

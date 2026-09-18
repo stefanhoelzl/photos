@@ -41,6 +41,8 @@ class UploadTest {
                 assertNull(naming.selected, "a path no album has is nothing to upload to yet")
                 assertTrue(uploads.addNew())
                 assertEquals(UploadTarget.Kind.New, uploads.picker.value.naming?.selected?.kind)
+                assertTrue(naming.deleteFromGallery, "deleting from the gallery is ticked until unticked")
+                uploads.deleteAfterUpload(false)
             }
 
             val addition = assertNotNull(zone.shard(uploadId))
@@ -73,7 +75,7 @@ class UploadTest {
 
             assertTrue(addition.objectIds.none { it.isContentAddressed }, "the phone never hashes (§2)")
             assertNotNull(zone.bytes(assertNotNull(addition.info.thumbsId)), "the pack went up with the photos")
-            assertTrue(File(folder, "IMG_0001.heic").isFile, "nothing leaves the gallery unless asked")
+            assertTrue(File(folder, "IMG_0001.heic").isFile, "unticked, nothing leaves the gallery")
             assertFalse(File(cacheRoot.toString(), "uploads/$uploadId").exists(), "a finished upload leaves no state behind")
             screenshot("upload-landed")
         }
@@ -92,6 +94,7 @@ class UploadTest {
             val uploadId = uploadWholeGalleryAlbum(expectedParent = trips) { naming ->
                 assertEquals("Trips / Glacier", naming.text, "the container's path, then the gallery album's name")
                 assertTrue(uploads.addNew())
+                uploads.deleteAfterUpload(false)
             }
 
             val addition = assertNotNull(zone.shard(uploadId))
@@ -111,12 +114,16 @@ class UploadTest {
             zone.galleryAlbum(gallery, "Weekend")
             launch(withGallery = true)
 
-            val first = uploadWholeGalleryAlbum(expectedParent = null) { assertTrue(uploads.addNew()) }
+            val first = uploadWholeGalleryAlbum(expectedParent = null) {
+                assertTrue(uploads.addNew())
+                uploads.deleteAfterUpload(false)
+            }
             val albumId = assertNotNull(assertNotNull(zone.shard(first)).info.addsTo)
             await("the new album in the list") { ui -> ui.albums.any { it.id == albumId } }
 
             val second = uploadWholeGalleryAlbum(expectedParent = null) { naming ->
                 assertEquals(albumId, naming.selected?.id, "its path picks the album, not a new one")
+                uploads.deleteAfterUpload(false)
             }
 
             assertEquals(albumId, assertNotNull(zone.shard(second)).info.addsTo)
@@ -154,7 +161,6 @@ class UploadTest {
 
             uploadWholeGalleryAlbum(expectedParent = null) {
                 assertTrue(uploads.addNew())
-                uploads.deleteAfterUpload(true)
             }
 
             // The still, the video and both halves of the pair — and then the album they left empty.
@@ -171,7 +177,6 @@ class UploadTest {
 
             uploadWholeGalleryAlbum(expectedParent = null) {
                 assertTrue(uploads.addNew())
-                uploads.deleteAfterUpload(true)
                 File(folder, "IMG_0001.heic").copyTo(File(folder, "IMG_0004.heic"))
             }
 
@@ -251,7 +256,6 @@ class UploadTest {
             val additionId = uploadWholeGalleryAlbum(expectedParent = trips, addTo = alps, screenshots = "upload-add") { naming ->
                 assertEquals("Trips / Alps", naming.text)
                 assertEquals(alps, naming.selected?.id, "the album the upload started in is pre-selected")
-                uploads.deleteAfterUpload(true)
             }
 
             val addition = assertNotNull(zone.shard(additionId))
