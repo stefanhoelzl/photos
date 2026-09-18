@@ -56,10 +56,15 @@ public fun writeSyntheticHeic(
 }
 
 /**
- * A short HEVC clip, optionally carrying a display matrix, a Live Photo identifier and an AAC tone.
+ * A short HEVC clip, optionally carrying a display matrix, a Live Photo identifier and a tone.
  *
  * A `.mov` is QuickTime and anything else MP4 (the shim picks the muxer). A `.mov` carrying an
  * identifier then has its metadata moved to where Apple writes it — see [toQuickTimeMetadata].
+ *
+ * [audioSampleRate] leaves the tone as a phone writes it — AAC at 44100 Hz — when it is 0, and
+ * otherwise writes it as PCM at that rate, the way the library's compact cameras did. 7875 and
+ * 11024 Hz are real rates off real cameras and are rates AAC cannot be encoded at, so a fixture
+ * asking for one is asking the transcoder to resample rather than fail.
  */
 public fun writeSyntheticVideo(
     path: Path,
@@ -69,9 +74,13 @@ public fun writeSyntheticVideo(
     rotation: Int = 0,
     contentIdentifier: String? = null,
     audio: Boolean = false,
+    audioSampleRate: Int = 0,
 ) {
     imagingCall { err ->
-        pi_fixture_write_video(path.toString(), width, height, frames, rotation, contentIdentifier, if (audio) 1 else 0, err)
+        pi_fixture_write_video(
+            path.toString(), width, height, frames, rotation, contentIdentifier,
+            if (audio) 1 else 0, audioSampleRate, err,
+        )
     }
     if (contentIdentifier != null && path.name.endsWith(".mov", ignoreCase = true)) {
         path.write(toQuickTimeMetadata(path.readBytes()))

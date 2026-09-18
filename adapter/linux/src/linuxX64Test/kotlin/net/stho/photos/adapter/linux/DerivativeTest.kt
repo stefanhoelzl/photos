@@ -249,6 +249,39 @@ class PipelineTest {
     }
 
     @Test
+    fun aSoundtrackAtARateAacHasNeverHeardOfIsResampled() = withScratchDirectory("odd-rate") { directory ->
+        // 11024 Hz is what the Canons in the library recorded at and the Nikons used 7875; AAC
+        // exists at thirteen rates and neither is one of them. Asking the encoder for the source's
+        // rate verbatim failed at avcodec_open2 and took 33 files down with "cannot open aac
+        // encoder" -- a soundtrack lost to arithmetic, on files that decode perfectly.
+        val source = Path(directory, "camcorder.mov")
+        writeSyntheticVideo(source, width = 64, height = 48, frames = 25, audio = true, audioSampleRate = 11024)
+        assertTrue(probeVideo(source.toString()).hasAudio, "the fixture carries a soundtrack")
+
+        val derived = CImagingPipeline(workDirectory = directory.toString())
+            .derive(MediaItem(source.toString(), MediaItem.Kind.Video, byteCount = 0))
+
+        assertTrue(probeVideo(requireNotNull(derived.video)).hasAudio, "resampled, not refused")
+    }
+
+    @Test
+    fun aResampledSoundtrackKeepsItsTimestamps() = withScratchDirectory("resampled") { directory ->
+        // 7875 Hz is what the Nikons recorded at, and resampling it to 8000 is where the second
+        // half of this went wrong. Once the rate is snapped, the resampler's frames no longer line
+        // up one-for-one with the source's, and the transcoder used to stamp each one with the
+        // *decoder's* timestamp for whichever source frame it came out of: two frames running
+        // would carry the same one, dts stopped advancing, the muxer refused the packet, and the
+        // file came back "audio encode failed". 77 of the library's did.
+        val source = Path(directory, "nikon.mov")
+        writeSyntheticVideo(source, width = 64, height = 48, frames = 25, audio = true, audioSampleRate = 7875)
+
+        val derived = CImagingPipeline(workDirectory = directory.toString())
+            .derive(MediaItem(source.toString(), MediaItem.Kind.Video, byteCount = 0))
+
+        assertTrue(probeVideo(requireNotNull(derived.video)).hasAudio, "every frame made it through")
+    }
+
+    @Test
     fun anUndecodableFileThrowsRatherThanPoisoningTheRun(): Unit = withScratchDirectory("bad") { directory ->
         // A valid JPEG header followed by nothing usable: sniffing succeeds, decoding must not.
         // Decision 15 makes this per-file and recoverable.

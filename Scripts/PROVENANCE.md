@@ -73,8 +73,17 @@ Not here, and deliberately:
 `--disable-everything`, then exactly what the measured inventory needs: demuxers for
 mov/mp4/avi/mpegps/matroska; decoders for h264, hevc, mjpeg, mpeg1/2video, mpeg4, msmpeg4v2/v3,
 h263 — one per codec actually present in the 550 video files — plus png/tiff/bmp/gif for the
-still strays and aac/mp3/pcm for audio; `libx265` and `aac` encoders; the mp4 muxer, and the mov muxer for the Live Photo test fixture only (iOS pairs a Live Photo's MOV only as QuickTime); and the
+still strays and aac/mp3/pcm for audio; `libx265` and `aac` encoders, plus `pcm_s16le` for the
+test fixtures only; the mp4 muxer, and the mov muxer for the Live Photo test fixture only (iOS
+pairs a Live Photo's MOV only as QuickTime); and the
 scale/yadif/transpose/format filters, and aresample/aformat for the soundtrack.
+
+**The `pcm_s16le` encoder is a fixture's, not the pipeline's.** The library's compact cameras
+recorded sound as PCM at rates AAC has never had — 7875 Hz off the Nikons, 11024 off the Canons
+and the Fuji — and the transcoder failed on those files twice over: first refusing to open its
+encoder at all, and then, once it resampled, losing the timestamps of what it resampled. 110
+files. With only an AAC encoder in the build, every fixture was necessarily at one of AAC's own
+rates and in AAC's own framing, so no test could have had either property.
 
 **`--enable-zlib` is not optional.** ffmpeg builds its PNG decoder only when zlib is present,
 and `--disable-autodetect` means it has to be asked for by name. Without it the PNG decoder is
