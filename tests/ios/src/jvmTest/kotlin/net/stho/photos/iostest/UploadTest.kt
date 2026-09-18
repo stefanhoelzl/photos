@@ -138,7 +138,8 @@ class UploadTest {
         install()
         allowPhotos()
         // Before launch: xcodebuild installs the app it tests. It answers the deletion alert, and the
-        // full-access alert the simulator can raise again mid-upload.
+        // full-access alert the simulator can raise again mid-upload -- once armed, just before the
+        // upload, so that it is not looking while `addmedia` imports.
         val tapper = startUiTest(
             "SystemAlerts/testTapAlerts",
             environment = mapOf("PHOTOS_TAP" to "Allow Full Access,Delete"),
@@ -156,6 +157,7 @@ class UploadTest {
 
         post("/upload/select?ids=${added.joinToString(",").encoded()}")
         post("/upload/name?album=${NAME.encoded()}&new=true")
+        tapper.arm()
         val albumId = confirmAndLand()
         assertTrue("PHOTOS_TAPPED Delete" in tapper.awaitSuccess(), "iOS asked, and Delete was tapped")
 
@@ -203,6 +205,7 @@ class UploadTest {
         assertEquals(GALLERY_ALBUM, naming.string("text"), "the path is pre-filled from the gallery album")
         assertEquals(galleryAlbum, naming.string("album"))
         post("/upload/name?new=true")
+        tapper.arm()
         val albumId = confirmAndLand()
         val taps = Regex("PHOTOS_TAPPED Delete").findAll(tapper.awaitSuccess()).count()
         assertEquals(2, taps, "iOS asked for the album and for its photos, and Delete was tapped on both")

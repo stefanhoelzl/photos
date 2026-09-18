@@ -163,8 +163,11 @@ internal class IosScenario(
         val xctestrun = products.listFiles { file -> file.name.endsWith(".xctestrun") }?.singleOrNull()
             ?: error("no .xctestrun in $products -- Scripts/ios-sim.sh build builds the app for testing")
         val log = File(scratch, "${tests.joinToString("+") { it.replace('/', '-') }}.log")
+        // Created by [UiTest.arm], for a `SystemAlerts` to start looking. Unused by any other test.
+        val armed = File(scratch, "${log.nameWithoutExtension}.armed").apply { delete() }
+        val all = environment + ("PHOTOS_TAP_ARMED" to armed.absolutePath)
         return timings.measure("ui-test start") {
-            UiTest.start(xctestrun, simulator.device, tests.map { "PhotosUITests/$it" }, environment, log, timings)
+            UiTest.start(xctestrun, simulator.device, tests.map { "PhotosUITests/$it" }, all, log, armed, timings)
                 .also { uiTests += it }
                 .also { test -> ready?.let(test::awaitLine) }
         }
@@ -296,6 +299,7 @@ internal const val BUNDLE_ID: String = "net.stho.photos"
 internal class UiTest private constructor(
     private val process: Process,
     private val log: File,
+    private val armed: File,
     private val timings: Timings,
 ) : AutoCloseable {
     private val output = StringBuffer()
@@ -333,6 +337,16 @@ internal class UiTest private constructor(
         return output.toString()
     }
 
+    /**
+     * Lets a `SystemAlerts` start looking for its buttons, which it does not do until armed: looking
+     * snapshots Springboard and the app twice a second, and doing that during `simctl addmedia`
+     * stalled the import for minutes. Called just before whatever raises the alert.
+     */
+    fun arm() {
+        armed.createNewFile()
+        awaitLine("PHOTOS_TAPPER_ARMED", seconds = 30)
+    }
+
     /** The first line holding [marker] printed so far, without waiting for one. */
     fun printed(marker: String): String? = output.lines().firstOrNull { marker in it }
 
@@ -354,6 +368,7 @@ internal class UiTest private constructor(
             tests: List<String>,
             environment: Map<String, String>,
             log: File,
+            armed: File,
             timings: Timings,
         ): UiTest {
             log.parentFile.mkdirs()
@@ -366,7 +381,7 @@ internal class UiTest private constructor(
                 .redirectErrorStream(true)
                 .apply { environment().putAll(environment.mapKeys { (name, _) -> "TEST_RUNNER_$name" }) }
                 .start()
-            return UiTest(process, log, timings)
+            return UiTest(process, log, armed, timings)
         }
     }
 }
