@@ -245,3 +245,17 @@ project(":tests:ios") {
 project(":tests:cli") {
     tasks.matching { it.name == "linuxX64Test" }.configureEach { configureS3Mock(this) }
 }
+
+// ---------------------------------------------------------------- the simulator
+//
+// Kotlin/Native's simulator tests boot a device of their own for every test binary and shut it
+// down afterwards (`simctl spawn --standalone`). CI's iOS job runs them on the device its app
+// scenarios drive, already booted: `-Pphotos.simulator=<device name>` names that device, and the
+// tests then run on it as it is. Unset, the plugin's own behaviour stands.
+val sharedSimulator: String? = providers.gradleProperty("photos.simulator").orNull
+if (sharedSimulator != null) subprojects {
+    tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest>().configureEach {
+        device.set(sharedSimulator)
+        standalone.set(false)
+    }
+}
