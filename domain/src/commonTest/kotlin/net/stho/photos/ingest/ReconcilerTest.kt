@@ -11,6 +11,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
+import kotlinx.io.IOException
 import kotlinx.io.files.Path
 import net.stho.photos.catalog.AlbumInfo
 import net.stho.photos.catalog.AlbumState
@@ -580,17 +581,26 @@ class ReconcilerTest {
      * is deleted.
      *
      * Only a case-sensitive disk can hold the two at once, so only one can pose the question: on the
-     * simulator's case-insensitive volume the second `mkdir` lands in the first folder, and there is
-     * no clash to find. The Linux run is what asserts the rule.
+     * simulator's case-insensitive volume there is no clash to find. The Linux run is what asserts
+     * the rule.
      */
     @Test
     fun siblingFoldersNamedAlikeButForCaseAreLeftAloneWithTheirChildren() {
         val library = LibraryFixture()
         library.file("Reisen/Italien/a.jpg")
-        library.file("reisen/Kroatien/b.jpg")
-        // `exists` cannot tell the two apart here — it asks the filesystem, which folds the case.
-        // What the walk *reports* can: one folder, or two.
-        if (library.walk().albums.none { it.relativePath.trim('/') == "reisen/Kroatien" }) return
+        // A disk that folds case answers the second name one of two ways, and both mean there is no
+        // clash to find. Its `mkdir` refuses `reisen` as a folder that exists -- measured on the
+        // simulator, under the device's own TMPDIR -- or the second file lands in the first folder,
+        // which `exists` cannot tell apart, because it asks the same filesystem. The walk can: it
+        // reports one folder, or two.
+        val refused = try {
+            library.file("reisen/Kroatien/b.jpg")
+            false
+        } catch (exists: IOException) {
+            if ("File exists" !in exists.message.orEmpty()) throw exists
+            true
+        }
+        if (refused || library.walk().albums.none { it.relativePath.trim('/') == "reisen/Kroatien" }) return
         library.file("Garten/c.jpg")
         val container = library.shard("Reisen", photos = emptyList())
         val italy = library.shard("Reisen/Italien", photos = listOf("a.jpg"), parent = container.info.id)
