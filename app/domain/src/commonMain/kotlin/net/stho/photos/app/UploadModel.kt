@@ -46,8 +46,8 @@ public data class Naming(
     val selected: UploadTarget? = null,
     /** The gallery album chosen whole, which deleting takes too; null for loose photos. */
     val galleryAlbum: String? = null,
-    /** Decided up front rather than asked afterwards (§8). */
-    val deleteFromGallery: Boolean = false,
+    /** Decided up front rather than asked afterwards, and ticked until unticked (§8). */
+    val deleteFromGallery: Boolean = true,
 ) {
     val count: Int get() = assetIds.size
 

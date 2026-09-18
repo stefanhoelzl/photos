@@ -2123,9 +2123,11 @@ silently, no prompt.
 > transfers and iOS will not relaunch the app.** Without manifest reconciliation that upload
 > would be stranded permanently.
 
-**Delete-from-gallery is a checkbox in the album dialog**, decided up front. iOS always shows its
-own deletion confirmation — an app cannot delete library assets silently — so there are
-necessarily two confirmations. Deletion runs only after the uploaded objects are read back and
+**Delete-from-gallery is a checkbox in the album dialog**, decided up front, and **ticked by
+default**: uploading from the phone is how its storage gets freed, and iOS's own alert still stands
+between the box and the deletion. Unticking it keeps that one upload's photos; the choice is not
+remembered. iOS always shows its own deletion confirmation — an app cannot delete library assets
+silently — so there are necessarily two confirmations. Deletion runs only after the uploaded objects are read back and
 verified.
 
 **A gallery album chosen whole goes with its photos** — the same checkbox, worded "Delete the album
@@ -2140,8 +2142,8 @@ carries none and deletes the photos alone. On the desktop stand-in the album's f
 is empty.
 
 > **Accepted risk.** Until the hourly laptop pull runs, the bucket copy is the *only* copy, and
-> bunny.net has no versioning or undelete. Ticking that box leaves a single unversioned copy for
-> up to an hour. Verification protects against corruption, not against deletion.
+> bunny.net has no versioning or undelete. Leaving that box ticked leaves a single unversioned
+> copy for up to an hour. Verification protects against corruption, not against deletion.
 
 ---
 
