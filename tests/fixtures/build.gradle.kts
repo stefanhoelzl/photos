@@ -44,7 +44,9 @@ val fixtureMedia by tasks.registering(Exec::class) {
     dependsOn(link)
     inputs.files(link.map { it.outputFile })
     outputs.dir(fixtureMediaDirectory)
-    doFirst { fixtureMediaDirectory.get().asFile.deleteRecursively() }
+    // A local, so the action does not capture the script object (configuration cache).
+    val out = fixtureMediaDirectory
+    doFirst { out.get().asFile.deleteRecursively() }
     executable = link.get().outputFile.get().absolutePath
     args(fixtureMediaDirectory.get().asFile.absolutePath)
 }

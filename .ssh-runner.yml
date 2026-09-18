@@ -19,7 +19,14 @@ steps:
   # dispatched against `main`, which setup-gradle treats as the default branch and so would
   # save ~550 MB of session-specific Gradle home to main every time -- crowding the repo's
   # 10 GB cache and evicting the entries CI actually needs. CI's `main` runs fill it instead.
+  #
+  # The session's own job has never saved an entry worth having, so it restores the `ios` CI
+  # job's instead: setup-gradle keys its entry by job name, and this override is what its restore
+  # keys match. That entry carries the build cache, with the device framework's compile and link
+  # outputs from the latest `main`, so a fresh session does not redo them.
   - uses: gradle/actions/setup-gradle@v4
+    env:
+      GRADLE_BUILD_ACTION_CACHE_KEY_JOB: ios
     with:
       cache-read-only: true
 

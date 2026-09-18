@@ -21,6 +21,13 @@ val buildShim by tasks.registering {
     description = "Compiles native/CImaging into libphotosimaging.a"
     inputs.dir(shimSource)
     outputs.dir(shimOut)
+    // Locals rather than the script's vals, so the action does not capture the script object --
+    // which the configuration cache cannot store. The same goes for `buildHostShim`.
+    val konanToolchain = konanToolchain
+    val shimOut = shimOut
+    val shimSource = shimSource
+    val nativePrefix = nativePrefix
+    val providers = providers
     doLast {
         val tc = requireNotNull(konanToolchain) {
             "konan gcc toolchain not found -- link a linuxX64 binary once to fetch it"
@@ -63,6 +70,10 @@ val buildHostShim by tasks.registering {
     description = "Compiles CImaging's decode path into libphotosdecode.so for the JVM adapter"
     inputs.dir(shimSource)
     outputs.dir(hostShimOut)
+    val hostShimOut = hostShimOut
+    val shimSource = shimSource
+    val nativePrefix = nativePrefix
+    val providers = providers
     doLast {
         val out = hostShimOut.get().asFile.apply { mkdirs() }
         val lib = nativePrefix.resolve("lib")
@@ -88,6 +99,25 @@ val buildHostShim by tasks.registering {
     }
 }
 
+/**
+ * Registers a task that writes `build/<name>.def` from [text], and returns the file as its output.
+ *
+ * A task rather than a write during configuration: with the configuration cache, a build that
+ * reuses its entry does not configure at all, so a def written as a side effect of configuring
+ * would stay missing after a `clean`. The text is still computed while configuring -- it is a
+ * pure function of paths -- and is the task's input, so a changed path rewrites the file.
+ */
+fun defFile(name: String, text: () -> String): Provider<RegularFile> {
+    val file = layout.buildDirectory.file("$name.def")
+    val content = text()
+    val write = tasks.register("write${name.replaceFirstChar { it.uppercase() }}Def") {
+        inputs.property("text", content)
+        outputs.file(file)
+        doLast { file.get().asFile.writeText(content) }
+    }
+    return write.map { file.get() }
+}
+
 // The .def is generated rather than checked in, so the prefix path stays derived from the
 // build instead of pasted into a file that goes stale. Written during configuration because
 // its content is a pure function of paths -- cinterop wants it to exist before any task runs.
@@ -100,12 +130,10 @@ val buildHostShim by tasks.registering {
 //
 // libstdc++ comes from konan's toolchain as a static archive: linking it dynamically would put
 // libstdc++.so.6 on the runtime list for no reason (DESIGN §7).
-val defFileOnDisk: File = layout.buildDirectory.get().asFile.resolve("photosimaging.def").apply {
-    parentFile.mkdirs()
+val defFileOnDisk = defFile("photosimaging") {
     val libstdcxx = konanToolchain?.resolve("x86_64-unknown-linux-gnu/lib64/libstdc++.a")?.absolutePath
         ?: "-lstdc++"
     val lib = nativePrefix.resolve("lib")
-    writeText(
         """
         headers = photos_imaging.h photos_imaging_fixture.h
         headerFilter = photos_imaging*.h
@@ -114,8 +142,7 @@ val defFileOnDisk: File = layout.buildDirectory.get().asFile.resolve("photosimag
         libraryPaths = ${shimOut.get().asFile}
         linkerOpts = -L$lib --start-group -lheif -lde265 -lx265 -lavfilter -lavformat -lavcodec -lswscale -lswresample -lavutil -ljpeg -llcms2 -lexif -lsqlite3 -lz --end-group $libstdcxx -lm -lpthread -lrt -ldl
 
-        """.trimIndent(),
-    )
+        """.trimIndent()
 }
 
 /**
@@ -129,18 +156,15 @@ val defFileOnDisk: File = layout.buildDirectory.get().asFile.resolve("photosimag
  * architecture and installed under libdir — so both are on the include path or `<dbus/dbus.h>`
  * fails to resolve its own include.
  */
-val dbusDefFile: File = layout.buildDirectory.get().asFile.resolve("photosdbus.def").apply {
-    parentFile.mkdirs()
+val dbusDefFile = defFile("photosdbus") {
     val lib = nativePrefix.resolve("lib")
-    writeText(
         """
         headers = dbus/dbus.h
         headerFilter = dbus/**
         compilerOpts = -I${nativePrefix.resolve("include/dbus-1.0")} -I${lib.resolve("dbus-1.0/include")}
         linkerOpts = -L$lib -ldbus-1 -lexpat -lpthread
 
-        """.trimIndent(),
-    )
+        """.trimIndent()
 }
 
 /**
@@ -154,9 +178,7 @@ val dbusDefFile: File = layout.buildDirectory.get().asFile.resolve("photosdbus.d
  * fcntl record locks are not a substitute: they are released when *any* descriptor to the file
  * is closed, which is precisely the fragility §7 chose flock to avoid.
  */
-val flockDefFile: File = layout.buildDirectory.get().asFile.resolve("photosflock.def").apply {
-    parentFile.mkdirs()
-    writeText(
+val flockDefFile = defFile("photosflock") {
         """
         ---
         #include <sys/file.h>
@@ -168,8 +190,7 @@ val flockDefFile: File = layout.buildDirectory.get().asFile.resolve("photosflock
             return flock(fd, LOCK_EX | LOCK_NB);
         }
 
-        """.trimIndent(),
-    )
+        """.trimIndent()
 }
 
 /**
@@ -184,9 +205,7 @@ val flockDefFile: File = layout.buildDirectory.get().asFile.resolve("photosflock
  * the process outright however long the first one takes to unwind. That is the escape hatch from
  * a clean stop that is waiting on a transcode already inside the encoder.
  */
-val signalsDefFile: File = layout.buildDirectory.get().asFile.resolve("photossignals.def").apply {
-    parentFile.mkdirs()
-    writeText(
+val signalsDefFile = defFile("photossignals") {
         """
         ---
         #include <errno.h>
@@ -247,8 +266,7 @@ val signalsDefFile: File = layout.buildDirectory.get().asFile.resolve("photossig
             raise(sig);
         }
 
-        """.trimIndent(),
-    )
+        """.trimIndent()
 }
 
 kotlin {

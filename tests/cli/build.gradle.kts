@@ -39,8 +39,14 @@ val e2e by tasks.registering {
     dependsOn(tasks.named("linuxX64Test"))
 }
 
+// Whether `e2e` is in this build, decided once the graph is known rather than asked of it while
+// the test task runs: the configuration cache stores the answer, but cannot store `gradle`.
+val e2eRequested = objects.property<Boolean>().convention(false)
+gradle.taskGraph.whenReady { e2eRequested.set(hasTask(e2e.get())) }
+
 tasks.named<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest>("linuxX64Test") {
-    onlyIf { gradle.taskGraph.hasTask(e2e.get()) }
+    val requested = e2eRequested
+    onlyIf { requested.get() }
     dependsOn(":app:cli:linkReleaseExecutableLinuxX64")
     environment("PHOTOS_CLI_BINARY", cliBinary.get().asFile.path)
 
