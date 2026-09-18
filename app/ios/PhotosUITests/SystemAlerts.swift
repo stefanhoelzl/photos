@@ -14,7 +14,14 @@ import XCTest
 ///
 ///   TEST_RUNNER_PHOTOS_TAP         labels to tap, comma-separated; the last one, as often as it
 ///                                  appears, ends the test
-///   TEST_RUNNER_PHOTOS_TAP_SECONDS how long to wait for it (default 300)
+///   TEST_RUNNER_PHOTOS_TAP_SECONDS how long to wait for it once armed (default 300)
+///   TEST_RUNNER_PHOTOS_TAP_ARMED   a host path; when set, nothing is looked for until it exists
+///
+/// Arming exists because looking is not free. Every check snapshots the accessibility hierarchy
+/// of Springboard and the app, twice a second, and doing that while `simctl addmedia` imported
+/// stalled the import for 5-6 minutes on the runner -- measured, as a 381 s `addmedia`. The
+/// tapper then gave up, and the alert it was waiting for came up afterwards, unanswered, for the
+/// next scenario's tapper to find.
 final class SystemAlerts: XCTestCase {
 
     func testTapAlerts() throws {
@@ -29,6 +36,10 @@ final class SystemAlerts: XCTestCase {
         ]
         // The scenario waits for this line before it goes on, so no alert can come too early.
         print("PHOTOS_TAPPER_READY", labels)
+        if let armed = environment["PHOTOS_TAP_ARMED"] {
+            while !FileManager.default.fileExists(atPath: armed) { Thread.sleep(forTimeInterval: 0.5) }
+            print("PHOTOS_TAPPER_ARMED")
+        }
 
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {
