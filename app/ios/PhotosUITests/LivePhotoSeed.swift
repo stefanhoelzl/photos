@@ -16,7 +16,11 @@ import XCTest
 ///   TEST_RUNNER_PHOTOS_LIVE_STILL       the still, a host path the simulator can read
 ///   TEST_RUNNER_PHOTOS_LIVE_VIDEO       the paired MOV
 ///   TEST_RUNNER_PHOTOS_LIVE_IDENTIFIER  the content identifier the still's maker note carries
-///   TEST_RUNNER_PHOTOS_LIVE_EDIT        "no" to leave it unedited
+///   TEST_RUNNER_PHOTOS_LIVE_EDIT        "no" to leave it unedited, "both" for one of each
+///
+/// Prints `PHOTOS_SEEDED <asset id> edited|unedited` for each Live Photo it made. "both" is what
+/// the suite asks for: its edited and unedited scenarios then share one `xcodebuild`, which costs
+/// 20-30 s to start on the runner, rather than starting one each.
 ///
 /// Editing an asset makes iOS ask "Allow … to modify this photo?", which this test answers itself.
 final class LivePhotoSeed: XCTestCase {
@@ -26,10 +30,22 @@ final class LivePhotoSeed: XCTestCase {
         let still = URL(fileURLWithPath: try XCTUnwrap(environment["PHOTOS_LIVE_STILL"]))
         let video = URL(fileURLWithPath: try XCTUnwrap(environment["PHOTOS_LIVE_VIDEO"]))
         let contentIdentifier = try XCTUnwrap(environment["PHOTOS_LIVE_IDENTIFIER"])
-        let edit = environment["PHOTOS_LIVE_EDIT"] != "no"
+        let edits = switch environment["PHOTOS_LIVE_EDIT"] {
+        case "no": [false]
+        case "both": [false, true]
+        default: [true]
+        }
         // Written for both cases, so the unedited control differs from the edited one only by the edit.
         let movie = try appleMovie(from: video, contentIdentifier: contentIdentifier)
+        for edit in edits {
+            let id = try seed(still: still, movie: movie)
+            if edit { try invert(try XCTUnwrap(PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject)) }
+            print("PHOTOS_SEEDED", id, edit ? "edited" : "unedited")
+        }
+    }
 
+    /// One Live Photo made from `still` and `movie`, as an import makes it. Its local identifier.
+    private func seed(still: URL, movie: URL) throws -> String {
         var identifier: String?
         try PHPhotoLibrary.shared().performChangesAndWait {
             let request = PHAssetCreationRequest.forAsset()
@@ -40,9 +56,7 @@ final class LivePhotoSeed: XCTestCase {
         let id = try XCTUnwrap(identifier, "the library created no asset")
         let asset = try XCTUnwrap(PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject)
         XCTAssertTrue(asset.mediaSubtypes.contains(.photoLive), "the still and MOV were imported as one Live Photo")
-
-        if edit { try invert(asset) }
-        print("PHOTOS_SEEDED", id, edit ? "edited" : "unedited")
+        return id
     }
 
     /// The fixture's video, rewritten as an iPhone writes a Live Photo's MOV.

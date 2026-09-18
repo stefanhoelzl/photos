@@ -60,7 +60,12 @@ internal fun iosScenario(label: String, body: suspend IosScenario.() -> Unit) {
         val zone = Zone(s3, Path(File(scratch, "staging").absolutePath))
         zone.clear()
         IosScenario(zone, endpoint, simulator, app, scratch, media, timings).use { scenario ->
-            timings.measure("body") { scenario.body() }
+            try {
+                timings.measure("body") { scenario.body() }
+            } catch (failure: Throwable) {
+                scenario.printUiTestLogs()
+                throw failure
+            }
         }
     } } finally {
         println(timings.report(label))
@@ -142,21 +147,24 @@ internal class IosScenario(
     private val uiTests = mutableListOf<UiTest>()
 
     /**
-     * One test from `PhotosUITests`, started beside the scenario — the suite's hands for what a
+     * Tests from `PhotosUITests`, started beside the scenario — the suite's hands for what a
      * scenario over HTTP cannot do: tap a system alert, seed the library through PhotoKit.
      *
      * Started with `xcodebuild test-without-building`, which installs the app it tests over the one
      * [install] put there, so a UI test is started *before* [launch]. [environment] reaches the test
      * as `TEST_RUNNER_*`, the one prefix xcodebuild passes on. Returns once [ready] has been printed,
      * or straight away without one.
+     *
+     * Several [tests] share one `xcodebuild`, which is worth doing: each one takes 20-30 s to start
+     * on the runner. They run one after another in XCTest's order, alphabetical by class.
      */
-    fun startUiTest(test: String, environment: Map<String, String> = emptyMap(), ready: String? = null): UiTest {
+    fun startUiTest(vararg tests: String, environment: Map<String, String> = emptyMap(), ready: String? = null): UiTest {
         val products = requireNotNull(app.parentFile?.parentFile) { "no products directory above $app" }
         val xctestrun = products.listFiles { file -> file.name.endsWith(".xctestrun") }?.singleOrNull()
             ?: error("no .xctestrun in $products -- Scripts/ios-sim.sh build builds the app for testing")
-        val log = File(scratch, "${test.replace('/', '-')}.log")
+        val log = File(scratch, "${tests.joinToString("+") { it.replace('/', '-') }}.log")
         return timings.measure("ui-test start") {
-            UiTest.start(xctestrun, simulator.device, "PhotosUITests/$test", environment, log, timings)
+            UiTest.start(xctestrun, simulator.device, tests.map { "PhotosUITests/$it" }, environment, log, timings)
                 .also { uiTests += it }
                 .also { test -> ready?.let(test::awaitLine) }
         }
@@ -185,9 +193,16 @@ internal class IosScenario(
         simulator.install(app)
     }
 
+    /**
+     * Whether this scenario has launched the app yet. A first launch follows [install], which leaves
+     * nothing running, and `simctl terminate` costs a second or more even with nothing to stop.
+     */
+    private var launched = false
+
     /** Launch (or relaunch) and wait until the control server answers. */
     suspend fun launch(): JsonObject = timings.measure("launch") {
-        simulator.terminate()
+        if (launched) simulator.terminate()
+        launched = true
         val port = ServerSocket(0).use { it.localPort }
         control = Control("http://127.0.0.1:$port")
         simulator.launch(port)
@@ -257,9 +272,18 @@ internal class IosScenario(
         simulator.screenshot(File(scratch, "$name.png"))
     }
 
+    /**
+     * The end of every UI test this scenario started, for a failure to be read from the test report.
+     * A scenario that times out waiting on the app is often waiting on an alert a UI test was meant
+     * to tap, and what that test last saw is in its own log -- on the runner, gone with it.
+     */
+    fun printUiTestLogs() {
+        for (test in uiTests) println(test.tail())
+    }
+
+    // The app is left running: the next scenario's [install] stops it before it uninstalls.
     override fun close() {
         uiTests.forEach(UiTest::close)
-        runCatching { simulator.terminate() }
     }
 }
 
@@ -309,6 +333,13 @@ internal class UiTest private constructor(
         return output.toString()
     }
 
+    /** The first line holding [marker] printed so far, without waiting for one. */
+    fun printed(marker: String): String? = output.lines().firstOrNull { marker in it }
+
+    /** The last [lines] this test printed, headed by its log's name. */
+    fun tail(lines: Int = 60): String =
+        "--- the last $lines lines of $log\n" + output.lines().takeLast(lines).joinToString("\n")
+
     private fun summary(): String =
         output.lines().filter { "PHOTOS_" in it || "error" in it || "failed" in it }.takeLast(20).joinToString("\n")
 
@@ -320,7 +351,7 @@ internal class UiTest private constructor(
         fun start(
             xctestrun: File,
             device: String,
-            test: String,
+            tests: List<String>,
             environment: Map<String, String>,
             log: File,
             timings: Timings,
@@ -330,7 +361,7 @@ internal class UiTest private constructor(
                 "xcodebuild", "test-without-building",
                 "-xctestrun", xctestrun.absolutePath,
                 "-destination", "platform=iOS Simulator,name=$device",
-                "-only-testing:$test",
+                *tests.map { "-only-testing:$it" }.toTypedArray(),
             )
                 .redirectErrorStream(true)
                 .apply { environment().putAll(environment.mapKeys { (name, _) -> "TEST_RUNNER_$name" }) }

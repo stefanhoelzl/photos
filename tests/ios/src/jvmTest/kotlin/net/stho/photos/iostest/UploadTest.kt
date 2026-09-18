@@ -141,7 +141,7 @@ class UploadTest {
         // full-access alert the simulator can raise again mid-upload.
         val tapper = startUiTest(
             "SystemAlerts/testTapAlerts",
-            mapOf("PHOTOS_TAP" to "Allow Full Access,Delete"),
+            environment = mapOf("PHOTOS_TAP" to "Allow Full Access,Delete"),
             ready = "PHOTOS_TAPPER_READY",
         )
         launch(); setUp()
@@ -178,21 +178,23 @@ class UploadTest {
     fun deletingAWholeGalleryAlbumRemovesTheAlbumToo() = iosScenario("upload-delete-album") {
         install()
         allowPhotos()
-        val seeded = startUiTest(
+        // One xcodebuild for both: the seeder runs first (XCTest goes alphabetically by class), and
+        // the tapper's ready line therefore comes after the album exists.
+        val tapper = startUiTest(
             "AlbumSeed/testSeedAlbum",
-            mapOf(
+            "SystemAlerts/testTapAlerts",
+            environment = mapOf(
                 "PHOTOS_ALBUM_NAME" to GALLERY_ALBUM,
                 "PHOTOS_ALBUM_FILES" to listOf(STILL, VIDEO).joinToString(",") { fixture(it).absolutePath },
+                "PHOTOS_TAP" to "Allow Full Access,Delete,Delete",
             ),
-        ).awaitSuccess()
+            ready = "PHOTOS_TAPPER_READY",
+        )
+        val seeded = tapper.printed("PHOTOS_SEEDED_ALBUM")
+            ?: error("the tapper was ready before the seeder named an album -- XCTest no longer runs AlbumSeed first")
         val (galleryAlbum, assetList) = Regex("PHOTOS_SEEDED_ALBUM (\\S+) (\\S+)").find(seeded)?.destructured
             ?: error("the seeder named no album")
         val assetIds = assetList.split(',')
-        val tapper = startUiTest(
-            "SystemAlerts/testTapAlerts",
-            mapOf("PHOTOS_TAP" to "Allow Full Access,Delete,Delete"),
-            ready = "PHOTOS_TAPPER_READY",
-        )
         launch(); setUp()
 
         post("/upload/open")
@@ -232,17 +234,7 @@ class UploadTest {
     private fun livePhotoPairs(label: String, edited: Boolean) = iosScenario(label) {
         install()
         allowPhotos()
-        val seeded = startUiTest(
-            "LivePhotoSeed/testSeedLivePhoto",
-            mapOf(
-                "PHOTOS_LIVE_STILL" to fixture(LIVE_STILL).absolutePath,
-                "PHOTOS_LIVE_VIDEO" to fixture(LIVE_VIDEO).absolutePath,
-                "PHOTOS_LIVE_IDENTIFIER" to LIVE_IDENTIFIER,
-                "PHOTOS_LIVE_EDIT" to if (edited) "yes" else "no",
-            ),
-        ).awaitSuccess()
-        val assetId = Regex("PHOTOS_SEEDED (\\S+)").find(seeded)?.groupValues?.get(1)
-            ?: error("the seeder named no asset")
+        val assetId = seededLivePhotos().getValue(edited)
         launch(); setUp()
 
         post("/upload/open")
@@ -266,6 +258,27 @@ class UploadTest {
         awaitState("both halves of the uploaded Live Photo on disk") { it["livePair"] !is JsonNull && it["livePair"] != null }
         awaitState("PHLivePhoto to assemble the uploaded pair in full") { it.nullableString("livePhoto") == "full" }
         screenshot(label)
+    }
+
+    /**
+     * The edited and the unedited Live Photo, keyed by whether it is edited: seeded by whichever of
+     * the two scenarios runs first, in one `xcodebuild` for both. The library is the device's, so a
+     * reinstall leaves them there for the second.
+     */
+    private fun IosScenario.seededLivePhotos(): Map<Boolean, String> = livePhotos ?: run {
+        val seeded = startUiTest(
+            "LivePhotoSeed/testSeedLivePhoto",
+            environment = mapOf(
+                "PHOTOS_LIVE_STILL" to fixture(LIVE_STILL).absolutePath,
+                "PHOTOS_LIVE_VIDEO" to fixture(LIVE_VIDEO).absolutePath,
+                "PHOTOS_LIVE_IDENTIFIER" to LIVE_IDENTIFIER,
+                "PHOTOS_LIVE_EDIT" to "both",
+            ),
+        ).awaitSuccess()
+        Regex("PHOTOS_SEEDED (\\S+) (edited|unedited)").findAll(seeded)
+            .associate { match -> (match.groupValues[2] == "edited") to match.groupValues[1] }
+            .also { check(it.size == 2) { "the seeder did not name an edited and an unedited Live Photo: $it" } }
+            .also { livePhotos = it }
     }
 
     /** The library as the picker lists it, once it has read it. */
@@ -294,6 +307,9 @@ class UploadTest {
     private fun JsonObject.uploads(): List<JsonObject> = getValue("uploads").jsonArray.map { it.jsonObject }
 
     private companion object {
+        /** [seededLivePhotos], once seeded. JUnit makes a new instance per test; this outlives them. */
+        var livePhotos: Map<Boolean, String>? = null
+
         const val NAME = "From the phone"
         const val GALLERY_ALBUM = "Seeded album"
         const val STILL = "photo.heic"
