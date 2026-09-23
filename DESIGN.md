@@ -31,7 +31,7 @@ Both render identically; only the content differs. §11's desktop viewer has one
   local library root in one command, and pulls phone-uploaded albums back down.
 - **iOS app** — browses the zone; can upload new albums, and add photos to existing ones.
 - **Desktop viewer** — Linux, read-only. Browses the library the CLI keeps, from the CLI's own
-  local shards and packs; no network, no credentials (§11).
+  local shards and packs; no credentials, and no network but the map's tiles (§11).
 
 All three are Kotlin Multiplatform, over one shared domain (§7). The phone's UI also runs on
 Linux as a harness, which is how it is developed and reviewed (§6); the desktop viewer is a
