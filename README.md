@@ -18,9 +18,9 @@ download queue and no screen to keep in order.
 |---|---|
 | `:domain` | app ∩ CLI: EXIF interpretation, the S3 client and signer, the catalog and its sync loop, the library walk, the ingest rules |
 | `:app:domain` | Linux app ∩ iOS app: the app's ports, its model, §6's download scheduler, §4's on-device cache, and §8's upload with its `Gallery` and `BackgroundUploader` ports |
-| `:ui:shared` | what the phone's UI and the desktop viewer share (§6): theme, icons, the grid and its cell, the viewer's pager and zoom, the album list at both its sizes, the calendar sheet, the nav bar. Composables and nothing else |
+| `:ui:shared` | what the phone's UI and the desktop viewer share (§6): theme, icons, the grid and its cell, the viewer's pager and zoom, the album list at both its sizes, the calendar sheet, the nav bar, the map's basemap port and its pins and clusters. Composables and nothing else |
 | `:ui:phone` | the phone's screens, compiled for the phone and for the Linux harness that draws them |
-| `:ui:desktop` | the desktop viewer's screen (§11): the album list beside one album, and its keyboard. JVM only |
+| `:ui:desktop` | the desktop viewer's screen (§11): the album list beside the library's map, or one album as a grid or on its map, and its keyboard. JVM only |
 | `:app:map` | the map's basemap and nothing else: MapLibre Native drawing VersaTiles' vector tiles behind `:ui:shared`'s `BaseMap` port. The harness window, the desktop viewer's window and the phone install it; a headless render — `/screenshot`, `:tests:app`, `:tests:desktop` — keeps `:ui:shared`'s plain stand-in, since MapLibre needs a window to present into |
 | `:app:media` | media for both Linux roots: libvlc behind the `VideoSurface` port, the decode shim's pixels as Compose images, and the offscreen frame behind `/screenshot` |
 | `:adapter:linux` | the imaging backend over `native/CImaging`, the Secret Service — one protocol over two transports, libdbus for the CLI and dbus-java for the app — the flock run lock, XDG paths |
@@ -32,7 +32,7 @@ download queue and no screen to keep in order.
 | `:app:desktop` | the desktop viewer's root (§11): the CLI's shards and packs and the library's originals, read in place — no credentials, and no network but the map's tiles. `./gradlew :app:desktop:run --args="--library-path ~/Pictures/Albums"` |
 | `:app:ios-debug` | the framework Xcode's Debug configuration links: `:app:ios` plus `:app:control`, started when launched with `PHOTOS_CONTROL_PORT` |
 | `:app:ios` | the app's iOS root: SQLiter, NSURLSession, the ImageIO decoder, `AVPlayerViewController` and `PHLivePhotoView` for playback, and the framework `app/ios/Photos.xcodeproj` wraps |
-| `:tests:fixtures` | synthetic media — JPEG, HEIC, video, CR2, PNG, EXIF — generated, never committed; `:tests:fixtures:fixtureMedia` also writes the set the app suites sync (a still, a video, a Live Photo pair) |
+| `:tests:fixtures` | synthetic media — JPEG, HEIC, video, CR2, PNG, EXIF with GPS — generated, never committed; `:tests:fixtures:fixtureMedia` also writes the set the app suites sync (a still, a video, a Live Photo pair, and two stills with EXIF GPS) |
 | `:tests:cli` | the end-to-end suite: declares a library and a zone, runs the *shipped* binary, asserts both |
 | `:tests:app` | its counterpart for the app: declares a zone — shards plus real media blobs — starts the real composition root, and asserts what the model reports and what lands on disk |
 | `:tests:desktop` | the desktop viewer's: a library on disk, the *shipped* `photos-cli sync` against S3Mock, then the viewer's root over what that left; `:tests:desktop:e2e` |
