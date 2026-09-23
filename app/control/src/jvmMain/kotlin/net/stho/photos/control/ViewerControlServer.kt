@@ -16,6 +16,10 @@ import net.stho.photos.app.Day
 import net.stho.photos.app.DesktopModel
 import net.stho.photos.app.DesktopUi
 import net.stho.photos.app.ListEntry
+import net.stho.photos.app.MapCamera
+import net.stho.photos.app.MapPin
+import net.stho.photos.app.MapUi
+import net.stho.photos.app.MapView
 import net.stho.photos.app.TileSize
 
 /**
@@ -27,7 +31,8 @@ import net.stho.photos.app.TileSize
  *
  *   GET  /state            loading and why a rebuild failed, the sort, query and range, the
  *                          sidebar's rows, the selected album and its photos, the tile size, the
- *                          focused tile, the open photo and what the viewer holds for it
+ *                          focused tile, the open photo and what the viewer holds for it; both
+ *                          maps and the window the list is narrowed to
  *   POST /refresh          F5: replay the CLI's shards
  *   POST /sort             the sidebar's sort icon
  *   POST /search?q=text    typing into the field
@@ -44,6 +49,16 @@ import net.stho.photos.app.TileSize
  *   POST /close            Esc, or the viewer's back
  *   POST /tile?size=small|medium|large | ?closer=true|false
  *                          the bar's S/M/L, or Ctrl±
+ *   POST /library          Esc from an album, or the sidebar's map icon: no album selected
+ *   POST /map              the album bar's toggle: its grid ↔ its map
+ *   POST /map/camera?latitude=…&longitude=…&zoom=…
+ *                          move the map on screen, as a drag or a cluster click does -- on the
+ *                          library's map, this narrows the list to what it shows
+ *   POST /map/viewport?w=…&h=…
+ *                          the album pane's size in dp, which frames fit; a laptop's until set
+ *   POST /map/tap?cluster=<i>
+ *                          click the i-th entry of the map on screen's `clusters` in `/state`
+ *   POST /map/clear        the chip's ✕: every album listed again, the library framed again
  *   GET  /screenshot?w=…&h=…
  *                          a PNG of the window's content, rendered offscreen
  *
@@ -155,6 +170,58 @@ public class ViewerControlServer(
                     call.json(render(model.state.value))
                 }
 
+                post("/library") {
+                    model.showLibrary()
+                    call.json(render(model.state.value))
+                }
+
+                post("/map") {
+                    model.togglePhotoMap()
+                    call.json(render(model.state.value))
+                }
+
+                post("/map/camera") {
+                    val parameters = call.request.queryParameters
+                    val latitude = parameters["latitude"]?.toDoubleOrNull()
+                    val longitude = parameters["longitude"]?.toDoubleOrNull()
+                    val zoom = parameters["zoom"]?.toDoubleOrNull()
+                    if (latitude == null || longitude == null || zoom == null) {
+                        return@post call.fail(HttpStatusCode.BadRequest, "expected latitude, longitude and zoom")
+                    }
+                    model.moveCamera(MapCamera(latitude, longitude, zoom))
+                    call.json(render(model.state.value))
+                }
+
+                post("/map/viewport") {
+                    val width = call.request.queryParameters["w"]?.toDoubleOrNull()
+                    val height = call.request.queryParameters["h"]?.toDoubleOrNull()
+                    if (width == null || height == null) return@post call.fail(HttpStatusCode.BadRequest, "expected w and h")
+                    model.mapViewport(width, height)
+                    call.json(render(model.state.value))
+                }
+
+                post("/map/tap") {
+                    val ui = model.state.value
+                    val (view, map) = when {
+                        ui.showingLibraryMap -> ui.libraryView to ui.libraryMap
+                        ui.showingAlbumMap -> ui.albumView to ui.albumMap
+                        else -> return@post call.fail(HttpStatusCode.Conflict, "no map is showing")
+                    }
+                    val camera = view.camera ?: return@post call.fail(HttpStatusCode.Conflict, "the map is not framed yet")
+                    map ?: return@post call.fail(HttpStatusCode.Conflict, "the map has no pins yet")
+                    val at = call.request.queryParameters["cluster"]?.toIntOrNull()
+                        ?: return@post call.fail(HttpStatusCode.BadRequest, "expected cluster=<index>")
+                    val cluster = map.clusters.at(camera.zoom).getOrNull(at)
+                        ?: return@post call.fail(HttpStatusCode.NotFound, "no cluster $at at this zoom")
+                    model.tapMap(cluster)
+                    call.json(render(model.state.value))
+                }
+
+                post("/map/clear") {
+                    model.clearInView()
+                    call.json(render(model.state.value))
+                }
+
                 get("/screenshot") { call.screenshot() }
             }
         }.start(wait = false)
@@ -210,6 +277,31 @@ public class ViewerControlServer(
             "\"preview\":${ui.preview != null}",
             "\"videoPath\":${ui.videoPath?.json() ?: "null"}",
             "\"livePair\":$livePair",
+            // Which map the album pane shows, if either; each with its camera and what it draws.
+            "\"showing\":${(if (ui.showingLibraryMap) "library" else if (ui.showingAlbumMap) "map" else if (ui.open != null) "viewer" else "grid").json()}",
+            "\"photoMap\":${ui.photoMap}",
+            "\"librarySubtitle\":${ui.librarySubtitle.json()}",
+            "\"libraryMap\":${mapState(ui.libraryView, ui.libraryMap)}",
+            "\"albumMap\":${mapState(ui.albumView, ui.albumMap)}",
+            "\"inView\":${ui.inView?.let { camera(it.camera) } ?: "null"}",
         ).joinToString(",") + "}"
     }
+
+    /** A map's camera, and what it draws at that camera's zoom -- in the order `/map/tap` indexes. */
+    private fun mapState(view: MapView, map: MapUi?): String {
+        val looking = view.camera
+        val clusters = if (map != null && looking != null) {
+            map.clusters.at(looking.zoom).joinToString(",") { cluster ->
+                val members = cluster.members.map { map.pins[it] }
+                val albums = members.filterIsInstance<MapPin.OfAlbum>().joinToString(",") { "\"${it.album.id}\"" }
+                val photos = members.filterIsInstance<MapPin.OfPhoto>().joinToString(",") { it.index.toString() }
+                """{"count":${cluster.members.size},"albums":[$albums],"photos":[$photos]}"""
+            }
+        } else ""
+        return """{"camera":${looking?.let(::camera) ?: "null"},"moves":${view.moves},""" +
+            """"pins":${map?.pins?.size ?: 0},"total":${map?.total ?: 0},"clusters":[$clusters]}"""
+    }
+
+    private fun camera(it: MapCamera): String =
+        """{"latitude":${it.latitude},"longitude":${it.longitude},"zoom":${it.zoom}}"""
 }

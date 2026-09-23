@@ -6,7 +6,7 @@ plugins {
 
 // The desktop viewer's composition root (§11): the only place that knows which adapter satisfies
 // which port for it. What it wires is the CLI's own cache and the library the CLI keeps -- a JDBC
-// driver, the decode shim, libvlc -- and nothing that reaches the network.
+// driver, the decode shim, libvlc -- and one thing that reaches the network: the map's tiles.
 kotlin {
     jvmToolchain(libs.versions.jdk.get().toInt())
     compilerOptions { optIn.add("kotlin.uuid.ExperimentalUuidApi") }
@@ -18,6 +18,13 @@ kotlin {
             implementation(project(":ui:shared"))
             implementation(project(":app:domain"))
             implementation(project(":app:media"))
+            // The window's basemap (§6, §11), the one thing here that fetches anything. Only the window
+            // installs it; offscreen frames keep `:ui:shared`'s stand-in, since MapLibre's surface
+            // needs a window to present into.
+            implementation(project(":app:map"))
+            // Directly as well: the presentation host MapLibre draws through is this root's to install.
+            implementation(libs.maplibre.compose)
+            runtimeOnly(libs.maplibre.compose.runtime.linux)
             // Started only when driven by a test or an agent, with --control-port.
             implementation(project(":app:control"))
             implementation(project(":domain"))

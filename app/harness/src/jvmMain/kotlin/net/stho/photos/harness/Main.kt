@@ -93,7 +93,7 @@ public fun main(args: Array<String>) {
         ) {
             // MapLibre presents into this window, so the basemap is installed here and not in
             // `content`: `/screenshot` renders `content` offscreen, where there is no window to
-            // present into, and draws `:ui:phone`'s stand-in instead.
+            // present into, and draws `:ui:shared`'s stand-in instead.
             ProvideMapPresentationHost(rememberAwtComposeMapPresentationHost(window)) {
                 CompositionLocalProvider(LocalBaseMap provides MaplibreBaseMap) {
                     content()

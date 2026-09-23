@@ -19,7 +19,7 @@ kotlin {
         }
         jvmMain.dependencies {
             implementation(project(":ui:phone"))
-            // The window's basemap (§6). Only the window installs it; offscreen frames keep `:ui:phone`'s
+            // The window's basemap (§6). Only the window installs it; offscreen frames keep `:ui:shared`'s
             // stand-in, since MapLibre's surface needs a window to present into.
             implementation(project(":app:map"))
             // Directly as well: the window glue -- the presentation host MapLibre draws through --

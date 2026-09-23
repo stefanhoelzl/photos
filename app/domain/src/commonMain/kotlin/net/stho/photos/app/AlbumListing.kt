@@ -55,12 +55,19 @@ public class AlbumListing(private val catalog: Catalog) {
     public fun hasPhotosIn(range: DateRange): Boolean =
         photosPerDay().any { (day, photos) -> day in range && photos > 0 }
 
+    /** The albums a search or a date range matches, by id; null with neither. */
+    public fun matching(query: String, range: DateRange?): Set<Uuid>? =
+        range?.let { catalog.photosIn(it).keys }
+            ?: query.takeIf { it.isNotBlank() }?.let { text -> catalog.search(text).mapTo(mutableSetOf()) { it.id } }
+
     /**
      * The list under [parent] — the library when null — every level of it, in [sort].
      *
      * A range's matches carry their counts, which every line then reads in place of the whole
      * album's; a search's are names alone. [narrowing] says whether either applies here at all:
      * only the album list is narrowed (§6), never a container's screen, which has no field.
+     * [within] narrows further, to the albums the desktop's map shows (§11) — a match outside it
+     * is kept off the list exactly as a non-match is.
      */
     public fun rows(
         sort: AlbumSort,
@@ -68,11 +75,13 @@ public class AlbumListing(private val catalog: Catalog) {
         range: DateRange?,
         parent: Uuid? = null,
         narrowing: Boolean = true,
+        within: Set<Uuid>? = null,
     ): Listed {
         val counted = range?.takeIf { narrowing }?.let(catalog::photosIn)
-        val matches = counted?.keys
+        val searched = counted?.keys
             ?: query.takeIf { narrowing && it.isNotBlank() }
                 ?.let { text -> catalog.search(text).mapTo(mutableSetOf()) { it.id } }
+        val matches = if (within == null) searched else searched?.intersect(within) ?: within
         val rows = albumRows(tree, parent, sort, summaries, matches, counted)
         return Listed(
             rows = rows,

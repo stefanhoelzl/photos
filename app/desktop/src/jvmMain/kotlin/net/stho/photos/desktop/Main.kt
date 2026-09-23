@@ -11,15 +11,19 @@ import java.io.File
 import kotlin.system.exitProcess
 import kotlinx.io.files.Path
 import net.stho.photos.control.ViewerControlServer
+import net.stho.photos.map.MaplibreBaseMap
 import net.stho.photos.media.VlcLivePhotoSurface
 import net.stho.photos.media.VlcVideoSurface
 import net.stho.photos.media.offscreen
 import net.stho.photos.ui.desktop.DesktopApp
+import net.stho.photos.ui.screens.LocalBaseMap
 import net.stho.photos.ui.screens.LocalLivePhotoSurface
 import net.stho.photos.ui.screens.LocalVideoSurface
 import net.stho.photos.adapter.linux.Appearance
 import net.stho.photos.media.SystemTheme
 import net.stho.photos.media.applyDisplayScale
+import org.maplibre.compose.desktop.ProvideMapPresentationHost
+import org.maplibre.compose.desktop.rememberAwtComposeMapPresentationHost
 
 /**
  * The desktop viewer (§11): a window over the library `photos-cli sync` keeps on this machine.
@@ -70,7 +74,14 @@ public fun main(args: Array<String>) {
             // Maximized, with the title bar: the whole screen, and the ✕ that closes it (§11).
             state = rememberWindowState(placement = WindowPlacement.Maximized),
         ) {
-            content()
+            // MapLibre presents into this window, so the basemap is installed here and not in
+            // `content`: `/screenshot` renders `content` offscreen, where there is no window to
+            // present into, and draws `:ui:shared`'s stand-in instead.
+            ProvideMapPresentationHost(rememberAwtComposeMapPresentationHost(window)) {
+                CompositionLocalProvider(LocalBaseMap provides MaplibreBaseMap) {
+                    content()
+                }
+            }
         }
     }
 }

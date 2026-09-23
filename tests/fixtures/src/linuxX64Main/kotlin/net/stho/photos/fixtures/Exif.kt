@@ -11,26 +11,33 @@ package net.stho.photos.fixtures
  * An EXIF APP1 payload — `"Exif\0\0"` followed by a little-endian TIFF carrying the tags given.
  * Shared by the oriented-JPEG and EXIF-bearing-HEIC fixtures.
  *
- * Only the shapes the pipeline actually reads: SHORT for orientation, ASCII for strings, and
- * [appleContentIdentifier] for the one tag that lives behind a maker note.
+ * Only the shapes the pipeline actually reads: SHORT for orientation, ASCII for strings,
+ * [appleContentIdentifier] for the one tag that lives behind a maker note, and [location] as the
+ * GPS IFD a camera writes — hemisphere letters and degrees, minutes, seconds as RATIONALs.
  */
 public fun exifApp1(
     orientation: Int? = null,
     model: String? = null,
     appleContentIdentifier: String? = null,
+    location: Pair<Double, Double>? = null,
 ): ByteArray {
     val modelBytes = model?.let { it.encodeToByteArray() + byteArrayOf(0) } ?: ByteArray(0)
     val makerNote = appleContentIdentifier?.let(::appleMakerNote) ?: ByteArray(0)
+    val latitude = location?.let { dms(it.first) } ?: ByteArray(0)
+    val longitude = location?.let { dms(it.second) } ?: ByteArray(0)
 
-    // IFD0 first, then the Exif sub-IFD the maker note hangs off, then the values too big to sit
-    // inside an entry. Every offset below is from the start of the TIFF header, which is where
-    // the payload begins.
-    val ifd0Count = listOfNotNull(orientation, model, appleContentIdentifier).size
+    // IFD0 first, then the Exif sub-IFD the maker note hangs off, then the GPS IFD, then the
+    // values too big to sit inside an entry. Every offset below is from the start of the TIFF
+    // header, which is where the payload begins.
+    val ifd0Count = listOfNotNull(orientation, model, appleContentIdentifier, location).size
     val ifd0End = 8 + 2 + ifd0Count * 12 + 4
     val exifIfdOffset = ifd0End
-    val heapOffset = if (makerNote.isEmpty()) ifd0End else exifIfdOffset + 2 + 12 + 4
+    val gpsIfdOffset = exifIfdOffset + if (makerNote.isEmpty()) 0 else 2 + 12 + 4
+    val heapOffset = gpsIfdOffset + if (location == null) 0 else 2 + 4 * 12 + 4
     val modelOffset = heapOffset
     val makerNoteOffset = modelOffset + modelBytes.size
+    val latitudeOffset = makerNoteOffset + makerNote.size
+    val longitudeOffset = latitudeOffset + latitude.size
 
     val entries = buildList {
         if (model != null) add(TiffEntry(0x0110, type = 2, count = modelBytes.size, at = modelOffset))
@@ -41,6 +48,7 @@ public fun exifApp1(
         if (makerNote.isNotEmpty()) {
             add(TiffEntry(0x8769, type = 4, count = 1, inline = le32(exifIfdOffset)))
         }
+        if (location != null) add(TiffEntry(0x8825, type = 4, count = 1, inline = le32(gpsIfdOffset)))
     }.sortedBy(TiffEntry::tag) // TIFF requires ascending tag order
 
     var tiff = byteArrayOf(0x49, 0x49, 0x2A, 0x00) + le32(8) + le16(entries.size)
@@ -52,9 +60,27 @@ public fun exifApp1(
             TiffEntry(0x927C, type = 7, count = makerNote.size, at = makerNoteOffset).bytes() +
             le32(0)
     }
-    tiff += modelBytes + makerNote
+    if (location != null) {
+        fun hemisphere(letter: Char) = byteArrayOf(letter.code.toByte(), 0, 0, 0)
+        tiff += le16(4) +
+            TiffEntry(0x0001, type = 2, count = 2, inline = hemisphere(if (location.first < 0) 'S' else 'N')).bytes() +
+            TiffEntry(0x0002, type = 5, count = 3, at = latitudeOffset).bytes() +
+            TiffEntry(0x0003, type = 2, count = 2, inline = hemisphere(if (location.second < 0) 'W' else 'E')).bytes() +
+            TiffEntry(0x0004, type = 5, count = 3, at = longitudeOffset).bytes() +
+            le32(0)
+    }
+    tiff += modelBytes + makerNote + latitude + longitude
 
     return "Exif".encodeToByteArray() + byteArrayOf(0, 0) + tiff
+}
+
+/** Degrees, minutes and hundredths of seconds, as three RATIONALs — the sign is the hemisphere's. */
+private fun dms(value: Double): ByteArray {
+    val hundredths = kotlin.math.round(kotlin.math.abs(value) * 360_000).toLong()
+    val degrees = (hundredths / 360_000).toInt()
+    val minutes = ((hundredths / 6_000) % 60).toInt()
+    val seconds = (hundredths % 6_000).toInt()
+    return le32(degrees) + le32(1) + le32(minutes) + le32(1) + le32(seconds) + le32(100)
 }
 
 /**

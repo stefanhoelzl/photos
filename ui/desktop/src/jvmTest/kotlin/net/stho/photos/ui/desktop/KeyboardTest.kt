@@ -3,6 +3,9 @@
 package net.stho.photos.ui.desktop
 
 import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.input.key.Key
@@ -12,11 +15,13 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,7 +46,8 @@ import net.stho.photos.ui.screens.PlayToggle
 
 /**
  * §11's keyboard, pressed on the real screen rendered offscreen: the sidebar's ↑/↓ and Enter, the
- * grid's arrows and Enter, the viewer's ←/→ and Esc, and the keys that work anywhere.
+ * grid's arrows and Enter, the viewer's ←/→ and Esc, and the keys that work anywhere — and a drag
+ * on the library's map, over the stand-in basemap, narrowing the list.
  */
 class KeyboardTest {
 
@@ -99,6 +105,37 @@ class KeyboardTest {
         assertEquals(2, playPresses())
     }
 
+
+
+    /** Esc steps back out: the photo to its album, the album to the library's map. */
+    @Test
+    fun escGoesFromThePhotoToTheAlbumToTheLibrarysMap() = screen {
+        assertTrue(model.state.value.showingLibraryMap, "launch: no album, so the map")
+        press(Key.DirectionDown)
+        press(Key.Enter)
+        press(Key.Enter)
+        assertEquals(0, model.state.value.open)
+
+        press(Key.Escape)
+        assertNull(model.state.value.open)
+        assertEquals("Rome", model.state.value.selected?.name)
+        press(Key.Escape)
+        assertNull(model.state.value.selected)
+        assertTrue(model.state.value.showingLibraryMap)
+    }
+
+    /** The drag the basemap reports once it settles is what narrows the list; launch narrows nothing. */
+    @Test
+    fun draggingTheLibrarysMapNarrowsTheList() = screen {
+        assertEquals(listOf("Trips", "Rome", "Lisbon"), names())
+
+        // Rome sits east of Lisbon; dragging the ground 250dp east carries Rome off the right edge.
+        drag(from = Offset(700f, 450f), to = Offset(950f, 450f))
+
+        assertEquals(listOf("Trips", "Lisbon"), names())
+        assertEquals("1 in map view", model.state.value.albumsSubtitle)
+    }
+
     @Test
     fun ctrlPlusAndMinusStepTheTileSize() = screen {
         press(Key.Equals, ctrl = true)
@@ -114,6 +151,37 @@ class KeyboardTest {
         fun playPresses(): Int = play.presses
 
         private var time = 0L
+
+        fun names(): List<String> = model.state.value.albums.map { it.name }
+
+        /**
+         * Lets Compose's spatial index catch up before the scene goes. It files layout changes on a
+         * throttle measured in real time, and closing with a batch still pending — which the map's
+         * own layout passes leave often enough — fails in its bookkeeping ("LayoutNode … not found
+         * in RectList") after every assertion has already passed.
+         */
+        suspend fun settle() {
+            repeat(3) {
+                delay(50)
+                time += 16
+                scene.render(time * 1_000_000)
+                repeat(4) { yield() }
+            }
+        }
+
+        /** A mouse drag, in small steps, so the gesture sees the slop crossed on the way. */
+        suspend fun drag(from: Offset, to: Offset) {
+            pointer(PointerEventType.Press, from)
+            for (step in 1..8) pointer(PointerEventType.Move, from + (to - from) * (step / 8f))
+            pointer(PointerEventType.Release, to)
+        }
+
+        private suspend fun pointer(type: PointerEventType, at: Offset) {
+            time += 16
+            scene.sendPointerEvent(eventType = type, position = at, timeMillis = time, type = PointerType.Mouse)
+            scene.render(time * 1_000_000)
+            repeat(4) { yield() }
+        }
 
         suspend fun press(key: Key, ctrl: Boolean = false) {
             for (type in listOf(KeyEventType.KeyDown, KeyEventType.KeyUp)) {
@@ -145,7 +213,7 @@ class KeyboardTest {
                 scene.render(it * 16_000_000L)
                 repeat(4) { yield() }
             }
-            Screen(model, scene, play).body()
+            Screen(model, scene, play).apply { body() }.settle()
         } finally {
             scene.close()
         }
@@ -154,8 +222,8 @@ class KeyboardTest {
     /** Two albums of photos under a container, all in memory. */
     private class Library : Catalog, Rebuilder, Thumbnails {
         private val trips = album("Trips", 0).copy(photoCount = 0)
-        private val rome = album("Rome", 2024).copy(parent = trips.id)
-        private val lisbon = album("Lisbon", 2022).copy(parent = trips.id)
+        private val rome = album("Rome", 2024).copy(parent = trips.id, latitude = 41.9, longitude = 12.5)
+        private val lisbon = album("Lisbon", 2022).copy(parent = trips.id, latitude = 38.72, longitude = -9.14)
         private val albums = listOf(trips, rome, lisbon)
         private val photos = listOf(rome, lisbon).associate { album ->
             album.id to (1..5).map { PhotoRow(id = Uuid.random(), filename = "${album.name}-$it.jpg") }
