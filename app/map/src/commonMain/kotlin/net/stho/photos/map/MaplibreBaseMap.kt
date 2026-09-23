@@ -29,7 +29,7 @@ import org.maplibre.spatialk.geojson.Position
 /**
  * The basemap on a phone and in the desktop window: VersaTiles' vector tiles, drawn by MapLibre.
  *
- * It draws tiles and nothing else (§6). Pins and clusters are `:ui:phone`'s overlay, placed by the
+ * It draws tiles and nothing else (§6). Pins and clusters are `:ui:shared`'s overlay, placed by the
  * shared tier's own projection, so what can be wrong about them is unit-tested and a headless
  * render still shows them. Rotation and tilt are off: the map is an index of places, and the
  * overlay's projection assumes a flat, north-up camera.

@@ -86,4 +86,22 @@ class MapGeometryTest {
         assertEquals(MapLimits.MAX_ZOOM.toDouble(), MapCamera(0.0, 0.0, 17.5).zoomedBy(3.0).zoom)
         assertEquals(0.0, MapCamera(0.0, 0.0, 0.5).zoomedBy(-3.0).zoom)
     }
+
+    /** §11's list keeps what the map shows: a place is in view when it lands inside the viewport. */
+    @Test
+    fun aPlaceIsShownWhenItLandsInsideTheViewport() {
+        val camera = MapCamera(41.9, 12.5, 8.0)
+        assertTrue(camera.shows(Mercator.project(41.9, 12.5), 800.0, 600.0))
+        assertTrue(!camera.shows(Mercator.project(38.72, -9.14), 800.0, 600.0), "Lisbon is far off a view of Rome")
+        assertTrue(MapCamera(41.9, 12.5, 2.0).shows(Mercator.project(38.72, -9.14), 800.0, 600.0))
+    }
+
+    /** A basemap's report of the camera it was given is not a move — to within a dp and a hundredth of a level. */
+    @Test
+    fun aCameraReportedBackRoundedIsTheSameView() {
+        val camera = MapCamera(41.9, 12.5, 8.0)
+        assertTrue(camera.sameView(camera.copy(latitude = 41.9 + 1e-6, zoom = 8.0 + 1e-4)))
+        assertTrue(!camera.sameView(camera.panned(5.0, 0.0)), "five dp is somebody dragging")
+        assertTrue(!camera.sameView(camera.zoomedBy(0.5)))
+    }
 }

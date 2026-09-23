@@ -35,6 +35,9 @@ public fun main(args: Array<String>) {
         Path(out, FixtureMedia.LIVE_VIDEO), width = 80, height = 60, frames = 10,
         contentIdentifier = FixtureMedia.LIVE_IDENTIFIER,
     )
+    // Taken somewhere: the desktop suite's map places these (§11).
+    writeSyntheticHeic(Path(out, FixtureMedia.ROME), 384, 288, location = 41.9028 to 12.4964)
+    writeSyntheticHeic(Path(out, FixtureMedia.LISBON), 400, 300, location = 38.7223 to -9.1393)
     println("fixture media in $out")
 }
 
@@ -64,4 +67,8 @@ public object FixtureMedia {
     public const val LIVE_VIDEO: String = "live.mov"
 
     public const val LIVE_IDENTIFIER: String = "5E1C9A2B-7D40-4F3E-9B61-2A8C0D4E7F10"
+
+    /** Stills with EXIF GPS, in Rome and in Lisbon: what an album's pin is the centroid of (§3). */
+    public const val ROME: String = "rome.heic"
+    public const val LISBON: String = "lisbon.heic"
 }

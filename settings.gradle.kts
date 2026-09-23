@@ -91,8 +91,8 @@ include(":app:control")
 include(":ui:shared")
 include(":ui:phone")
 include(":ui:desktop")
-// The basemap, and nothing else: MapLibre behind `:ui:phone`'s `BaseMap` port. A module of its
-// own so that `:ui:phone` -- and every headless render of it -- links no native map renderer.
+// The basemap, and nothing else: MapLibre behind `:ui:shared`'s `BaseMap` port. A module of its
+// own so that the UI modules -- and every headless render of them -- link no native map renderer.
 include(":app:map")
 // Media on Linux, for both Linux roots: libvlc behind `:ui:shared`'s `VideoSurface` port, and the
 // decode shim's pixels as Compose images.

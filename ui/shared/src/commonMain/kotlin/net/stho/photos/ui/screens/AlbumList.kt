@@ -145,6 +145,10 @@ public fun AlbumList(
     loadingText: String? = null,
     /** Lets a root move the keyboard into the search field — Ctrl+F on the desktop (§11). */
     searchFocus: FocusRequester? = null,
+    /** Drawn under the field: the desktop's chip for a list narrowed to the map's view (§11). */
+    beneathField: (@Composable () -> Unit)? = null,
+    /** What an empty list says in place of the search's or the range's own line. */
+    emptyText: String? = null,
 ) {
     // The spinner answers a pull and nothing else. Every launch syncs too, and a spinner over the
     // list each time the app opens would read as the list not being ready when it is.
@@ -152,6 +156,7 @@ public fun AlbumList(
     LaunchedEffect(syncing) { if (!syncing) pulled = false }
     Column(Modifier.fillMaxSize()) {
         if (searchable) SearchField(query, range, onSearch, onCalendar, onClearRange, searchFocus)
+        beneathField?.invoke()
         PullToRefreshBox(
             isRefreshing = pulled,
             onRefresh = { pulled = true; onRefresh() },
@@ -159,7 +164,7 @@ public fun AlbumList(
         ) {
             ListBody(
                 rows, query, range, thumbnails, arrivals, loading, cache, actions, order, scroll, onScrolled, onOpen, onAction,
-                size, selected, loadingText,
+                size, selected, loadingText, emptyText,
             )
         }
     }
@@ -183,6 +188,7 @@ private fun ListBody(
     size: ListSize,
     selected: Uuid?,
     loadingText: String?,
+    emptyText: String?,
 ) {
     Column(Modifier.fillMaxSize()) {
         if (rows.isEmpty() && loading != null) {
@@ -193,6 +199,7 @@ private fun ListBody(
         } else if (rows.isEmpty()) {
             EmptyState(
                 when {
+                    emptyText != null -> emptyText
                     range != null -> "No photos from ${range.label}"
                     query.isBlank() -> "No albums yet"
                     else -> "Nothing matches “$query”"

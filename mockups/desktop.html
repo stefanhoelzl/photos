@@ -70,31 +70,47 @@ kbd{background:#3a3e46;border-radius:4px;padding:0 5px;font-size:11px}
 .cal .days span small{color:var(--muted);font-size:10px}
 .cal .days span.r{background:#16324F;outline:1px solid var(--primary)}
 .btn{padding:6px 14px;border-radius:16px;background:var(--primary);color:#fff;font-weight:600}
+.mapwrap{flex:1;position:relative;overflow:hidden;background:#0d1b26}
+.mapwrap svg{position:absolute;inset:0;width:100%;height:100%}
+.pin{position:absolute;width:38px;height:38px;border:2px solid #fff;border-radius:7px;transform:translate(-50%,-50%);box-shadow:0 2px 6px #000a}
+.pin b{position:absolute;top:40px;left:50%;transform:translateX(-50%);font-size:10px;font-weight:400;white-space:nowrap;background:#000c;border-radius:4px;padding:0 4px}
+.cl{position:absolute;min-width:32px;height:32px;padding:0 6px;border-radius:16px;background:var(--primary);color:#fff;font-weight:600;display:grid;place-items:center;transform:translate(-50%,-50%);border:2px solid #fff;box-shadow:0 2px 6px #000a;font-size:12px}
+.attr{position:absolute;right:6px;bottom:4px;font-size:10px;color:#fff8}
+.chip{margin:0 12px 8px;height:30px;border-radius:8px;background:var(--variant);display:flex;align-items:center;gap:8px;padding:0 10px;font-size:12px;flex:none}
+.chip span{flex:1}
 </style>
 </head>
 <body>
 <h1>Desktop viewer (DESIGN §11)</h1>
-<p class="note">The window is maximized with its title bar and closes with ✕. The design is read-only: no settings, upload, set-cover, map or cache controls. Tiles and covers are colour stand-ins.</p>
+<p class="note">The window is maximized with its title bar and closes with ✕. The design is read-only: no settings, upload, set-cover or cache controls. The basemap, tiles and covers are colour stand-ins.</p>
 
-<h2>1. Launch: no album selected</h2>
-<p class="note">Nothing is remembered between launches. The merged DB is rebuilt in memory (~0.5–3 s), and the sidebar shows the phone's loading state meanwhile.</p>
+<h2>1. Launch: no album selected, so the library's map</h2>
+<p class="note">Nothing is remembered between launches. The merged DB is rebuilt in memory (~0.5–3 s), and the sidebar shows the phone's loading state meanwhile. The map frames every located album automatically, and an automatic frame narrows nothing: the list is whole, albums without a location included.</p>
 <div class="win" id="L"></div>
 
-<h2>2. Album grid</h2>
+<h2>2. Moved: the list follows the map</h2>
+<p class="note">Zoomed onto the Alps and northern Italy. Once the camera settles, the list keeps the albums whose pin is in view, under their containers' headers, counted as a search counts them. Christmas and First steps have no location, so they are gone. The chip's ✕ gives the whole list back and reframes the map. Selecting an album keeps all of this, and Esc (or the sidebar's map icon) comes back to it.</p>
+<div class="win" id="N"></div>
+
+<h2>3. A pin clicked: the album on its own map</h2>
+<p class="note">Rome's pin selects Rome and opens its photos where they were taken, framed afresh. The bar holds only the toggle to the grid, since a map has no tile size. A photo's pin opens the viewer, and a cluster zooms until it splits. The pane keeps the map for the next album that ↑/↓ or a click selects, until the toggle goes back to the grid.</p>
+<div class="win" id="M"></div>
+
+<h2>4. Album grid</h2>
 <p class="note">An album is selected in the sidebar (container headers can't be selected). The main pane shows its photos as square tiles, with the column count following the width.</p>
 <div class="win" id="G"></div>
 <ul class="anno">
 <li><b>Sidebar:</b> the shared <code>AlbumList</code> at compact size. Only the cover shrinks (54 → 32dp). It keeps the 22dp indents, sticky stacked headers and heavy group-closing lines, and has no cache strip.</li>
-<li><b>Sidebar NavBar:</b> sort ⇅ and refresh ⟳ (F5). Large title "Albums" with counts beneath. Search field with the calendar icon (Ctrl+F).</li>
-<li><b>Main NavBar:</b> the S/M/L tile size (also Ctrl+scroll / Ctrl±, 96/160/256dp). Large title = album name, subtitle = count · date span.</li>
-<li><b>Keys:</b> arrows move the focus ring (blue outline), Enter opens, ↑/↓ in the sidebar change album.</li>
+<li><b>Sidebar NavBar:</b> sort ⇅, the library's map 🗺 (as Esc) and refresh ⟳ (F5). Large title "Albums" with counts beneath. Search field with the calendar icon (Ctrl+F).</li>
+<li><b>Main NavBar:</b> the map toggle, then the S/M/L tile size (also Ctrl+scroll / Ctrl±, 96/160/256dp). Large title = album name, subtitle = count · date span.</li>
+<li><b>Keys:</b> arrows move the focus ring (blue outline), Enter opens, ↑/↓ in the sidebar change album, Esc goes back to the library's map.</li>
 </ul>
 
-<h2>3. Viewer</h2>
+<h2>5. Viewer</h2>
 <p class="note">Opens in the main pane and the sidebar stays. The main bar collapses to one row. ←/→ page, Esc returns to the grid (scrolled to the photo), Ctrl+scroll or pinch zooms around the cursor, drag pans. Originals are decoded by the native shim, video plays through libvlc.</p>
 <div class="win" id="V"></div>
 
-<h2>4. Date filter</h2>
+<h2>6. Date filter</h2>
 <p class="note">The search field's calendar icon opens the shared calendar sheet as an overlay. Once applied, the field shows the range read-only.</p>
 <div class="win" id="C" style="position:relative"></div>
 <script>
@@ -124,12 +140,37 @@ const seg=`<div class="seg"><span>S</span><span class="on">M</span><span>L</span
 
 
 const circ=(g,t)=>`<div class="ib" title="${t||''}" style="background:var(--high)">${g}</div>`;
-function side(opts={}){return `<div class="side"><div class="big"><div class="top">${circ("⇅","Sort")}${circ("⟳","Refresh (F5)")}</div><div class="lt">Albums</div><div class="st">7 albums · 1,869 photos</div></div>${opts.search||search}<div class="list">${opts.list||list()}</div></div>`}
-const mainBar=`<div class="big"><div class="top">${seg}</div><div class="lt">Rome</div><div class="st">212 photos · 3–12 Mar 2024</div></div>`;
+function side(opts={}){return `<div class="side"><div class="big"><div class="top">${circ("⇅","Sort")}${circ("🗺","Map (Esc)")}${circ("⟳","Refresh (F5)")}</div><div class="lt">Albums</div><div class="st">${opts.sub||"7 albums · Date ↓"}</div></div>${opts.search||search}${opts.chip||''}<div class="list">${opts.list||list()}</div></div>`}
+const mainBar=`<div class="big"><div class="top">${circ("🗺","Map")}${seg}</div><div class="lt">Rome</div><div class="st">212 photos · 3–12 Mar 2024</div></div>`;
 const plainList=(()=>{const saved=albums.map(a=>({...a}));albums.forEach(a=>a.sel=0);const r=list();albums.forEach((a,i)=>a.sel=saved[i].sel);return r})();
 
+/* A 1000×648 stand-in for Europe; the pane has the same proportions. */
+const land=`<path d="M170 380 L330 360 L345 420 L320 520 L200 530 L160 470 Z"/><path d="M300 250 L450 230 L470 300 L440 330 L420 400 L340 400 L320 360 Z"/><path d="M255 120 L310 110 L330 180 L320 250 L270 260 L245 200 Z"/><path d="M420 200 L700 180 L740 330 L600 330 L560 300 L470 300 L450 230 Z"/><path d="M470 300 L560 300 L560 330 L520 360 L585 440 L600 470 L570 500 L555 470 L530 430 L490 360 L470 330 Z"/><path d="M600 330 L740 330 L760 420 L700 470 L660 520 L630 450 L590 400 Z"/><path d="M450 0 L520 0 L560 60 L600 20 L660 0 L700 60 L660 180 L560 190 L500 140 Z"/><path d="M540 505 L580 500 L570 530 L535 528 Z"/>`;
+const places={Rome:[530,420,4],Dolomites:[505,318,5],Wedding:[468,322,10],"Lake house":[430,220,11],"Coast road":[222,468,12],Lisbon:[188,478,13]};
+function mapPane({vb,pins=[],clusters=[],photos=[],detail=''}){
+  const [x,y,w]=vb,h=w*648/1000,pos=(px,py)=>`left:${(px-x)/w*100}%;top:${(py-y)/h*100}%`;
+  return `<div class="mapwrap"><svg viewBox="${x} ${y} ${w} ${h}" preserveAspectRatio="none"><rect x="-500" y="-500" width="2000" height="2000" fill="#0d1b26"/><g fill="#1f2a33" stroke="#34424f" stroke-width="${w/600}">${land}</g>${detail}</svg>
+  ${pins.map(n=>{const [px,py,ci]=places[n];return `<div class="pin" style="${pos(px,py)};background:${col(ci)}"><b>${n}</b></div>`}).join('')}
+  ${photos.map(([px,py,ci])=>`<div class="pin" style="${pos(px,py)};background:${col(ci)}"></div>`).join('')}
+  ${clusters.map(([px,py,n])=>`<div class="cl" style="${pos(px,py)}">${n}</div>`).join('')}
+  <div class="attr">© VersaTiles · OpenStreetMap</div></div>`}
+const mapBar=`<div class="big"><div class="top"></div><div class="lt">Map</div><div class="st">85 of 301 albums on the map</div></div>`;
+const chip=`<div class="chip">🗺<span>In map view</span>✕</div>`;
+const inView=sel=>{const saved=albums.splice(0,albums.length,
+ {h:"2024",d:"2 of 3 albums · 400 photos",depth:0},{n:"Rome",d:"3–12 Mar 2024 · 212",depth:1,sel},{n:"Dolomites",d:"Jul 2024 · 188",depth:1,close:1},
+ {h:"FAMILY",d:"1 of 2 albums · 250 photos",depth:0},{n:"Wedding",d:"Jun 2023 · 250",depth:1,close:1});
+ const r=list();albums.splice(0,albums.length,...saved);return r};
+
 document.getElementById("L").innerHTML=title+`<div class="body">${side({list:plainList})}
- <div class="main"><div class="empty"><div><div style="font-size:34px;opacity:.5">▢</div><div style="margin-top:8px">Choose an album</div><div style="font-size:11px;margin-top:4px">↑/↓ in the sidebar, or click one</div></div></div></div></div>`;
+ <div class="main">${mapBar}${mapPane({vb:[0,0,1000],pins:["Lake house"],clusters:[[495,330,3],[205,473,2],[380,250,34],[300,330,12],[590,120,9],[660,400,14],[285,190,10]]})}</div></div>`;
+
+document.getElementById("N").innerHTML=title+`<div class="body">${side({sub:"3 in map view",chip,list:inView(0)})}
+ <div class="main">${mapBar}${mapPane({vb:[430,300,200],pins:["Rome","Dolomites","Wedding"]})}</div></div>`;
+
+const city=`<g stroke="#2d3a47" stroke-width=".03" fill="none"><path d="M522 418 L538 422"/><path d="M524 425 L537 415"/><path d="M527 413 L532 432"/><circle cx="530" cy="421" r="3.5"/></g><path d="M526 416 Q530 419 528 424 Q531 427 533 431" stroke="#34424f" stroke-width=".08" fill="none"/>`;
+document.getElementById("M").innerHTML=title+`<div class="body">${side({sub:"3 in map view",chip,list:inView(1)})}
+ <div class="main"><div class="big"><div class="top">${circ("▦","Grid")}</div><div class="lt">Rome</div><div class="st">88 of 212 photos on the map</div></div>
+ ${mapPane({vb:[518,412,24],detail:city,photos:[[524,417,1],[529,420.5,2],[533,418,3],[531,425,7],[522,423,8]],clusters:[[527,422.5,23],[535,421,41],[526,426.5,19]]})}</div></div>`;
 
 document.getElementById("G").innerHTML=title+`<div class="body">${side()}
  <div class="main">${mainBar}<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(128px,1fr))">${tiles(60)}</div></div></div>`;

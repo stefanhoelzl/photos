@@ -2441,11 +2441,15 @@ Library-specific open items (unlocated albums, deferred UI) are tracked in `INGE
 
 ## 11. Desktop viewer
 
-> See **`mockups/desktop.html`** for the four states — launch, an album's grid, the viewer and
-> the date filter. Tiles and names are synthetic.
+> See **`mockups/desktop.html`** for the states — launch on the library's map, the list narrowed
+> to the map's view, an album on its map, an album's grid, the viewer and the date filter. Tiles
+> and names are synthetic.
 
 **A viewer, and nothing else.** It reads what the CLI keeps and writes nothing anywhere: no
-network, no credentials, no download queue, no cache. The CLI is already what keeps a laptop in
+network, no credentials, no download queue, no cache. **One exception, the basemap's tiles** (see
+*The maps*): fetched from VersaTiles and kept in MapLibre's own cache, exactly as on the phone.
+Nothing the viewer shows *of the library* — a pin, a thumbnail, a count — comes from anywhere but
+the CLI's cache and the library. The CLI is already what keeps a laptop in
 step with the zone — `sync` pulls the phone's albums down into the library (§7) — so a second
 thing on the same machine fetching the same bytes would be a second copy of the library with a
 second set of rules for when it is complete. On the desktop, "is this album downloaded?" has no
@@ -2492,21 +2496,67 @@ scale is `GDK_SCALE`, or else the `Xft.dpi` the desktop publishes to X clients, 
 as `sun.java2d.uiScale` before AWT starts: under XWayland the JVM is told nothing about the
 monitor, and on a 2× desktop the window came up at half size. The harness takes both the same way.
 
-**Left, the album list; right, one album.** The sidebar is §6's album list at its `Compact` size
-— every level, sticky stacked headers, 22dp indents, the heavier line closing each group — with
-the search field and its calendar above it. A container's header is **not selectable**: the main
-pane always shows exactly one album, or, before the first choice, says to choose one.
+**Left, the album list; right, the library's map or one album.** The sidebar is §6's album list
+at its `Compact` size — every level, sticky stacked headers, 22dp indents, the heavier line
+closing each group — with the search field and its calendar above it. A container's header is
+**not selectable**: the main pane shows exactly one album, or, with none selected — at launch, and
+after Esc — the library's map.
 
-**Both panes carry §6's two-row nav bar.** The sidebar's holds sort and refresh over the large
-title "Albums"; the album's holds the tile size over the album's name, with its count and date
-span beneath. Opening a photo collapses the album's bar to one row — back, and the name over
+**Both panes carry §6's two-row nav bar.** The sidebar's holds sort, the map and refresh over the
+large title "Albums"; the map's is "Map" over what it places; the album's holds the grid/map
+toggle and the tile size over the album's name, with its count and date span beneath. Opening a photo collapses the album's bar to one row — back, and the name over
 "4 of 212 · file · date" — to give the photo the height. ~90px per pane is the accepted price of
 one bar design across both products.
 
-**Kept from the phone**: search, the date filter (§6's calendar sheet, over the window), and the
-album sort. **Not here**: settings, upload, set-cover, the maps and every cache control — each
-either writes, or needs the network, or both. The map is not ruled out, only not in the first
-version; it would be the album pane's toggle, as on the phone.
+**Kept from the phone**: search, the date filter (§6's calendar sheet, over the window), the
+album sort, and both maps. **Not here**: settings, upload, set-cover and every cache control —
+each either writes, or needs the network for the library, or both.
+
+### The maps
+
+**With no album selected, the album pane is the library's map** — §6's album-list map: flat,
+every located album that owns photos, the same pins and clusters, the same stand-in headless.
+Its bar reads "Map" over "85 of 301 albums on the map", placed against placeable, and "matching"
+in place of "albums" while a search or a range narrows the pins. Esc from an album — or the map
+icon in the sidebar's bar — comes back to it. The basemap is `:app:map`'s MapLibre, installed by
+the window; frames drawn offscreen get `:ui:shared`'s plain ground, as the phone's do.
+
+**The map narrows the list to what it shows** — but only once somebody has moved it. In the real
+library 85 of 301 albums that own photos have a location, so a list always cut to the map would
+hide most of the library at launch. Instead:
+
+- **At launch the frame is automatic**, fitted to every placed album, and the list is whole —
+  located or not.
+- **The first pan or zoom** — a drag, a wheel step, a cluster click — narrows it: from then on the
+  list keeps the albums whose pin is inside the view, under their containers' headers, counted as
+  a search counts them ("1 of 3 albums"). An album with no location is never inside it. The
+  sidebar reads "12 in map view".
+- **It re-narrows when the camera settles**, not on every frame of a drag: rebuilding the tree
+  sixty times a second would only make the sidebar flicker. What the basemap reports back about a
+  camera the model set — its first frame, or the end of an animated move — is not a move.
+- **A chip under the field**, "In map view ✕", says so, and its ✕ gives the whole list back and
+  frames the library again — automatic once more, so it narrows nothing.
+- **Selecting an album keeps it.** The list does not reshuffle under the click, and Esc comes
+  back to the same camera and the same list. A resize keeps a moved camera's centre and zoom and
+  re-narrows to the new edges — while the map is on screen; a frame nobody moved is refitted.
+- **A search or a range narrows with it**: a match off the map is hidden as a non-match is
+  ("3 matching · in map view"). The pins follow the search and the range, as on the phone, and the
+  camera does not move for either.
+
+**Clicks.** An album's pin selects it and opens it **on its own map**, as on the phone. A cluster
+zooms until it splits; one that never splits — several trips to one town — zooms all the way in,
+and the list, narrowed to the view, names its albums, so the desktop needs no sheet.
+
+**An album's own map** is the album bar's toggle, grid ↔ map, and the pane keeps whichever was
+last chosen: ↑/↓ and a row's click open the next album the same way. It frames the album's photos
+afresh each time an album is selected; the bar holds only the toggle — a map has no tile size —
+over "88 of 132 photos on the map". A photo's pin opens the viewer, and Esc comes back to the map;
+a cluster that never splits opens the viewer at its earliest photo, as on the phone. Esc from the
+album's map, as from its grid, goes to the library's.
+
+The maps take no keys: a drag, the wheel and a click drive them. The camera is remembered in
+memory only — the library's across albums and F5, an album's until another is selected — and
+nothing about either map survives a relaunch.
 
 **The grid** is square tiles — §6's grid cell, from §5's square packs — at a target size, the
 column count following the window's width. The size steps between 96, 160 and 256dp, from the
@@ -2530,7 +2580,8 @@ encoded yet: the thumbnail, until there is something better.
 
 **Keyboard.** Arrows move a focus ring through the grid and Enter opens it; ↑/↓ in the sidebar
 move the selection, skipping headers, and the grid follows. In the viewer, Space plays or pauses the open video or
-Live Photo. Ctrl+F is search, F5 is refresh.
+Live Photo. Esc steps back out — the viewer to its album, an album to the library's map. Ctrl+F
+is search, F5 is refresh.
 
 ### Built and tested
 
@@ -2539,10 +2590,14 @@ Live Photo. Ctrl+F is search, F5 is refresh.
 runs from a checkout.
 
 `:app:desktop` is the composition root, and starts `:app:control` when driven — `/state`,
-`/screenshot`, and routes to select an album and open a photo. libvlc, the shim's pixels as
-Compose images and the offscreen frame are `:app:media`'s, which both Linux roots install. The model's shared core and the
-desktop model are unit-tested; `:ui:desktop` is rendered headless and driven by key events; and
+`/screenshot`, routes to select an album and open a photo, and the maps': `/library`, `/map`,
+`/map/camera`, `/map/viewport`, `/map/tap` and `/map/clear`. libvlc, the shim's pixels as
+Compose images and the offscreen frame are `:app:media`'s, which both Linux roots install; the
+basemap is `:app:map`'s, and the pins over it `:ui:shared`'s `MapCanvas`, the phone's too. The
+model's shared core and the desktop model are unit-tested — the window the list is narrowed to,
+the automatic frame that narrows nothing, the search and the map together; `:ui:desktop` is
+rendered headless and driven by key events and a drag across the stand-in basemap; and
 **`:tests:desktop`** runs the real `photos-cli sync` against S3Mock into a synthetic library,
 then drives the viewer over what it left — the one test that proves the two agree on where
-things are.
+things are, down to the pins, placed from the EXIF GPS the fixtures carry.
 

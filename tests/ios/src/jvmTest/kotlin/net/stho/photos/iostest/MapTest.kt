@@ -14,7 +14,7 @@ import kotlinx.serialization.json.jsonPrimitive
 /**
  * `:tests:app`'s map scenarios, against the Debug app on a simulator.
  *
- * The one run in which the basemap is MapLibre rather than `:ui:phone`'s stand-in, so its screenshots are
+ * The one run in which the basemap is MapLibre rather than `:ui:shared`'s stand-in, so its screenshots are
  * the frames of the map that show tiles under the pins. MapLibre animates a camera the model moves,
  * and only the settled position is reported back — so after a move these wait for it to land before
  * reading clusters, which `/map/tap` indexes at the camera's current zoom.

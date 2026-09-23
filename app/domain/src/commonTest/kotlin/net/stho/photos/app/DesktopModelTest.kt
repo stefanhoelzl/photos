@@ -267,6 +267,200 @@ class DesktopModelTest {
         assertEquals(listOf("Rome"), model.names())
     }
 
+    // ------------------------------------------------------------------------------- the maps
+
+    /** §11: with no album selected the pane is the library's map, framed on every located album — and the list is whole. */
+    @Test
+    fun launchFramesTheLibraryAndListsEveryAlbum() = runTest {
+        val model = model(this, Library(ROME, LISBON, CHRISTMAS)).started()
+
+        val ui = model.state.value
+        assertTrue(ui.showingLibraryMap)
+        assertEquals(2, ui.libraryMap?.pins?.size)
+        assertEquals("2 of 3 albums on the map", ui.librarySubtitle)
+        assertTrue(ui.libraryView.camera != null, "framed once its pins are clustered")
+        assertNull(ui.inView, "the automatic frame narrows nothing")
+        assertEquals(listOf("Rome", "Christmas", "Lisbon"), model.names())
+    }
+
+    /** The basemap reports the camera it was handed, rounded; that is not somebody moving the map. */
+    @Test
+    fun theBasemapReportingTheFrameBackNarrowsNothing() = runTest {
+        val model = model(this, Library(ROME, LISBON, CHRISTMAS)).started()
+        val framed = requireNotNull(model.state.value.libraryView.camera)
+
+        model.cameraMoved(framed.copy(latitude = framed.latitude + 1e-7, zoom = framed.zoom + 1e-5))
+
+        assertNull(model.state.value.inView)
+        assertEquals(3, model.names().size)
+    }
+
+    @Test
+    fun aPanNarrowsTheListToWhatTheMapShows() = runTest {
+        val trips = album("Trips", null).copy(photoCount = 0)
+        val rome = ROME.copy(parent = trips.id)
+        val model = model(this, Library(trips, rome, LISBON, CHRISTMAS)).started()
+
+        model.cameraMoved(OVER_ROME)
+
+        val ui = model.state.value
+        assertEquals(listOf("Trips", "Rome"), model.names(), "Rome under its container's header; Lisbon off the map, Christmas nowhere on it")
+        assertEquals("1 in map view", ui.albumsSubtitle)
+        assertEquals(OVER_ROME, ui.libraryView.camera)
+        assertNull(ui.libraryView.framing, "no longer the automatic frame")
+    }
+
+    /** Selecting from a narrowed list keeps it narrowed, and Esc comes back to the same view. */
+    @Test
+    fun anAlbumOpenedFromTheNarrowedListKeepsTheMapAsItWas() = runTest {
+        val library = Library(ROME, LISBON, CHRISTMAS).photos(ROME, "a")
+        val model = model(this, library).started()
+        model.cameraMoved(OVER_ROME)
+
+        model.select(ROME)
+        assertFalse(model.state.value.showingLibraryMap)
+        assertEquals(listOf("Rome"), model.names(), "no reshuffle under the click")
+        model.cameraMoved(MapCamera(0.0, 0.0, 1.0))
+        assertEquals(OVER_ROME, model.state.value.libraryView.camera, "a map not on screen is not moved")
+
+        model.showLibrary()
+
+        val ui = model.state.value
+        assertTrue(ui.showingLibraryMap)
+        assertNull(ui.selected)
+        assertEquals(emptyList(), ui.photos)
+        assertEquals(OVER_ROME, ui.libraryView.camera)
+        assertEquals(listOf("Rome"), model.names())
+    }
+
+    /** A search and the map narrow together; the pins follow the search, and the camera stays. */
+    @Test
+    fun aSearchAndTheMapNarrowTogether() = runTest {
+        val robin = located(album("Robin Hood's Bay", 2021), 54.43, -0.53)
+        val model = model(this, Library(ROME, LISBON, robin)).started()
+        model.cameraMoved(OVER_ROME)
+
+        model.search("ro")
+
+        val ui = model.state.value
+        assertEquals(listOf("Rome"), model.names())
+        assertEquals("1 matching · in map view", ui.albumsSubtitle)
+        assertEquals("2 of 2 matching on the map", ui.librarySubtitle)
+        assertEquals(OVER_ROME, ui.libraryView.camera)
+    }
+
+    /** Before the map has been moved, a search lists every match, placed or not. */
+    @Test
+    fun beforeTheMapIsMovedASearchListsEveryMatch() = runTest {
+        val model = model(this, Library(ROME, LISBON, CHRISTMAS)).started()
+
+        model.search("r")
+
+        assertEquals(listOf("Rome", "Christmas"), model.names())
+    }
+
+    @Test
+    fun theChipsCrossListsEveryAlbumAgainAndReframes() = runTest {
+        val model = model(this, Library(ROME, LISBON, CHRISTMAS)).started()
+        model.cameraMoved(OVER_ROME)
+        val moves = model.state.value.libraryView.moves
+
+        model.clearInView()
+
+        val ui = model.state.value
+        assertNull(ui.inView)
+        assertEquals(3, model.names().size)
+        assertEquals(moves + 1, ui.libraryView.moves, "the basemap is sent back to the whole library")
+        assertTrue(ui.libraryView.framing != null)
+    }
+
+    /** A resize refits a frame nobody moved; a moved camera stays put, and the list follows the new edges. */
+    @Test
+    fun aResizeRefitsTheFrameOrNarrowsToTheNewEdges() = runTest {
+        val model = model(this, Library(ROME, LISBON)).started()
+        val framed = model.state.value.libraryView.camera
+
+        model.mapViewport(500.0, 400.0)
+        assertTrue(model.state.value.libraryView.camera != framed, "refitted")
+        assertNull(model.state.value.inView)
+
+        // Rome at the left edge of a wide view; a narrower one loses it.
+        model.cameraMoved(MapCamera(41.9, 14.0, 8.0))
+        model.mapViewport(1600.0, 400.0)
+        assertEquals(listOf("Rome"), model.names())
+        model.mapViewport(300.0, 400.0)
+        assertEquals(emptyList(), model.names())
+        assertEquals(MapCamera(41.9, 14.0, 8.0), model.state.value.libraryView.camera, "centre and zoom kept")
+    }
+
+    /** §6's rule, on the desktop: an album's pin opens it on its own map, framed on its photos. */
+    @Test
+    fun anAlbumsPinOpensItOnItsMap() = runTest {
+        val library = Library(ROME, LISBON).photosAt(ROME, 41.90 to 12.50, 41.89 to 12.49, null)
+        val model = model(this, library).started()
+
+        model.tapMap(model.clusterOf(ROME))
+
+        val ui = model.state.value
+        assertEquals(ROME.id, ui.selected?.id)
+        assertTrue(ui.showingAlbumMap)
+        assertEquals(2, ui.albumMap?.pins?.size)
+        assertEquals("2 of 3 photos on the map", ui.photosSubtitle)
+        assertTrue(ui.albumView.camera != null)
+        assertNull(ui.inView, "opening an album is not moving the library's map")
+    }
+
+    /** The pane keeps its view for the next album: ↑/↓ walk the list on the map, each framed afresh. */
+    @Test
+    fun theAlbumMapCarriesToTheNextAlbumFramedAfresh() = runTest {
+        val library = Library(ROME, LISBON).photosAt(ROME, 41.9 to 12.5).photosAt(LISBON, 38.72 to -9.14)
+        val model = model(this, library).started()
+        model.select(ROME)
+        model.togglePhotoMap()
+        val onRome = model.state.value.albumView.camera
+
+        model.selectAdjacent(1)
+
+        val ui = model.state.value
+        assertEquals(LISBON.id, ui.selected?.id)
+        assertTrue(ui.showingAlbumMap)
+        assertTrue(ui.albumView.camera != null && ui.albumView.camera != onRome)
+
+        model.togglePhotoMap()
+        assertFalse(model.state.value.showingAlbumMap)
+        assertEquals("1 photos · 1 Jan – 31 Dec 2022", model.state.value.photosSubtitle)
+    }
+
+    /** One spot no zoom separates: all the way in, and the list — narrowed to it — names its albums. */
+    @Test
+    fun aClusterThatNeverSplitsZoomsAllTheWayIn() = runTest {
+        val again = located(album("Rome again", 2025), 41.9, 12.5)
+        val model = model(this, Library(ROME, again, LISBON)).started()
+        val cluster = model.clusterOf(ROME)
+        assertEquals(2, cluster.members.size)
+
+        model.tapMap(cluster)
+
+        val ui = model.state.value
+        assertEquals(MapLimits.MAX_ZOOM.toDouble(), ui.libraryView.camera?.zoom)
+        assertEquals(listOf("Rome again", "Rome"), model.names())
+        assertNull(ui.selected)
+    }
+
+    /** On an album's map, photos in one spot open the viewer at the earliest, as on the phone. */
+    @Test
+    fun photosInOneSpotOpenTheViewerAtTheEarliest() = runTest {
+        val library = Library(ROME, LISBON).photosAt(ROME, null, 41.9 to 12.5, 41.9 to 12.5)
+        val model = model(this, library).started()
+        model.tapMap(model.clusterOf(ROME))
+        val view = requireNotNull(model.state.value.albumView.camera)
+        val spot = requireNotNull(model.state.value.albumMap).clusters.at(view.zoom).single()
+
+        model.tapMap(spot)
+
+        assertEquals(1, model.state.value.open)
+    }
+
     // -------------------------------------------------------------------------------- fixtures
 
     private fun model(scope: TestScope, library: Library): DesktopModel {
@@ -277,6 +471,16 @@ class DesktopModelTest {
     private fun DesktopModel.started(): DesktopModel = also { start() }
 
     private fun DesktopModel.names(): List<String> = state.value.albums.map { it.name }
+
+    /** What the library map draws [album] in, at the zoom it is at. */
+    private fun DesktopModel.clusterOf(album: Album): Cluster {
+        val ui = state.value
+        val map = requireNotNull(ui.libraryMap)
+        val zoom = requireNotNull(ui.libraryView.camera).zoom
+        return map.clusters.at(zoom).single { cluster ->
+            cluster.members.any { (map.pins[it] as MapPin.OfAlbum).album.id == album.id }
+        }
+    }
 
     /** A catalog, its rebuild and its packs, all in memory and all changeable mid-test. */
     private class Library(vararg albums: Album) : Catalog, Rebuilder, Thumbnails {
@@ -292,6 +496,16 @@ class DesktopModelTest {
         }
 
         fun taken(album: Album, vararg at: String) = also { taken[album.id] = at.map(Instant::parse) }
+
+        /** Photos taken where each pair says, or somewhere unrecorded for a null. */
+        fun photosAt(album: Album, vararg at: Pair<Double, Double>?) = also {
+            photos[album.id] = at.mapIndexed { index, place ->
+                PhotoRow(
+                    id = Uuid.random(), filename = "$index.jpg", takenAt = Instant.parse("2024-03-05T14:02:00Z"),
+                    latitude = place?.first, longitude = place?.second,
+                )
+            }
+        }
 
         override fun rebuild(): Rebuilt {
             failure?.let { throw IllegalStateException(it) }
@@ -341,4 +555,13 @@ class DesktopModelTest {
         coverPhotoId = null,
         thumbsId = null,
     )
+
+    private fun located(album: Album, latitude: Double, longitude: Double) = album.copy(latitude = latitude, longitude = longitude)
+
+    private val ROME = located(album("Rome", 2024), 41.9, 12.5)
+    private val LISBON = located(album("Lisbon", 2022), 38.72, -9.14)
+    private val CHRISTMAS = album("Christmas", 2023)
+
+    /** Rome and its surroundings, at a zoom that leaves Lisbon far off the edge. */
+    private val OVER_ROME = MapCamera(41.9, 12.5, 7.0)
 }

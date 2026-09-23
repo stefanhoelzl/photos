@@ -1,6 +1,7 @@
 package net.stho.photos.app
 
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.math.max
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -30,8 +31,9 @@ public enum class TileSize(public val dp: Int) {
 /**
  * Everything the desktop viewer shows, as one immutable snapshot (§11).
  *
- * No back stack: the sidebar is always there, the album pane shows one album, and the only thing
- * that opens over it is a photo. Nothing here is remembered between launches.
+ * No back stack: the sidebar is always there, and the album pane shows the library's map until an
+ * album is selected, then that album — as a grid or on its own map — and the only thing that opens
+ * over it is a photo. Nothing here is remembered between launches.
  */
 public data class DesktopUi(
     /** The catalog is being replayed from the CLI's shards: at launch, and on every refresh. */
@@ -73,21 +75,58 @@ public data class DesktopUi(
     val videoPath: String? = null,
     /** The open Live Photo's still and MOV in the library. */
     val livePair: LivePair? = null,
+    /**
+     * The library's map, which the album pane shows while no album is selected (§11). Kept while
+     * one is, so Esc comes back to the same place.
+     */
+    val libraryView: MapView = MapView(),
+    /** Its pins: every located album that owns photos, narrowed by a search or a range. */
+    val libraryMap: MapUi? = null,
+    /**
+     * What the list is narrowed to: the library map's view when its camera last settled after
+     * somebody moved it. Null until then — the automatic frame narrows nothing — and again once
+     * the chip clears it.
+     */
+    val inView: MapWindow? = null,
+    /** The album pane shows the selected album's photos on a map rather than as a grid; kept across albums. */
+    val photoMap: Boolean = false,
+    /** The selected album's map, framed afresh each time an album is selected. */
+    val albumView: MapView = MapView(),
+    val albumMap: MapUi? = null,
 ) {
     /** A name search or a date range is narrowing the list. */
     public val filtering: Boolean get() = query.isNotEmpty() || range != null
+
+    /** No album is selected, so the album pane is the library's map. */
+    public val showingLibraryMap: Boolean get() = selected == null
+
+    /** The selected album is on its map, with no photo open over it. */
+    public val showingAlbumMap: Boolean get() = selected != null && photoMap && open == null
 
     /** Every album on the sidebar, containers included, in the order they are drawn. */
     public val albums: List<Album> get() = rows.mapNotNull { (it as? ListEntry.Row)?.album }
 
     /** The sidebar's second line: a count, then the sort, so no menu has to name it (§6). */
     public val albumsSubtitle: String
-        get() = if (filtering) "$matched matching" else "${albums.size} albums · ${sort.label}"
+        get() = when {
+            inView != null && filtering -> "$matched matching · in map view"
+            inView != null -> "$matched in map view"
+            filtering -> "$matched matching"
+            else -> "${albums.size} albums · ${sort.label}"
+        }
+
+    /** The library map's second line: what is placed, against what could be (§6's wording). */
+    public val librarySubtitle: String
+        get() {
+            val map = libraryMap ?: return ""
+            return "${map.pins.size} of ${map.total} ${if (filtering) "matching" else "albums"} on the map"
+        }
 
     /** The album pane's second line: how many photos, and when they were taken. */
     public val photosSubtitle: String
         get() {
             val album = selected ?: return ""
+            if (photoMap) albumMap?.let { return "${it.pins.size} of ${it.total} photos on the map" }
             val count = "${photos.size} photos"
             val first = album.dateMin ?: return count
             val last = album.dateMax ?: return count
@@ -108,7 +147,8 @@ public data class DesktopUi(
 }
 
 /**
- * The desktop viewer's model (§11): the album list, one selected album, and a photo open over it.
+ * The desktop viewer's model (§11): the album list, the library's map or one selected album, and a
+ * photo open over it.
  *
  * Built on the same [AlbumListing] as the phone's, so the list sorts, searches and filters by date
  * exactly as the phone's does. What it does not have is everything the phone needs a network for:
@@ -130,6 +170,14 @@ public class DesktopModel(
     private var rebuilding: Job? = null
     private var loadingThumbnails: Job? = null
     private var decodingNeighbours: Job? = null
+    private var mappingLibrary: Job? = null
+    private var mappingAlbum: Job? = null
+
+    /**
+     * The album pane's size in dp, which a frame fits and the list's map window is measured in.
+     * Until the pane reports one, a laptop's proportions stand in — which is what a test gets.
+     */
+    private var viewport: Pair<Double, Double> = DEFAULT_VIEWPORT
 
     /** The first rebuild. The window is up and says it is loading while this runs. */
     public fun start(): Unit = refresh()
@@ -173,6 +221,8 @@ public class DesktopModel(
                 ).listed()
             }
             selected?.let(::loadThumbnails)
+            refreshLibraryMap()
+            refreshAlbumMap()
         }
     }
 
@@ -181,9 +231,15 @@ public class DesktopModel(
     /** A new order: the sidebar's rows move, and the selection stays what it was. */
     public fun cycleSort(): Unit = _state.update { it.copy(sort = it.sort.next(), listScroll = null).listed() }
 
-    /** Typing into the field. One filter at a time: text replaces a date range. */
-    public fun search(text: String): Unit = _state.update {
-        it.copy(query = text, range = if (text.isEmpty()) it.range else null, listScroll = null).listed()
+    /**
+     * Typing into the field. One filter at a time: text replaces a date range. The map's pins
+     * narrow with the list, and its camera stays where it is.
+     */
+    public fun search(text: String) {
+        _state.update {
+            it.copy(query = text, range = if (text.isEmpty()) it.range else null, listScroll = null).listed()
+        }
+        refreshLibraryMap()
     }
 
     public fun openCalendar(): Unit = _state.update { it.copy(calendar = listing.calendar()) }
@@ -194,10 +250,14 @@ public class DesktopModel(
     public fun applyRange(range: DateRange): Boolean {
         if (!listing.hasPhotosIn(range)) return false
         _state.update { it.copy(range = range, query = "", calendar = null, listScroll = null).listed() }
+        refreshLibraryMap()
         return true
     }
 
-    public fun clearRange(): Unit = _state.update { it.copy(range = null, listScroll = null).listed() }
+    public fun clearRange() {
+        _state.update { it.copy(range = null, listScroll = null).listed() }
+        refreshLibraryMap()
+    }
 
     /** Where a scroll left the sidebar: remembered, never scrolled to — it is already there. */
     public fun listScrolled(key: String?, index: Int, offset: Int) {
@@ -208,8 +268,16 @@ public class DesktopModel(
         }
     }
 
+    /**
+     * The rows for the sort, the search or range, and the map's window, which all narrow at once:
+     * a match off the map is hidden as a non-match is. An album with no location is never in the
+     * window, so while there is one, it is not listed (§11).
+     */
     private fun DesktopUi.listed(): DesktopUi {
-        val listed = listing.rows(sort, query, range)
+        val within = inView?.let { window ->
+            located(listing.tree).filter { (_, point) -> point in window }.mapTo(mutableSetOf()) { it.first.id }
+        }
+        val listed = listing.rows(sort, query, range, within = within)
         return copy(rows = listed.rows, matched = listed.matched)
     }
 
@@ -225,14 +293,37 @@ public class DesktopModel(
         previews.cancelPrefetch()
         decodingNeighbours?.cancel()
         val photos = catalog.photos(album.id)
+        mappingAlbum?.cancel()
         _state.update {
             it.copy(
                 selected = album, photos = photos, thumbnails = emptyMap(),
                 focus = null, scroll = null, open = null, preview = null, nearby = emptyMap(),
                 videoPath = null, livePair = null,
+                albumView = MapView(), albumMap = null,
             )
         }
         loadThumbnails(album)
+        refreshAlbumMap()
+    }
+
+    /**
+     * Esc from an album, or the sidebar's map icon: no album selected, so the album pane is the
+     * library's map again — its camera, and the list's window, where they were left.
+     */
+    public fun showLibrary() {
+        if (_state.value.selected == null) return
+        previews.cancelPrefetch()
+        decodingNeighbours?.cancel()
+        loadingThumbnails?.cancel()
+        mappingAlbum?.cancel()
+        _state.update {
+            it.copy(
+                selected = null, photos = emptyList(), thumbnails = emptyMap(),
+                focus = null, scroll = null, open = null, preview = null, nearby = emptyMap(),
+                videoPath = null, livePair = null,
+                albumView = MapView(), albumMap = null,
+            )
+        }
     }
 
     /** ↑/↓ in the sidebar: the next album up or down the list, skipping headers. */
@@ -266,6 +357,205 @@ public class DesktopModel(
             _state.update { if (it.selected?.id == album.id) it.copy(thumbnails = loaded) else it }
         }
     }
+
+    // ---------------------------------------------------------------------------- the maps
+
+    /**
+     * The album bar's toggle: the selected album's grid or its map. Kept for the next album too,
+     * so ↑/↓ walk the list on whichever the pane is showing.
+     */
+    public fun togglePhotoMap() {
+        _state.update { it.copy(photoMap = !it.photoMap) }
+        refreshAlbumMap()
+    }
+
+    /**
+     * The pane reports the map's size, so frames fit what is actually visible.
+     *
+     * A frame nobody has moved is fitted again to the size that is real. A camera somebody has
+     * moved keeps its centre and zoom, and the list follows the new edges — but only while the
+     * library map is on screen: a resize behind an open album must not reshuffle the list under it.
+     */
+    public fun mapViewport(width: Double, height: Double) {
+        if (width <= 0 || height <= 0) return
+        viewport = width to height
+        _state.update { ui ->
+            var next = ui
+            ui.libraryView.refitted(width, height)?.let { next = next.copy(libraryView = it) }
+            ui.albumView.refitted(width, height)?.let { next = next.copy(albumView = it) }
+            val window = ui.inView
+            val camera = ui.libraryView.camera
+            if (ui.showingLibraryMap && window != null && camera != null && (window.width != width || window.height != height)) {
+                next = next.copy(inView = MapWindow(camera, width, height), listScroll = null).listed()
+            }
+            next
+        }
+    }
+
+    private fun MapView.refitted(width: Double, height: Double): MapView? {
+        val framing = framing?.takeIf { it.width != width || it.height != height } ?: return null
+        val refit = framing.copy(width = width, height = height)
+        return copy(camera = refit.cameraFor(width, height), moves = moves + 1, framing = refit)
+    }
+
+    /**
+     * Where the map on screen came to rest after a drag, a wheel step or an animated move:
+     * remembered, never animated to — the basemap is already there.
+     *
+     * On the library map, this is what narrows the list. A report of the camera the model itself
+     * set — the basemap's first frame, or the end of a move it was told to make — changes nothing,
+     * so the automatic frame never narrows anything.
+     */
+    public fun cameraMoved(camera: MapCamera): Unit = updateCamera(camera, moved = false)
+
+    /** Moves the map on screen and has the basemap follow: a cluster click, or the control server. */
+    public fun moveCamera(camera: MapCamera): Unit = updateCamera(camera, moved = true)
+
+    private fun updateCamera(camera: MapCamera, moved: Boolean) {
+        val limits = MapLimits.MIN_ZOOM.toDouble()..MapLimits.MAX_ZOOM.toDouble()
+        val clamped = camera.copy(zoom = camera.zoom.coerceIn(limits))
+        _state.update { ui ->
+            when {
+                ui.showingLibraryMap -> {
+                    val view = ui.libraryView
+                    val was = view.camera ?: return@update ui
+                    if (!moved && was.sameView(clamped)) return@update ui
+                    val (width, height) = viewport
+                    ui.copy(
+                        // Moved, so no longer the automatic frame: a later resize must not undo it.
+                        libraryView = view.copy(camera = clamped, moves = view.moves + if (moved) 1 else 0, framing = null),
+                        inView = MapWindow(clamped, width, height),
+                        listScroll = null,
+                    ).listed()
+                }
+                ui.showingAlbumMap -> {
+                    val view = ui.albumView
+                    val was = view.camera ?: return@update ui
+                    if (!moved && was.sameView(clamped)) return@update ui
+                    ui.copy(albumView = view.copy(camera = clamped, moves = view.moves + if (moved) 1 else 0, framing = null))
+                }
+                else -> ui
+            }
+        }
+    }
+
+    /**
+     * The chip's ✕: the list is the whole library again, and the map frames it as it did at launch
+     * — a frame nobody has moved, so it narrows nothing.
+     */
+    public fun clearInView() {
+        _state.update { ui ->
+            if (ui.inView == null) return@update ui
+            val (width, height) = viewport
+            val map = ui.libraryMap
+            val view = if (map == null) {
+                ui.libraryView
+            } else {
+                val framing = Framing(map.pins.map { it.point }, width, height)
+                ui.libraryView.copy(camera = framing.cameraFor(width, height), moves = ui.libraryView.moves + 1, framing = framing)
+            }
+            ui.copy(inView = null, libraryView = view, listScroll = null).listed()
+        }
+    }
+
+    /**
+     * A click on the map on screen (§6, §11).
+     *
+     * An album's pin selects that album and opens it on its own map; a photo's opens the viewer at
+     * it. A cluster zooms until it splits. One that never does — several trips to one town — zooms
+     * all the way in, and the list, narrowed to the view, names its albums: the desktop needs no
+     * sheet for them. Its photos open the viewer at the earliest, as on the phone.
+     */
+    public fun tapMap(cluster: Cluster) {
+        val ui = _state.value
+        val (map, camera) = when {
+            ui.showingLibraryMap -> ui.libraryMap to ui.libraryView.camera
+            ui.showingAlbumMap -> ui.albumMap to ui.albumView.camera
+            else -> return
+        }
+        if (map == null || camera == null) return
+        val pins = cluster.members.map { map.pins.getOrNull(it) ?: return }
+        if (pins.isEmpty()) return
+        if (cluster.isPin) {
+            when (val pin = pins.single()) {
+                is MapPin.OfAlbum -> {
+                    _state.update { it.copy(photoMap = true) }
+                    select(pin.album)
+                }
+                is MapPin.OfPhoto -> openPhoto(pin.index)
+            }
+            return
+        }
+        val splits = map.clusters.expansion(cluster, map.clusters.level(camera.zoom))
+        if (splits == null) {
+            val photos = pins.filterIsInstance<MapPin.OfPhoto>()
+            if (photos.isNotEmpty()) {
+                openPhoto(photos.minOf { it.index })
+            } else {
+                moveCamera(Mercator.camera(cluster.center, MapLimits.MAX_ZOOM.toDouble()))
+            }
+            return
+        }
+        val fitted = frame(pins.map { it.point }, viewport.first, viewport.second)
+        // At least the level at which it splits: the members' box alone can fit at a zoom where
+        // they are still one circle, and the click would look like it did nothing.
+        moveCamera(fitted.copy(zoom = max(fitted.zoom, splits.toDouble())))
+    }
+
+    /**
+     * The library map's pins: every located album that owns photos, whatever its level — a
+     * container's centroid lands between its albums (§6) — narrowed by a search or a range, never
+     * by the map's own window. Clustered off the caller's thread; the first frame is made once
+     * they are.
+     */
+    private fun refreshLibraryMap() {
+        val ui = _state.value
+        mappingLibrary?.cancel()
+        mappingLibrary = scope.launch {
+            val matching = listing.matching(ui.query, ui.range)
+            val owning = listing.tree.filter { it.photoCount > 0 && (matching == null || it.id in matching) }
+            val pins = located(owning).map { (album, point) -> MapPin.OfAlbum(album, point) }
+            val built = ui.libraryMap?.takeIf { it.pins == pins }?.copy(total = owning.size)
+                ?: MapUi(pins, ClusterIndex(pins.map { it.point }), owning.size)
+            _state.update { current ->
+                if (current.query != ui.query || current.range != ui.range) return@update current
+                current.copy(libraryMap = built, libraryView = current.libraryView.framedOn(pins))
+            }
+        }
+    }
+
+    /** The selected album's photos where they were taken, while its map is what the pane shows. */
+    private fun refreshAlbumMap() {
+        val ui = _state.value
+        val album = ui.selected ?: return
+        if (!ui.photoMap) return
+        mappingAlbum?.cancel()
+        mappingAlbum = scope.launch {
+            val pins = ui.photos.mapIndexedNotNull { index, photo ->
+                placed(photo.latitude, photo.longitude)?.let { MapPin.OfPhoto(photo, index, it) }
+            }
+            val built = ui.albumMap?.takeIf { it.pins == pins }?.copy(total = ui.photos.size)
+                ?: MapUi(pins, ClusterIndex(pins.map { it.point }), ui.photos.size)
+            _state.update { current ->
+                if (current.selected?.id != album.id || current.photos != ui.photos) return@update current
+                current.copy(albumMap = built, albumView = current.albumView.framedOn(pins))
+            }
+        }
+    }
+
+    /** A map not framed yet, framed on [pins]; one that is keeps its camera. */
+    private fun MapView.framedOn(pins: List<MapPin>): MapView {
+        if (camera != null) return this
+        val (width, height) = viewport
+        val framing = Framing(pins.map { it.point }, width, height)
+        return copy(camera = framing.cameraFor(width, height), moves = moves + 1, framing = framing)
+    }
+
+    private fun located(albums: List<Album>): List<Pair<Album, WorldPoint>> =
+        albums.filter { it.photoCount > 0 }.mapNotNull { album -> placed(album.latitude, album.longitude)?.let { album to it } }
+
+    private fun placed(latitude: Double?, longitude: Double?): WorldPoint? =
+        if (latitude != null && longitude != null) Mercator.project(latitude, longitude) else null
 
     // --------------------------------------------------------------------------- the grid
 
@@ -392,4 +682,9 @@ public class DesktopModel(
 
     private fun DesktopUi.isOpen(photo: PhotoRow): Boolean =
         open?.let { photos.getOrNull(it)?.id } == photo.id
+
+    private companion object {
+        /** A laptop's album pane, in dp, until the real one reports. */
+        val DEFAULT_VIEWPORT = 1100.0 to 760.0
+    }
 }

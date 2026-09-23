@@ -1,6 +1,7 @@
 package net.stho.photos.app
 
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.atan
 import kotlin.math.ln
 import kotlin.math.log2
@@ -52,6 +53,29 @@ public data class MapCamera(val latitude: Double, val longitude: Double, val zoo
     /** The same centre, [delta] zoom levels closer, kept inside [MapLimits]. */
     public fun zoomedBy(delta: Double): MapCamera =
         copy(zoom = (zoom + delta).coerceIn(MapLimits.MIN_ZOOM.toDouble(), MapLimits.MAX_ZOOM.toDouble()))
+
+    /** Whether [point] lands inside a [width]×[height] dp viewport. */
+    public fun shows(point: WorldPoint, width: Double, height: Double): Boolean {
+        val at = toScreen(point, width, height)
+        return at.x in 0.0..width && at.y in 0.0..height
+    }
+
+    /**
+     * Whether [other] shows what this does, to within a dp and a hundredth of a level.
+     *
+     * A basemap reports back the camera it was told to take — once it first draws, and when an
+     * animated move lands — rounded through its own types. That report is not somebody moving
+     * the map, and telling the two apart is what keeps the desktop's list from narrowing itself.
+     */
+    public fun sameView(other: MapCamera): Boolean {
+        if (abs(zoom - other.zoom) > 0.01) return false
+        val world = Mercator.worldSize(zoom)
+        val a = center
+        val b = other.center
+        var dx = a.x - b.x
+        if (dx > 0.5) dx -= 1.0 else if (dx < -0.5) dx += 1.0
+        return abs(dx * world) < 1.0 && abs((a.y - b.y) * world) < 1.0
+    }
 }
 
 public object Mercator {

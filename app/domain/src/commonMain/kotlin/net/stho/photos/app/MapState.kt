@@ -35,6 +35,14 @@ public data class Framing(val points: List<WorldPoint>, val width: Double, val h
     public fun cameraFor(width: Double, height: Double): MapCamera = frame(points, width, height)
 }
 
+/**
+ * The part of the world a map showed when its camera last settled: a [camera] in a
+ * [width]×[height] dp viewport. The desktop's list keeps the albums placed inside it (§11).
+ */
+public data class MapWindow(val camera: MapCamera, val width: Double, val height: Double) {
+    public operator fun contains(point: WorldPoint): Boolean = camera.shows(point, width, height)
+}
+
 /** One thing the map places: an album on the album list's map, a photo on an album's. */
 public sealed interface MapPin {
     public val point: WorldPoint

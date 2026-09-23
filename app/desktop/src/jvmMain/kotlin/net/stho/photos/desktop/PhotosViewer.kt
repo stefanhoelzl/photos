@@ -18,7 +18,8 @@ import net.stho.photos.app.PackDirectory
  *
  * The only place that knows which adapter satisfies which port: a JDBC driver, the decode shim,
  * and the CLI's cache and library on this machine. There is no S3 client, no queue and no
- * credential anywhere in it — the viewer fetches nothing. A class rather than a block inside
+ * credential anywhere in it — the viewer fetches nothing but the map's tiles, which the window's
+ * basemap does on its own (§11). A class rather than a block inside
  * `main`, so that `:tests:desktop` starts *this* and only skips the window.
  */
 public class PhotosViewer(

@@ -12,13 +12,17 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
@@ -27,6 +31,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -57,9 +62,9 @@ import net.stho.photos.app.TileSize
 import net.stho.photos.ui.screens.AlbumList
 import net.stho.photos.ui.screens.BarButton
 import net.stho.photos.ui.screens.CalendarSheet
-import net.stho.photos.ui.screens.EmptyState
 import net.stho.photos.ui.screens.Icons
 import net.stho.photos.ui.screens.ListSize
+import net.stho.photos.ui.screens.MapCanvas
 import net.stho.photos.ui.screens.LocalPlayToggle
 import net.stho.photos.ui.screens.PlayToggle
 import net.stho.photos.ui.screens.NavBar
@@ -67,8 +72,8 @@ import net.stho.photos.ui.screens.PhotoGrid
 import net.stho.photos.ui.screens.Viewer
 
 /**
- * The desktop viewer (§11): the album list on the left, one album on the right, and a photo open
- * over the album when one is.
+ * The desktop viewer (§11): the album list on the left; on the right the library's map until an
+ * album is selected, then that album as a grid or on its map, and a photo open over it when one is.
  *
  * Built from `:ui:shared`'s components and nothing of the phone's: §6's list at its compact size,
  * its nav bar over both panes, its grid and its viewer. What is the desktop's own is the layout
@@ -76,8 +81,9 @@ import net.stho.photos.ui.screens.Viewer
  *
  * **The keyboard follows the pane it is in.** In the sidebar ↑/↓ change the album and Enter moves
  * into the grid; on the grid the arrows move a focus ring and Enter opens that photo; in the
- * viewer ←/→ page, Space plays or pauses a video or a Live Photo, and Esc goes back. Ctrl+F, F5,
- * Ctrl± and Esc work from anywhere.
+ * viewer ←/→ page, Space plays or pauses a video or a Live Photo, and Esc goes back — from a photo
+ * to its album, from an album to the library's map. Ctrl+F, F5, Ctrl± and Esc work from anywhere.
+ * The maps take no keys: a drag, the wheel and a click drive them.
  */
 @Composable
 public fun DesktopApp(
@@ -123,7 +129,7 @@ public fun DesktopApp(
                     .focusable(),
             ) {
                 CompositionLocalProvider(LocalPlayToggle provides play) {
-                    AlbumPane(ui, model, focused = inGrid, onColumns = { columns = it })
+                    AlbumPane(ui, model, thumbnails, focused = inGrid, onColumns = { columns = it })
                 }
             }
         }
@@ -149,11 +155,15 @@ public fun DesktopApp(
     }
 }
 
-/** The album list, under its bar: sort and refresh over "Albums", the field beneath (§11). */
+/**
+ * The album list, under its bar: sort, the library's map and refresh over "Albums", the field
+ * beneath, and under it the chip while the map's view narrows the list (§11).
+ */
 @Composable
 private fun ColumnScope.Sidebar(ui: DesktopUi, model: DesktopModel, thumbnails: Thumbnails, search: FocusRequester) {
     NavBar("Albums", ui.albumsSubtitle, onBack = null) {
         BarButton(Icons.sort, "Sort", model::cycleSort)
+        BarButton(Icons.map, "Map", model::showLibrary)
         BarButton(Icons.refresh, "Refresh", model::refresh)
     }
     Problems(ui)
@@ -182,6 +192,8 @@ private fun ColumnScope.Sidebar(ui: DesktopUi, model: DesktopModel, thumbnails: 
             selected = ui.selected?.id,
             loadingText = "Reading the library…",
             searchFocus = search,
+            beneathField = if (ui.inView != null) ({ InViewChip(model::clearInView) }) else null,
+            emptyText = if (ui.inView != null) "No albums in this part of the map" else null,
         )
     }
 }
@@ -203,17 +215,79 @@ private fun Problems(ui: DesktopUi) {
     }
 }
 
-/** One album: its grid under its bar, or the photo open over it under a one-row bar (§11). */
+/**
+ * The list narrowed to the map's view, said where the field is, as a date range is — and ✕ to
+ * widen it again, which also frames the map on the whole library once more (§11).
+ */
 @Composable
-private fun AlbumPane(ui: DesktopUi, model: DesktopModel, focused: Boolean, onColumns: (Int) -> Unit) {
+private fun InViewChip(onClear: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(start = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.map, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+        Text(
+            "In map view",
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f).padding(start = 10.dp),
+        )
+        Box(
+            Modifier.size(36.dp).clip(CircleShape).clickable(onClick = onClear),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.close, contentDescription = "Show every album", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+        }
+    }
+}
+
+/**
+ * The album pane: the library's map while no album is selected; otherwise the album's grid or its
+ * map under its bar, or the photo open over it under a one-row bar (§11).
+ */
+@Composable
+private fun AlbumPane(ui: DesktopUi, model: DesktopModel, thumbnails: Thumbnails, focused: Boolean, onColumns: (Int) -> Unit) {
     val album = ui.selected
     if (album == null) {
-        EmptyState(if (ui.loading) "" else "Choose an album")
+        // No icons of its own, but the row they would sit in keeps the title level with the sidebar's.
+        NavBar("Map", ui.librarySubtitle, onBack = null) { Spacer(Modifier.size(32.dp)) }
+        MapCanvas(
+            view = ui.libraryView,
+            map = ui.libraryMap,
+            photoThumbnails = emptyMap(),
+            thumbnails = thumbnails,
+            arrivals = 0,
+            onViewport = model::mapViewport,
+            onCameraMoved = model::cameraMoved,
+            onTap = model::tapMap,
+        )
         return
     }
     val open = ui.open
-    if (open == null) {
+    if (open == null && ui.photoMap) {
+        // The toggle shows the view it switches to, and a map has no tile size to pick (§6).
         NavBar(album.name, ui.photosSubtitle, onBack = null) {
+            BarButton(Icons.grid, "Grid", model::togglePhotoMap)
+        }
+        // Keyed by the album, so no camera carries from one album's map to the next.
+        key(album.id) {
+            MapCanvas(
+                view = ui.albumView,
+                map = ui.albumMap,
+                photoThumbnails = ui.thumbnails,
+                thumbnails = thumbnails,
+                arrivals = 0,
+                onViewport = model::mapViewport,
+                onCameraMoved = model::cameraMoved,
+                onTap = model::tapMap,
+            )
+        }
+    } else if (open == null) {
+        NavBar(album.name, ui.photosSubtitle, onBack = null) {
+            BarButton(Icons.map, "Map", model::togglePhotoMap)
             TileSwitch(ui.tile, model::tile)
         }
         BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -345,7 +419,9 @@ private fun anywhere(
             true
         }
         else -> {
-            // Out of the grid, or out of the search field, and back to the list.
+            // Out of the album, back to the library's map; out of the grid or the search field,
+            // back to the list.
+            model.showLibrary()
             sidebar.requestFocus()
             true
         }
@@ -392,7 +468,8 @@ private fun inAlbum(
         play.press()
         return true
     }
-    if (ui.open != null || ui.selected == null) return false
+    // The maps take no keys: only the grid has a focus ring to move.
+    if (ui.open != null || ui.selected == null || ui.photoMap) return false
     val delta = when (event.key) {
         Key.DirectionLeft -> -1
         Key.DirectionRight -> 1

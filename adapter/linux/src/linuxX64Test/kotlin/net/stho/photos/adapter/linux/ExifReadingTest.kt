@@ -2,10 +2,12 @@ package net.stho.photos.adapter.linux
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.io.files.Path
 import net.stho.photos.exif.asLong
 import net.stho.photos.exif.asText
+import net.stho.photos.exif.coordinate
 import net.stho.photos.fixtures.syntheticHeic
 import net.stho.photos.fixtures.syntheticOrientedJpeg
 import net.stho.photos.fixtures.withScratchDirectory
@@ -31,6 +33,17 @@ class ExifReadingTest {
         val tags = CImagingBackend().rawTags(path.toString())
         assertTrue(tags.values.isNotEmpty(), "a HEIC with an EXIF block must yield tags")
         assertEquals("iPhone XS", tags["Model"]?.asText)
+    }
+
+    /** The GPS IFD a camera writes comes back as the place it names, west and all. */
+    @Test
+    fun aLocationIsReadBackOutOfAHeic() = withScratchDirectory("exif") { directory ->
+        val path = Path(directory, "lisbon.heic")
+        writeSyntheticHeic(path, width = 64, height = 48, location = 38.7223 to -9.1393)
+
+        val place = assertNotNull(CImagingBackend().rawTags(path.toString()).coordinate())
+        assertEquals(38.7223, place.latitude, 1e-5)
+        assertEquals(-9.1393, place.longitude, 1e-5)
     }
 
     @Test

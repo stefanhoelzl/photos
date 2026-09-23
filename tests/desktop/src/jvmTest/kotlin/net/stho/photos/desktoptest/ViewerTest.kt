@@ -17,6 +17,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.io.files.Path
 import net.stho.photos.app.DesktopUi
 import net.stho.photos.app.ListEntry
+import net.stho.photos.app.MapCamera
+import net.stho.photos.app.MapPin
 import net.stho.photos.control.ViewerControlServer
 import net.stho.photos.desktop.PhotosViewer
 import net.stho.photos.media.renderFrame
@@ -29,7 +31,8 @@ import net.stho.photos.ui.screens.PhotosTheme
 
 /**
  * §11 end to end: a library, the shipped `photos-cli sync` into a zone and a cache, and the
- * viewer over that cache and that library — with no zone of its own and no network at all.
+ * viewer over that cache and that library — with no zone of its own, and no network at all: the
+ * basemap is the stand-in here, as it is in every frame drawn without a window.
  *
  * What only this can prove is that the two agree: that the packs the CLI keeps are the ones the
  * viewer reads, and that a row's folder and file name lead to the original on disk.
@@ -112,6 +115,53 @@ class ViewerTest {
         viewer.close()
     }
 
+    /**
+     * The library's map places what the CLI read from each file's EXIF GPS; moving it narrows the
+     * list, an album's pin opens that album on its own map, and Esc comes back to the same view.
+     */
+    @Test
+    fun theMapNarrowsTheListToWhereTheCliSaysPhotosWereTaken() = scenario("map") {
+        library {
+            file("Trips/Rome/IMG_0001.HEIC", media("rome.heic"))
+            file("Trips/Lisbon/IMG_0002.HEIC", media("lisbon.heic"))
+            file("Garden/IMG_0003.HEIC", media("photo.heic"))
+        }
+        sync()
+
+        val viewer = launch()
+        val launched = await(viewer, "the library's map") { it.libraryMap != null && it.libraryView.camera != null }
+        assertTrue(launched.showingLibraryMap, "no album selected, so the pane is the map")
+        assertEquals("2 of 3 albums on the map", launched.librarySubtitle, "Garden's photo has no location")
+        assertEquals(setOf("Trips", "Rome", "Lisbon", "Garden"), launched.rows.names().toSet(), "the automatic frame narrows nothing")
+        shot(viewer, "map")
+
+        viewer.model.moveCamera(MapCamera(41.9, 12.5, 7.0))
+        val narrowed = viewer.model.state.value
+        assertEquals(listOf("Trips", "Rome"), narrowed.rows.names())
+        assertEquals("1 in map view", narrowed.albumsSubtitle)
+        shot(viewer, "map-narrowed")
+
+        val map = assertNotNull(narrowed.libraryMap)
+        val rome = map.clusters.at(assertNotNull(narrowed.libraryView.camera).zoom).single { cluster ->
+            cluster.isPin && (map.pins[cluster.members.single()] as MapPin.OfAlbum).album.name == "Rome"
+        }
+        viewer.model.tapMap(rome)
+        val onItsMap = await(viewer, "Rome on its own map") { it.showingAlbumMap && it.albumMap != null && it.thumbnails.isNotEmpty() }
+        assertEquals("Rome", onItsMap.selected?.name)
+        assertEquals("1 of 1 photos on the map", onItsMap.photosSubtitle)
+        assertEquals(listOf("Trips", "Rome"), onItsMap.rows.names(), "the list stays as it was")
+        shot(viewer, "album-map")
+
+        viewer.model.showLibrary()
+        val back = viewer.model.state.value
+        assertTrue(back.showingLibraryMap)
+        assertEquals(MapCamera(41.9, 12.5, 7.0), back.libraryView.camera)
+
+        viewer.model.clearInView()
+        assertEquals(4, viewer.model.state.value.rows.names().size)
+        viewer.close()
+    }
+
     /** The control server drives the viewer as the keyboard does, and draws it offscreen. */
     @Test
     fun theControlServerDrivesTheViewer() = scenario("control") {
@@ -139,6 +189,10 @@ class ViewerTest {
                 assertTrue("\"open\":0" in opened, opened)
                 val closed = http.post("$base/close").bodyAsText()
                 assertTrue("\"open\":null" in closed, closed)
+                val toggled = http.post("$base/map").bodyAsText()
+                assertTrue("\"showing\":\"map\"" in toggled, toggled)
+                val library = http.post("$base/library").bodyAsText()
+                assertTrue("\"selected\":null" in library && "\"showing\":\"library\"" in library, library)
                 val png = http.get("$base/screenshot?w=1280&h=800").readRawBytes()
                 assertEquals(listOf(0x89.toByte(), 'P'.code.toByte()), png.take(2), "a PNG")
                 File(scratch, "control.png").writeBytes(png)

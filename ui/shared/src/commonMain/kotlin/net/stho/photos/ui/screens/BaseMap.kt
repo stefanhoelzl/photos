@@ -24,7 +24,7 @@ import net.stho.photos.app.MapCamera
  *
  * A UI-interop port exactly like [VideoSurface]: MapLibre satisfies it in `:app:map`, and each
  * root installs that only where it has a window to present into. Everything else renders the
- * stand-in, which is what keeps `/screenshot` and `:tests:app` free of a native renderer.
+ * stand-in, which is what keeps `/screenshot` and the headless tests free of a native renderer.
  *
  * The camera goes both ways. [camera] and [moves] are the model's: when [moves] changes the
  * model moved the camera, and the renderer follows. [onCamera] is the renderer's: where the
