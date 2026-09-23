@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Desktop viewer mockup</title>
+<style>
+:root{
+  --surface:#000; --low:#101216; --cont:#16191E; --high:#1C2026; --variant:#1C1C1E;
+  --on:#E9EDF2; --muted:#8B96A5; --outline:#3C444E; --outlineVar:#22262C; --primary:#0A84FF;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#2a2d33;color:var(--on);font:13px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif;padding:24px}
+h1{font-size:18px;margin:0 0 4px}
+h2{font-size:15px;margin:36px 0 4px}
+p.note{color:#b8c0cc;margin:0 0 12px;max-width:900px}
+.win{width:1040px;height:600px;border-radius:10px;overflow:hidden;background:var(--surface);box-shadow:0 12px 40px #0008;display:flex;flex-direction:column;border:1px solid #444}
+.titlebar{height:30px;background:#26292f;display:flex;align-items:center;justify-content:center;color:#aab;font-size:12px;position:relative;flex:none}
+.titlebar .dots{position:absolute;right:10px;display:flex;gap:8px}
+.titlebar .dots i{width:12px;height:12px;border-radius:50%;background:#555;display:block}
+.body{flex:1;display:flex;min-height:0}
+.side{width:300px;border-right:1px solid var(--outlineVar);display:flex;flex-direction:column;min-height:0;flex:none}
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.hdr{height:44px;display:flex;align-items:center;padding:0 12px;gap:6px;flex:none}
+.hdr .t{font-weight:600;font-size:15px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ib{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:var(--on);font-size:15px}
+.ib:hover{background:var(--high)}
+.ib.on{color:var(--primary)}
+.search{margin:4px 12px 8px;height:34px;border-radius:8px;background:var(--variant);display:flex;align-items:center;padding:0 10px;gap:8px;color:var(--muted);flex:none}
+.search span{flex:1}
+.list{flex:1;overflow:hidden}
+.h{height:34px;background:var(--low);display:flex;align-items:center;padding:0 12px;gap:8px;font-size:11px;letter-spacing:.06em;color:var(--muted);font-weight:600}
+.h b{color:var(--on)}
+.row{display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:.5px solid var(--outlineVar)}
+.row .c{width:32px;height:32px;border-radius:6px;flex:none}
+.row .n{font-weight:500}
+.row .d{color:var(--muted);font-size:11.5px}
+.row.sel{background:#16324F}
+.close{border-bottom:2.5px solid var(--outline)}
+.grid{flex:1;display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:2px;padding:0 2px;overflow:hidden;align-content:start}
+.grid div{aspect-ratio:1;position:relative}
+.grid div.v::after{content:"▶ 0:42";position:absolute;right:4px;bottom:3px;font-size:10px;color:#fff;text-shadow:0 0 3px #000}
+.grid div.f{outline:2px solid var(--primary);outline-offset:-2px}
+.sub{color:var(--muted);font-size:12px;padding:0 12px 8px;flex:none}
+.seg{display:flex;border:1px solid var(--outline);border-radius:7px;overflow:hidden}
+.seg span{padding:3px 8px;color:var(--muted);font-size:12px}
+.seg span.on{background:var(--high);color:var(--on)}
+.toolbar{height:48px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--outlineVar);flex:none}
+.toolbar .search{margin:0;width:280px}
+.big{padding:6px 16px 10px;flex:none}
+.big .top{display:flex;justify-content:flex-end;gap:6px;height:36px;align-items:center}
+.big .top .back{margin-right:auto;color:var(--on);font-size:15px}
+.big .lt{font-size:30px;font-weight:700;line-height:1.1}
+.big .st{color:var(--muted);font-size:12px;margin-top:2px}
+.viewer{flex:1;display:grid;place-items:center;background:#000;position:relative}
+.viewer .ph{width:78%;aspect-ratio:3/2;background:linear-gradient(135deg,#7a5a3a,#c69c6d 40%,#3e6b8a 75%,#1d3550)}
+.viewer .nav{position:absolute;top:50%;transform:translateY(-50%);font-size:26px;color:#fff8;padding:0 14px}
+.legend{color:#b8c0cc;font-size:12px;margin-top:8px;max-width:1040px}
+kbd{background:#3a3e46;border-radius:4px;padding:0 5px;font-size:11px}
+.win{width:1180px;height:700px}
+.titlebar{justify-content:center}
+.titlebar .x{position:absolute;right:8px;width:22px;height:22px;border-radius:50%;background:#3a3e46;display:grid;place-items:center;color:#ddd;font-size:12px}
+.empty{flex:1;display:grid;place-items:center;color:var(--muted);text-align:center}
+.anno{color:#b8c0cc;font-size:12px;margin:10px 0 0;max-width:1180px;columns:2;column-gap:32px}
+.anno li{margin-bottom:4px}
+.overlay{position:absolute;inset:0;background:#000a;display:grid;place-items:center}
+.cal{width:560px;height:520px;background:var(--cont);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:8px}
+.cal .mo{font-weight:600;margin-top:6px}
+.cal .days{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.cal .days span{height:44px;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:12px;background:var(--high)}
+.cal .days span small{color:var(--muted);font-size:10px}
+.cal .days span.r{background:#16324F;outline:1px solid var(--primary)}
+.btn{padding:6px 14px;border-radius:16px;background:var(--primary);color:#fff;font-weight:600}
+</style>
+</head>
+<body>
+<h1>Desktop viewer (DESIGN §11)</h1>
+<p class="note">The window is maximized with its title bar and closes with ✕. The design is read-only: no settings, upload, set-cover, map or cache controls. Tiles and covers are colour stand-ins.</p>
+
+<h2>1. Launch: no album selected</h2>
+<p class="note">Nothing is remembered between launches. The merged DB is rebuilt in memory (~0.5–3 s), and the sidebar shows the phone's loading state meanwhile.</p>
+<div class="win" id="L"></div>
+
+<h2>2. Album grid</h2>
+<p class="note">An album is selected in the sidebar (container headers can't be selected). The main pane shows its photos as square tiles, with the column count following the width.</p>
+<div class="win" id="G"></div>
+<ul class="anno">
+<li><b>Sidebar:</b> the shared <code>AlbumList</code> at compact size. Only the cover shrinks (54 → 32dp). It keeps the 22dp indents, sticky stacked headers and heavy group-closing lines, and has no cache strip.</li>
+<li><b>Sidebar NavBar:</b> sort ⇅ and refresh ⟳ (F5). Large title "Albums" with counts beneath. Search field with the calendar icon (Ctrl+F).</li>
+<li><b>Main NavBar:</b> the S/M/L tile size (also Ctrl+scroll / Ctrl±, 96/160/256dp). Large title = album name, subtitle = count · date span.</li>
+<li><b>Keys:</b> arrows move the focus ring (blue outline), Enter opens, ↑/↓ in the sidebar change album.</li>
+</ul>
+
+<h2>3. Viewer</h2>
+<p class="note">Opens in the main pane and the sidebar stays. The main bar collapses to one row. ←/→ page, Esc returns to the grid (scrolled to the photo), Ctrl+scroll or pinch zooms around the cursor, drag pans. Originals are decoded by the native shim, video plays through libvlc.</p>
+<div class="win" id="V"></div>
+
+<h2>4. Date filter</h2>
+<p class="note">The search field's calendar icon opens the shared calendar sheet as an overlay. Once applied, the field shows the range read-only.</p>
+<div class="win" id="C" style="position:relative"></div>
+<script>
+const hues=[18,32,200,210,140,95,350,265,48,180,5,225,120,300,60];
+function col(i){const h=hues[i%hues.length]+(i*7)%20;return `linear-gradient(${(i*37)%360}deg,hsl(${h} 45% ${28+(i*13)%30}%),hsl(${(h+40)%360} 40% ${40+(i*11)%25}%))`}
+const albums=[
+ {h:"2024",d:"3 albums · 612 photos",depth:0},
+ {n:"Rome",d:"3–12 Mar 2024 · 212",depth:1,sel:1},
+ {n:"Dolomites",d:"Jul 2024 · 188",depth:1},
+ {n:"Christmas",d:"Dec 2024 · 212",depth:1,close:1},
+ {h:"FAMILY",d:"2 albums · 340 photos",depth:0},
+ {h:"KIDS",d:"1 album · 90",depth:1},
+ {n:"First steps",d:"May 2023 · 90",depth:2,close:1},
+ {n:"Wedding",d:"Jun 2023 · 250",depth:1,close:1},
+ {n:"Lake house",d:"Aug 2022 · 131",depth:0},
+ {n:"Coast road",d:"Sep 2022 · 400",depth:0},
+ {n:"Lisbon",d:"Apr 2022 · 96",depth:0},
+];
+function list(){return albums.map((a,i)=>{
+  const pad=12+22*a.depth;
+  if(a.h) return `<div class="h" style="padding-left:${pad}px"><b>${a.h}</b> · ${a.d}</div>`;
+  return `<div class="row${a.sel?' sel':''}${a.close?' close':''}" style="padding-left:${pad}px"><div class="c" style="background:${col(i+3)}"></div><div><div class="n">${a.n}</div><div class="d">${a.d}</div></div></div>`}).join("")}
+function tiles(n){let s="";for(let i=0;i<n;i++)s+=`<div class="${i==9?'v':''}${i==3?' f':''}" style="background:${col(i)}"></div>`;return s}
+const title=`<div class="titlebar">Photos<div class="x">✕</div></div>`;
+const search=`<div class="search">🔍<span>Search albums</span>📅</div>`;
+const seg=`<div class="seg"><span>S</span><span class="on">M</span><span>L</span></div>`;
+
+
+const circ=(g,t)=>`<div class="ib" title="${t||''}" style="background:var(--high)">${g}</div>`;
+function side(opts={}){return `<div class="side"><div class="big"><div class="top">${circ("⇅","Sort")}${circ("⟳","Refresh (F5)")}</div><div class="lt">Albums</div><div class="st">7 albums · 1,869 photos</div></div>${opts.search||search}<div class="list">${opts.list||list()}</div></div>`}
+const mainBar=`<div class="big"><div class="top">${seg}</div><div class="lt">Rome</div><div class="st">212 photos · 3–12 Mar 2024</div></div>`;
+const plainList=(()=>{const saved=albums.map(a=>({...a}));albums.forEach(a=>a.sel=0);const r=list();albums.forEach((a,i)=>a.sel=saved[i].sel);return r})();
+
+document.getElementById("L").innerHTML=title+`<div class="body">${side({list:plainList})}
+ <div class="main"><div class="empty"><div><div style="font-size:34px;opacity:.5">▢</div><div style="margin-top:8px">Choose an album</div><div style="font-size:11px;margin-top:4px">↑/↓ in the sidebar, or click one</div></div></div></div></div>`;
+
+document.getElementById("G").innerHTML=title+`<div class="body">${side()}
+ <div class="main">${mainBar}<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(128px,1fr))">${tiles(60)}</div></div></div>`;
+
+document.getElementById("V").innerHTML=title+`<div class="body">${side()}
+ <div class="main"><div class="big" style="padding-bottom:6px"><div class="top" style="gap:10px;justify-content:flex-start">${circ("←","Back (Esc)")}<div style="flex:1;text-align:center;margin-right:36px"><div style="font-weight:600;font-size:15px">Rome</div><div style="color:var(--muted);font-size:11px">4 of 212 · IMG_2231.HEIC · 5 Mar 2024 14:02</div></div></div></div>
+ <div class="viewer"><div class="nav" style="left:0">‹</div><div class="ph"></div><div class="nav" style="right:0">›</div></div></div></div>`;
+
+const rangeField=`<div class="search" style="color:var(--on)">📅<span>3 – 12 Mar 2024</span>✕</div>`;
+const romeOnly=[{h:"2024",d:"1 of 3 albums · 212 photos",depth:0},{n:"Rome",d:"3–12 Mar 2024 · 212",depth:1,sel:1,close:1}];
+const saved=albums.splice(0,albums.length,...romeOnly);const filtered=list();albums.splice(0,albums.length,...saved);
+let days="";for(let d=1;d<=31;d++){const n=[0,0,3,41,18,0,22,35,12,50,31,0,0,4][d]||((d*7)%5==0?d%9:0);days+=`<span class="${d>=3&&d<=12?'r':''}">${d}${n?`<small>${n}</small>`:''}</span>`}
+document.getElementById("C").innerHTML=title+`<div class="body">${side({search:rangeField,list:filtered})}
+ <div class="main">${mainBar}<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(128px,1fr))">${tiles(40)}</div></div></div>
+ <div class="overlay" style="top:30px"><div class="cal"><div style="display:flex;align-items:center;gap:8px"><div class="ib">✕</div><div style="flex:1;font-weight:600">Dates</div><span style="color:var(--muted)">2022 · 2023 · <b style="color:var(--on)">2024</b></span></div>
+ <div class="mo">March 2024 · 212 photos</div><div class="days">${days}</div><div style="flex:1"></div><div style="display:flex;justify-content:flex-end"><span class="btn">Apply</span></div></div></div>`;
+</script>
+</body>
+</html>

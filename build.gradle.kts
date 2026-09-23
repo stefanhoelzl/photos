@@ -185,6 +185,11 @@ project(":tests:app") {
     tasks.matching { it.name == "jvmTest" }.configureEach { configureS3MockJvm(this) }
 }
 
+// The desktop viewer's suite syncs into a zone with the real CLI before the viewer reads it.
+project(":tests:desktop") {
+    tasks.matching { it.name == "jvmTest" }.configureEach { configureS3MockJvm(this) }
+}
+
 // The iOS suite reaches the same S3Mock from the simulator, which shares the Mac's loopback.
 project(":tests:ios") {
     tasks.matching { it.name == "jvmTest" }.configureEach { configureS3MockJvm(this) }

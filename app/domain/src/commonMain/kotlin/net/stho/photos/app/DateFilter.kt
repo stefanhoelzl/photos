@@ -126,6 +126,19 @@ public data class DateRange(val start: Day, val end: Day) {
 
 private fun full(day: Day) = "${day.dayOfMonth} ${MONTHS[day.month - 1]} ${day.year}"
 
+/**
+ * When a photo was taken, as §11's viewer writes it: "5 Mar 2024 14:02".
+ *
+ * Read in UTC on purpose. Ingest stores the camera's zoneless local time as UTC (§3), so these are
+ * the clock's own digits — converting to this machine's zone would move a photo taken at noon.
+ */
+public fun takenLabel(taken: Instant): String {
+    val seconds = taken.epochSeconds.mod(SECONDS_PER_DAY)
+    val hours = (seconds / 3_600).toString().padStart(2, '0')
+    val minutes = (seconds % 3_600 / 60).toString().padStart(2, '0')
+    return "${full(Day.of(taken))} $hours:$minutes"
+}
+
 private val MONTHS = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 private val MONTH_NAMES = listOf(

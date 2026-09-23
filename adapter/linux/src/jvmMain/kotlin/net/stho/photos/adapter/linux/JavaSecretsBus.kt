@@ -109,7 +109,7 @@ internal class JavaSecretsBus(private val address: String) : SecretsBus {
 /**
  * The keyring the desktop app uses: this process's environment, dbus-java underneath.
  *
- * `:app:desktop` is the composition root and this is what it names.
+ * `:app:harness` is the composition root and this is what it names.
  */
 public fun desktopKeyring(
     service: String = Credentials.SERVICE,

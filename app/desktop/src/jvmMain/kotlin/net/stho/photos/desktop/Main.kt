@@ -1,129 +1,115 @@
 package net.stho.photos.desktop
 
-import androidx.compose.ui.unit.DpSize
-import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.okhttp.OkHttp
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
+import java.awt.GraphicsEnvironment
+import java.io.File
+import kotlin.system.exitProcess
 import kotlinx.io.files.Path
-import net.stho.photos.adapter.linux.FfmImaging
-import net.stho.photos.adapter.linux.JdbcSqlDrivers
-import net.stho.photos.adapter.linux.desktopKeyring
-import net.stho.photos.catalog.CatalogSync
-import net.stho.photos.storage.S3Client
-import net.stho.photos.storage.retryStorageFailures
-import androidx.compose.runtime.CompositionLocalProvider
-import net.stho.photos.map.MaplibreBaseMap
-import net.stho.photos.ui.screens.LocalBaseMap
+import net.stho.photos.control.ViewerControlServer
+import net.stho.photos.media.VlcLivePhotoSurface
+import net.stho.photos.media.VlcVideoSurface
+import net.stho.photos.media.offscreen
+import net.stho.photos.ui.desktop.DesktopApp
+import net.stho.photos.ui.screens.LocalLivePhotoSurface
 import net.stho.photos.ui.screens.LocalVideoSurface
-import org.maplibre.compose.desktop.ProvideMapPresentationHost
-import org.maplibre.compose.desktop.rememberAwtComposeMapPresentationHost
-import net.stho.photos.ui.screens.PhotosTheme
-import androidx.compose.runtime.Composable
-import net.stho.photos.app.Account
-import net.stho.photos.app.Launch
-import net.stho.photos.app.Launcher
-import net.stho.photos.control.ControlServer
-import net.stho.photos.ui.screens.Photos
+import net.stho.photos.adapter.linux.Appearance
+import net.stho.photos.media.SystemTheme
+import net.stho.photos.media.applyDisplayScale
 
 /**
- * The composition root (§7's rule, applied to the app).
+ * The desktop viewer (§11): a window over the library `photos-cli sync` keeps on this machine.
  *
- * The only place that knows which adapter satisfies which port, and the only place that
- * constructs anything: `:ui` never learns that the SQL driver is JDBC, that the HTTP engine is
- * OkHttp, or that a control server exists at all.
- *
- * Credentials resolve exactly as the CLI's do — environment, then keyring — and a machine with
- * neither now gets §1's setup screen rather than an error. So there are three ways in and they
- * agree: `secrets-env ./gradlew :app:desktop:run`, a `photos-cli login` done earlier, or typing
- * the two values once into the screen this root now hosts.
+ * `./gradlew :app:desktop:run --args="--library-path ~/Pictures/Albums"`. The library root is
+ * required, because every album's folder in the catalog is relative to it; the CLI's cache is
+ * found where the CLI keeps it unless `--cli-cache` says otherwise.
  */
 public fun main(args: Array<String>) {
-    val options = Options.parse(args)
-    val account = Account(desktopKeyring(), System.getenv())
-    // The factory is the only part of a session a root owns: which SQL driver, which HTTP
-    // engine, which decoder. `Launcher` decides *when* to build one.
-    val launcher = Launcher(account) { storage, password ->
-        PhotosApp(
-            storage = storage,
-            password = password,
-            cacheRoot = options.cacheRoot,
-            decodeLibrary = options.decodeLibrary,
-            galleryRoot = options.gallery,
-        )
+    // First, before anything can start AWT: the one moment the JVM reads its scale.
+    applyDisplayScale()
+    val appearance = Appearance.ofSession()
+    val options = runCatching { ViewerOptions.parse(args, System.getenv()) }.getOrElse {
+        System.err.println("photos desktop: ${it.message}")
+        System.err.println(ViewerOptions.USAGE)
+        exitProcess(2)
     }
+    val viewer = PhotosViewer(
+        cliCache = options.cliCache,
+        libraryRoot = options.libraryRoot,
+        decodeLibrary = options.decodeLibrary,
+        longEdge = screenLongEdge(),
+    )
     val content: @Composable () -> Unit = {
-        PhotosTheme {
-            CompositionLocalProvider(LocalVideoSurface provides VlcVideoSurface()) {
-                Photos(launcher)
+        SystemTheme(appearance) {
+            CompositionLocalProvider(
+                LocalVideoSurface provides VlcVideoSurface(),
+                LocalLivePhotoSurface provides VlcLivePhotoSurface(),
+            ) {
+                DesktopApp(viewer.model, viewer.thumbnails)
             }
         }
     }
-    // Before the control server, not after: the launcher's state starts as `Setup` until `start()`
-    // has read the environment and the keyring, and a server already listening would report
-    // "setup" for an app that is set up. The iOS suite caught the same order there.
-    launcher.start()
+    viewer.start()
     val control = options.controlPort?.let { port ->
-        ControlServer(port, launcher, screenshot = offscreen(content)).also(ControlServer::start)
+        ViewerControlServer(port, viewer.model, screenshot = offscreen(content)).also(ViewerControlServer::start)
     }
 
     application {
         Window(
             onCloseRequest = {
                 control?.stop()
-                (launcher.state.value as? Launch.Running)?.session?.close()
+                viewer.close()
+                appearance.close()
                 exitApplication()
             },
             title = "Photos",
-            // The phone's proportions, so what is reviewed here is what a device would show.
-            state = rememberWindowState(size = DpSize(430.dp, 890.dp)),
+            // Maximized, with the title bar: the whole screen, and the ✕ that closes it (§11).
+            state = rememberWindowState(placement = WindowPlacement.Maximized),
         ) {
-            // MapLibre presents into this window, so the basemap is installed here and not in
-            // `content`: `/screenshot` renders `content` offscreen, where there is no window to
-            // present into, and draws `:ui`'s stand-in instead.
-            ProvideMapPresentationHost(rememberAwtComposeMapPresentationHost(window)) {
-                CompositionLocalProvider(LocalBaseMap provides MaplibreBaseMap) {
-                    content()
-                }
-            }
+            content()
         }
     }
 }
 
-/** `--cache-root`, `--control-port`, `--decode-library` and `--gallery`. */
-internal data class Options(
-    val cacheRoot: Path,
-    val controlPort: Int?,
+/** The largest screen's long edge in pixels: the most a photo is ever drawn at. */
+private fun screenLongEdge(): Int = runCatching {
+    GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices
+        .maxOf { maxOf(it.displayMode.width, it.displayMode.height) }
+}.getOrNull()?.takeIf { it > 0 } ?: 3840
+
+/** `--library-path`, `--cli-cache`, `--decode-library` and `--control-port`. */
+internal data class ViewerOptions(
+    val libraryRoot: Path,
+    val cliCache: Path,
     /** `libphotosdecode.so`, which the Gradle run task points at. */
-    val decodeLibrary: String,
-    /** A directory of albums standing in for the phone's library; upload is off without one (§8). */
-    val gallery: String? = null,
+    val decodeLibrary: String?,
+    val controlPort: Int?,
 ) {
     companion object {
-        fun parse(args: Array<String>): Options {
+        const val USAGE: String =
+            "usage: --library-path <dir> [--cli-cache <dir>] [--decode-library <so>] [--control-port <port>]"
+
+        fun parse(args: Array<String>, env: Map<String, String>): ViewerOptions {
             fun flag(name: String): String? =
                 args.indexOf(name).takeIf { it >= 0 && it + 1 < args.size }?.let { args[it + 1] }
 
-            // Inside the working tree, not $HOME: a checkout is what a run belongs to, and
-            // parallel worktrees would otherwise share one cache and re-fetch each other's
-            // shards. Gitignored, so clearing it is `rm -rf .cache`.
-            //
-            // Deliberately *not* the CLI's `~/.cache/photos-cli` either: sharing would inherit
-            // its shards, but the CLI guards that cache with a flock this app does not take,
-            // and an hourly timer writing while the app reads is undesigned rather than rare.
-            val cache = flag("--cache-root")
-                ?: System.getProperty("photos.cache.root")
-                ?: "${System.getProperty("user.dir")}/.cache/desktop"
-            val decode = flag("--decode-library")
-                ?: System.getProperty("photos.decode.library")
-                ?: error("--decode-library or -Dphotos.decode.library must point at libphotosdecode.so")
-            val gallery = flag("--gallery") ?: System.getProperty("photos.gallery")
-            return Options(Path(cache), flag("--control-port")?.toIntOrNull(), decode, gallery)
+            val home = env["HOME"] ?: System.getProperty("user.home")
+            // `--args` reaches the JVM unexpanded, so a leading ~ is the shell's job done here.
+            fun expand(path: String): String = if (path == "~" || path.startsWith("~/")) home + path.drop(1) else path
+
+            val library = flag("--library-path")?.let(::expand)
+                ?: throw IllegalArgumentException("--library-path is required: the folder photos-cli syncs")
+            require(File(library).isDirectory) { "no library at $library" }
+            // Where the CLI keeps it: `$XDG_CACHE_HOME/photos-cli`, else `~/.cache/photos-cli`.
+            val cache = flag("--cli-cache")?.let(::expand)
+                ?: "${env["XDG_CACHE_HOME"]?.takeIf { it.isNotBlank() } ?: "$home/.cache"}/photos-cli"
+            val decode = flag("--decode-library") ?: System.getProperty("photos.decode.library")
+            val port = flag("--control-port")?.let { it.toIntOrNull() ?: throw IllegalArgumentException("--control-port $it is not a port") }
+            return ViewerOptions(Path(library), Path(cache), decode, port)
         }
     }
 }

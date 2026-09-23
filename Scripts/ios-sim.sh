@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the app, run it on a simulator, and take its picture.
 #
-# The iOS counterpart of `./gradlew :app:desktop:run`, and the reason it is a script rather than
+# The iOS counterpart of `./gradlew :app:harness:run`, and the reason it is a script rather than
 # a paragraph in the README: the incantation is four tools deep -- xcodebuild's destination
 # grammar, simctl's device lifecycle, the bundle id, and simctl's rule that it forwards only
 # variables named SIMCTL_CHILD_* -- and none of that is worth rediscovering per session.

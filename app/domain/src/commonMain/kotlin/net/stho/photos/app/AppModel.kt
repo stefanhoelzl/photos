@@ -208,17 +208,10 @@ public class AppModel(
     private var blobs: Map<Uuid, List<BlobRef>> = emptyMap()
 
     /**
-     * Every album, flat, cached alongside [blobs].
-     *
-     * Re-walking the hierarchy meant one SQLite open per album, and the cache view is recomputed
-     * whenever a blob lands — so on a first run that was ~120 database opens several hundred
-     * times over, on the same dispatcher the download workers use. The workers starved and the
-     * queue stopped draining entirely. The tree only changes when the catalog does.
+     * The album list's state — the tree, the rollups, the calendar's numbers, the rows — which
+     * §11's desktop viewer shares. Re-read alongside [blobs], when the catalog changes.
      */
-    private var albumTree: List<Album> = emptyList()
-
-    /** Photos per day across the library: read when the calendar first needs them, and kept until the catalog changes. */
-    private var days: Map<Day, Int>? = null
+    private val listing = AlbumListing(catalog)
 
     private val _state = MutableStateFlow(AppUi())
     public val state: StateFlow<AppUi> = _state.asStateFlow()
@@ -262,8 +255,8 @@ public class AppModel(
     ) {
         // Every album, not just the level on screen: a root container's strip is the sum of
         // descendants that are nowhere near the current list. Read from the cached tree rather
-        // than re-walked -- see [albumTree].
-        val albums = albumTree
+        // than re-walked -- see [AlbumListing.tree].
+        val albums = listing.tree
         val cache = cacheByAlbum(albums, blobs, held, active)
         // The same join the strips use, summed: one directory read against the catalog's sizes,
         // and no `stat` anywhere.
@@ -291,27 +284,12 @@ public class AppModel(
     /** The two things a rebuild can change, read once rather than per queue event. */
     private fun refreshCatalogView() {
         blobs = catalog.blobs()
-        albumTree = allAlbums()
-        // A rebuild can change any day's number: counted again when next needed, or now if the
-        // calendar is open.
-        days = null
+        listing.refresh()
+        // A rebuild can change any day's number: counted again now if the calendar is open.
         if (_state.value.calendar != null) openCalendar()
         // Before any reload reads them: the list sorts containers by these dates.
-        val summaries = summariesByAlbum(albumTree)
-        _state.update { it.copy(summaries = summaries) }
+        _state.update { it.copy(summaries = listing.summaries) }
         refreshCache()
-    }
-
-    private fun allAlbums(): List<Album> {
-        val out = mutableListOf<Album>()
-        fun walk(parent: Uuid?) {
-            for (album in catalog.albums(under = parent)) {
-                out += album
-                walk(album.id)
-            }
-        }
-        walk(null)
-        return out
     }
 
     // ------------------------------------------------------------------ the cache controls
@@ -355,7 +333,7 @@ public class AppModel(
      * are all of its descendants' — or, under a search, only the matches its header kept.
      */
     public fun act(row: ListEntry.Row, action: CacheAction) {
-        val byId = albumTree.associateBy { it.id }
+        val byId = listing.tree.associateBy { it.id }
         row.covers.mapNotNull { byId[it] }.forEach { act(it, action) }
     }
 
@@ -366,7 +344,7 @@ public class AppModel(
      * as well as on a tap, and hitting SQLite once per descendant made that request hang.
      */
     private fun blobsUnder(album: Album): List<BlobRef> {
-        val children = albumTree.groupBy { it.parent }
+        val children = listing.tree.groupBy { it.parent }
         val out = mutableListOf<BlobRef>()
         fun walk(id: Uuid) {
             out += blobs[id].orEmpty()
@@ -437,7 +415,7 @@ public class AppModel(
      * across the whole library.
      */
     public fun openCalendar() {
-        _state.update { it.copy(calendar = CalendarUi.of(photosPerDay())) }
+        _state.update { it.copy(calendar = listing.calendar()) }
     }
 
     public fun closeCalendar(): Unit = _state.update { it.copy(calendar = null) }
@@ -450,16 +428,13 @@ public class AppModel(
      * never offers one: a list filtered down to nothing only looks broken.
      */
     public fun applyRange(range: DateRange): Boolean {
-        if (photosPerDay().none { (day, photos) -> day in range && photos > 0 }) return false
+        if (!listing.hasPhotosIn(range)) return false
         reorder { it.copy(range = range, query = "", calendar = null, stack = it.stack.withoutRootScroll()) }
         return true
     }
 
     /** The ✕ on a field showing a range. */
     public fun clearRange(): Unit = reorder { it.copy(range = null, stack = it.stack.withoutRootScroll()) }
-
-    /** One `GROUP BY` over an index, kept until the catalog changes. */
-    private fun photosPerDay(): Map<Day, Int> = days ?: catalog.photosPerDay().also { days = it }
 
     public fun open(album: Album) {
         // Tapping is what promotes an album's pack: the queue's order becomes what the person
@@ -710,7 +685,7 @@ public class AppModel(
         } to ui.photos.size
 
         else -> {
-            val owning = (if (ui.filtering) ui.albums else albumTree).filter { it.photoCount > 0 }
+            val owning = (if (ui.filtering) ui.albums else listing.tree).filter { it.photoCount > 0 }
             owning.mapNotNull { album ->
                 placed(album.latitude, album.longitude)?.let { MapPin.OfAlbum(album, it) }
             } to owning.size
@@ -726,20 +701,10 @@ public class AppModel(
      */
     private fun framedPoints(ui: AppUi, pins: List<MapPin>): List<WorldPoint> {
         val container = ui.screen as? Screen.Container
-        val beneath = container?.let { descendantsOf(it.albumId) }
+        val beneath = container?.let { listing.descendantsOf(it.albumId) }
         val here = beneath?.let { ids -> pins.filter { it is MapPin.OfAlbum && it.album.id in ids } }
         val framed = here?.takeIf { it.isNotEmpty() } ?: pins
         return framed.map { it.point }
-    }
-
-    private fun descendantsOf(id: Uuid): Set<Uuid> {
-        val children = albumTree.groupBy { it.parent }
-        val out = mutableSetOf<Uuid>()
-        fun walk(parent: Uuid) {
-            children[parent].orEmpty().forEach { if (out.add(it.id)) walk(it.id) }
-        }
-        walk(id)
-        return out
     }
 
     // --------------------------------------------------------------------------- the upload
@@ -865,18 +830,15 @@ public class AppModel(
                 else -> {
                     // Built from the cached tree, not re-queried per level: every level is on the
                     // list now, and the tree is re-read whenever the catalog changes anyway.
-                    //
-                    // A range's matches carry their counts, which every line then reads in place of
-                    // the whole album's; a search's are names alone. Neither narrows any list but
-                    // the album list's -- see [AppUi.filtering].
-                    val counted = current.range?.takeIf { current.filtering }?.let(catalog::photosIn)
-                    val matches = counted?.keys
-                        ?: current.query.takeIf { current.filtering && it.isNotBlank() }
-                            ?.let { query -> catalog.search(query).mapTo(mutableSetOf()) { it.id } }
-                    val rows = albumRows(albumTree, screen.parentAlbum(), current.sort, current.summaries, matches, counted)
+                    // Neither a search nor a range narrows any list but the album list's -- see
+                    // [AppUi.filtering].
+                    val listed = listing.rows(
+                        current.sort, current.query, current.range,
+                        parent = screen.parentAlbum(), narrowing = current.filtering,
+                    )
                     current.copy(
-                        rows = rows,
-                        matched = matches?.let { ids -> rows.count { it is ListEntry.Row && it.album.id in ids } } ?: 0,
+                        rows = listed.rows,
+                        matched = listed.matched,
                         photos = emptyList(),
                         thumbnails = emptyMap(),
                         packReady = true,

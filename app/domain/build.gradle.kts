@@ -20,7 +20,7 @@ plugins {
 //                     on-device layout, which needs a filesystem and a zone but no platform
 //   the upload        Uploads, UploadModel, and §8's two ports, Gallery and BackgroundUploader
 //
-// The last group used to live in `:app:desktop`, where it was reachable by one of the two
+// The last group used to live in `:app:harness`, where it was reachable by one of the two
 // apps. None of it is platform-specific: kotlinx-io reaches a filesystem on both, and the
 // pieces that genuinely differ -- decoding a HEIC, playing a video, opening a SQLite file --
 // were already ports before the move.

@@ -28,7 +28,7 @@ import net.stho.photos.storage.retryStorageFailures
 import platform.Foundation.NSFileManager
 
 /**
- * The composition root, as a value — `:app:desktop`'s `PhotosApp` with four lines changed.
+ * The composition root, as a value — `:app:harness`'s `PhotosApp` with four lines changed.
  *
  * §7's rule applied to the app: the only place that knows which adapter satisfies which port,
  * and the only place that constructs anything. Everything below is `:app:domain`'s; what makes

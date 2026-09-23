@@ -4,14 +4,14 @@ import java.nio.file.Files
 import kotlin.io.path.absolutePathString
 import kotlinx.coroutines.runBlocking
 import kotlinx.io.files.Path
-import net.stho.photos.desktop.PhotosApp
+import net.stho.photos.harness.PhotosApp
 import net.stho.photos.storage.S3Client
 import net.stho.photos.storage.asStorageUrl
 import net.stho.photos.ui.screens.VideoSurface
 import net.stho.photos.app.AppUi
 import net.stho.photos.app.UploadModel
 import net.stho.photos.zone.Zone
-import net.stho.photos.desktop.renderFrame
+import net.stho.photos.media.renderFrame
 import net.stho.photos.ui.screens.App
 import net.stho.photos.ui.screens.PhotosTheme
 

@@ -67,34 +67,40 @@ include(":native")
 include(":adapter:linux")
 include(":app:cli")
 
-// The app (DESIGN §6). Four modules and two overlaps.
+// The apps (DESIGN §6, §11). Three composition roots, and the modules they share.
 //
-// `:app:domain` is the app's own shared tier, and the counterpart to `:domain`: that one is
-// what the app shares with the CLI, this one is what the two apps share with each other --
-// the ports, the model, §6's download scheduler and §4's on-device cache.
+// `:app:domain` is the apps' own shared tier, and the counterpart to `:domain`: that one is
+// what the apps share with the CLI, this one is what they share with each other -- the ports,
+// the model, §6's download scheduler and §4's on-device cache.
 //
-// `:ui` is one Compose UI, compiled for both. Composables and nothing else.
+// The UI is three modules, because there are two UIs (§6). `:ui:shared` is the components both
+// draw -- compiled for Linux and the phone -- `:ui:phone` the phone's screens, and `:ui:desktop`
+// §11's viewer, JVM only. Composables and nothing else, in all three.
 //
-// `:app:desktop` and `:app:ios` are the two composition roots, and the only places that know
-// which adapter satisfies which port. `:adapter:ios` is `:adapter:linux`'s counterpart and
-// follows the same rule: value adapters only, and no Compose import anywhere. What the phone
-// needs that a value cannot express -- a video surface, a decoded image -- lives in `:app:ios`,
-// which is already a UI module.
-// `:app:control` is the server both roots start when they are being driven by a test or an
+// `:app:harness` and `:app:ios` are the phone's two roots -- the phone's UI drawn on Linux, and
+// the phone -- and `:app:desktop` is the desktop viewer's. Only the roots know which adapter
+// satisfies which port. `:adapter:ios` is `:adapter:linux`'s counterpart and follows the same
+// rule: value adapters only, and no Compose import anywhere. What the phone needs that a value
+// cannot express -- a video surface, a decoded image -- lives in `:app:ios`, which is already a
+// UI module.
+// `:app:control` is the server the roots start when they are being driven by a test or an
 // agent. A module of its own so that the release boundary is an edge a build can check: the iOS
 // Release framework does not link it, so a TestFlight binary carries no listener at all.
 include(":app:domain")
 include(":app:control")
-include(":ui")
-// The basemap, and nothing else: MapLibre behind `:ui`'s `BaseMap` port. A module of its own so
-// that `:ui` -- and every headless render of it -- links no native map renderer.
+include(":ui:shared")
+include(":ui:phone")
+include(":ui:desktop")
+// The basemap, and nothing else: MapLibre behind `:ui:phone`'s `BaseMap` port. A module of its
+// own so that `:ui:phone` -- and every headless render of it -- links no native map renderer.
 include(":app:map")
+// Media on Linux, for both Linux roots: libvlc behind `:ui:shared`'s `VideoSurface` port, and the
+// decode shim's pixels as Compose images.
+include(":app:media")
+include(":app:harness")
 include(":app:desktop")
 include(":adapter:ios")
 include(":app:ios")
-// The Debug build's framework: `:app:ios` plus the control server. Xcode's Debug configuration
-// links this one and Release links `:app:ios`, so the release boundary of decision 5 is which
-// module a configuration builds -- not a flag inside one binary.
 include(":app:ios-debug")
 
 // Test-only modules. `:tests:fixtures` generates the synthetic media both the adapter's own
@@ -103,6 +109,8 @@ include(":tests:fixtures")
 include(":tests:cli")
 // The app's end-to-end suite, `:tests:cli`'s counterpart (decision 22).
 include(":tests:app")
+// The desktop viewer's (§11): the real `photos-cli sync` into a library, then the viewer over it.
+include(":tests:desktop")
 // The zone builder `:tests:app` and the iOS suite share, kept free of anything Linux-only.
 include(":tests:zone")
 // The iOS suite: `:tests:app`'s scenarios, run on a Mac against the signed Debug app on a

@@ -26,7 +26,7 @@ import platform.UIKit.UIImage
 /**
  * §5's viewing tier, decoded by the platform.
  *
- * HEIC is why this port exists at all (`:app:desktop` satisfies it with libheif behind the FFM
+ * HEIC is why this port exists at all (`:app:harness` satisfies it with libheif behind the FFM
  * shim). On iOS there is nothing to link: the system reads HEIC, JPEG and PNG alike, through
  * the same hardware decoder Photos uses — which is a large part of why §5 chose the format.
  *

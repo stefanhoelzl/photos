@@ -4,7 +4,7 @@ plugins {
     alias(libs.plugins.compose)
 }
 
-// The app's iOS composition root, `:app:desktop`'s counterpart: the only place that knows the
+// The app's iOS composition root, `:app:harness`'s counterpart: the only place that knows the
 // SQL driver is SQLiter, that the HTTP engine is NSURLSession, or that a HEIC is decoded by
 // ImageIO. Everything it constructs is `:app:domain`'s.
 //
@@ -25,13 +25,14 @@ kotlin {
             // Swift sees only what is exported. `:app:domain` is not: the Swift side calls one
             // function and hands back a UIViewController, and everything else is Kotlin talking
             // to Kotlin. Exporting the model would put the whole tier in a generated header.
-            export(project(":ui"))
+            export(project(":ui:phone"))
+            export(project(":ui:shared"))
         }
     }
 
     sourceSets {
         iosMain.dependencies {
-            api(project(":ui"))
+            api(project(":ui:phone"))
             // MapLibre Native arrives as a static archive inside the runtime klib -- no CocoaPods and
             // no SPM. The system libraries it needs are the Xcode target's OTHER_LDFLAGS.
             implementation(project(":app:map"))

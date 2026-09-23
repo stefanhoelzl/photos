@@ -4,7 +4,7 @@ plugins { alias(libs.plugins.kotlin.multiplatform) }
 //
 // One implementation for both roots, so one test driver speaks to either app and an endpoint
 // cannot exist on one platform only. Its own module rather than a package in `:app:domain`
-// because anything in `:app:domain` ships: `:app:desktop` always links this (the desktop is a
+// because anything in `:app:domain` ships: `:app:harness` always links this (the desktop is a
 // development surface), and on iOS only the Debug framework does, so a TestFlight binary carries
 // no listener code for anyone to find.
 //

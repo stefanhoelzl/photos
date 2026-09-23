@@ -1,6 +1,7 @@
 package net.stho.photos.app
 
 import kotlin.uuid.Uuid
+import kotlinx.io.files.Path
 import net.stho.photos.catalog.Album
 import net.stho.photos.catalog.CatalogReader
 import net.stho.photos.catalog.CatalogSync
@@ -15,9 +16,12 @@ import net.stho.photos.ports.SqlDrivers
  * a fresh reader is how the next read picks up the committed one.
  */
 public class MergedCatalogSource(
-    private val sync: CatalogSync,
+    /** The merged database: the phone's beside its shards, or §11's viewer's in memory. */
+    private val mergedPath: Path,
     private val drivers: SqlDrivers,
 ) : Catalog {
+    public constructor(sync: CatalogSync, drivers: SqlDrivers) : this(sync.mergedPath, drivers)
+
     override fun albums(under: Uuid?): List<Album> = read(emptyList()) { it.albums(under) }
 
     override fun search(text: String): List<Album> = read(emptyList()) { it.searchAlbums(text) }
@@ -70,5 +74,5 @@ public class MergedCatalogSource(
      * question's "nothing yet" looks like, since the types differ.
      */
     private fun <T> read(absent: T, block: (CatalogReader) -> T): T =
-        runCatching { CatalogReader(sync.mergedPath, drivers).use(block) }.getOrDefault(absent)
+        runCatching { CatalogReader(mergedPath, drivers).use(block) }.getOrDefault(absent)
 }

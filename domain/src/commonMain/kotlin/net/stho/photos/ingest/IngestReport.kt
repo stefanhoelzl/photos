@@ -71,6 +71,10 @@ public data class IngestReport(
     public val ignoredFiles: Int = 0,
     public val listedShards: Int = 0,
     public val fetchedShards: Int = 0,
+    /** Thumbnail packs fetched into the cache's `packs/`, for the desktop viewer (§7). */
+    public val fetchedPacks: Int = 0,
+    /** Packs removed from `packs/` because no shard names them any more. */
+    public val removedPacks: Int = 0,
     public val dryRun: Boolean = false,
 ) {
     public data class AlbumOutcome(
