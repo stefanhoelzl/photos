@@ -26,7 +26,7 @@ public class Account(
     private val keyring: Keyring,
     /**
      * §1's development override, honoured here exactly as the CLI honours it: the environment
-     * beats the store when it is set. `secrets-env ./gradlew :app:desktop:run` therefore needs
+     * beats the store when it is set. `secrets-env ./gradlew :app:harness:run` therefore needs
      * no setup at all, which is what keeps the harness's inner loop as short as it was.
      *
      * Empty on a phone, which has no environment to read.

@@ -76,6 +76,11 @@ jobs:
       - name: End-to-end scenarios
         run: ./gradlew :tests:cli:e2e -Pkotlin.native.enableKlibsCrossCompilation=false
 
+      # The desktop viewer over what that same binary syncs (§11). After the CLI's scenarios, so
+      # the release link they needed is already done.
+      - name: Desktop viewer scenarios
+        run: ./gradlew :tests:desktop:e2e -Pkotlin.native.enableKlibsCrossCompilation=false
+
       # What ships. `dist` strips the release binary the two steps above already linked and
       # tested, and drops Kotlin/Native's `.kexe` suffix.
       - name: Package the binary
@@ -194,8 +199,8 @@ jobs:
 
       # §3's open question, answered every run: the catalog rules execute against **iOS's own
       # SQLite** rather than the pinned one the CLI links. `:app:domain` brings the model, the
-      # scheduler and the cache, compiled for the same target; `:ui` holds only composables and
-      # so has nothing to run, but it still has to compile. `photos.simulator` runs them on the
+      # scheduler and the cache, compiled for the same target; `:ui:shared` and `:ui:phone` hold
+      # only composables and so have nothing to run, but they still have to compile. `photos.simulator` runs them on the
       # booted device instead of a standalone boot per test binary.
       - name: Catalog and app-domain suites on the simulator
         run: >-
@@ -203,7 +208,8 @@ jobs:
           :domain:iosSimulatorArm64Test
           :app:domain:iosSimulatorArm64Test
           :adapter:ios:iosSimulatorArm64Test
-          :ui:compileKotlinIosSimulatorArm64
+          :ui:shared:compileKotlinIosSimulatorArm64
+          :ui:phone:compileKotlinIosSimulatorArm64
           "-Pphotos.simulator=$PHOTOS_SIM_DEVICE"
 
       # The phone's Debug framework, which nothing else here builds: the simulator steps never

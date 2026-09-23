@@ -20,10 +20,11 @@ kotlin {
         jvmTest.dependencies {
             implementation(kotlin("test"))
             implementation(project(":domain"))
-            implementation(project(":ui"))
+            implementation(project(":ui:phone"))
             implementation(project(":app:domain"))
             implementation(project(":adapter:linux"))
-            implementation(project(":app:desktop"))
+            implementation(project(":app:harness"))
+            implementation(project(":app:media"))
             implementation(project(":tests:zone"))
             implementation(compose.desktop.currentOs)
             implementation(libs.ktor.client.core)

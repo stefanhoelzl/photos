@@ -114,6 +114,21 @@ class ConsoleReporterTest {
         )
     }
 
+    /** §7: the packs kept for the desktop viewer are said when they move, and not otherwise. */
+    @Test
+    fun keptPacksAreReportedOnlyWhenTheyChange() {
+        val moved = Recorder()
+        ConsoleReporter(moved.console).render(IngestReport(fetchedPacks = 288, removedPacks = 1))
+        assertTrue(
+            moved.out.any { "thumbnail packs kept locally: 288 fetched, 1 removed" in it },
+            "a backfill went unmentioned: ${moved.out}",
+        )
+
+        val still = Recorder()
+        ConsoleReporter(still.console).render(IngestReport())
+        assertTrue(still.out.none { "thumbnail packs" in it }, "an hourly run with nothing to fetch says nothing: ${still.out}")
+    }
+
     /** §7: a run says what it intends before it does it — even when it intends nothing. */
     @Test
     fun thePlanIsSaidBeforeTheRun() {

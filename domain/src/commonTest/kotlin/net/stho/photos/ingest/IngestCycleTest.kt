@@ -16,6 +16,7 @@ import kotlin.time.Instant
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.files.Path
+import kotlinx.io.files.SystemFileSystem
 import net.stho.photos.IngestAbort
 import net.stho.photos.catalog.ADDITION_PREFIX
 import net.stho.photos.catalog.AlbumInfo
@@ -498,6 +499,101 @@ class IngestCycleTest {
         assertEquals(0, report.droppedRows)
         assertEquals(putsAfterFirst, cycle.zone.putCount)
         assertEquals(keysAfterFirst, cycle.zone.keys)
+    }
+
+    // ------------------------------------------------------------------------------ local packs
+
+    /** The pack ids the cache's `packs/` holds, which is what the desktop viewer reads (§7). */
+    private fun Cycle.localPacks(): Set<String> =
+        runCatching { SystemFileSystem.list(Path(cacheRoot, LocalPacks.DIRECTORY)) }.getOrDefault(emptyList())
+            .map { it.name.removeSuffix(".db") }
+            .toSet()
+
+    private fun Cycle.packsNamed(vararg albums: String): Set<String> =
+        albums.mapTo(mutableSetOf()) { assertNotNull(shard(it).info.thumbsId).toString() }
+
+    /**
+     * A pack the run builds is kept where it was built rather than deleted, so the run never
+     * fetches back what it has just sent.
+     */
+    @Test
+    fun everyPackARunWritesIsKeptInTheCache() = runTest {
+        val cycle = cycle("packs-kept")
+
+        val report = cycle.run()
+
+        val packs = cycle.packsNamed("Rauhöd", "Neuseeland")
+        assertEquals(packs, cycle.localPacks())
+        assertEquals(0, report.fetchedPacks)
+        assertTrue(cycle.zone.requestedKeys.none { key -> packs.any { key.endsWith(it) } })
+    }
+
+    /**
+     * A cache that predates packs being kept — or lost its `packs/` — is filled by the next run,
+     * even one with nothing else to do: a GET per missing pack, and still the two LISTs.
+     */
+    @Test
+    fun aRunWithNothingToDoBackfillsMissingPacks() = runTest {
+        val cycle = cycle("packs-backfill")
+        cycle.run()
+        Path(cycle.cacheRoot, LocalPacks.DIRECTORY).deleteRecursively()
+        val lists = cycle.zone.listCount
+        val requested = cycle.zone.requestedKeys.size
+
+        val report = cycle.run()
+
+        val packs = cycle.packsNamed("Rauhöd", "Neuseeland")
+        assertEquals(packs, cycle.localPacks())
+        assertEquals(2, report.fetchedPacks)
+        assertEquals(lists + 2, cycle.zone.listCount)
+        assertEquals(
+            packs.map { "blob/$it" }.toSet(),
+            cycle.zone.requestedKeys.drop(requested).toSet(),
+        )
+    }
+
+    /** Once `packs/` is whole, a run that changes nothing asks the zone for nothing but its LISTs. */
+    @Test
+    fun aRunWithEveryPackAlreadyKeptFetchesNone() = runTest {
+        val cycle = cycle("packs-whole")
+        cycle.run()
+        val requested = cycle.zone.requestedKeys.size
+
+        val report = cycle.run()
+
+        assertEquals(0, report.fetchedPacks)
+        assertEquals(requested, cycle.zone.requestedKeys.size)
+    }
+
+    /**
+     * The directory tracks the shards: a deleted album's pack goes with it, and so does anything
+     * else no shard names — a stray file, or a `.part` a killed run left behind.
+     */
+    @Test
+    fun aPackNoShardNamesIsRemoved() = runTest {
+        val cycle = cycle("packs-removed")
+        cycle.run()
+        val kept = cycle.packsNamed("Rauhöd")
+        val directory = Path(cycle.cacheRoot, LocalPacks.DIRECTORY)
+        write(Path(directory, "stray.db"), ByteArray(8))
+        write(Path(directory, "${kept.single()}.1234.part"), ByteArray(8))
+        cycle.library.remove("Neuseeland")
+
+        val report = cycle.run()
+
+        assertEquals(kept, cycle.localPacks())
+        // The deleted album's pack and the stray; a `.part` is debris, not a pack.
+        assertEquals(2, report.removedPacks)
+    }
+
+    /** A dry run changes nothing, and `packs/` is part of what it does not change. */
+    @Test
+    fun aDryRunKeepsNoPacks() = runTest {
+        val cycle = cycle("packs-dry")
+
+        cycle.run(dryRun = true)
+
+        assertEquals(emptySet(), cycle.localPacks())
     }
 
     // --------------------------------------------------------------------------------- deletion

@@ -1,7 +1,8 @@
 # Photo album viewer over S3-compatible storage
 
 A personal iOS app that browses photo albums held in a bunny.net storage zone, plus a Linux
-CLI that populates and maintains it. No backend service.
+CLI that populates and maintains it, and a Linux desktop viewer over the library the CLI keeps.
+No backend service.
 
 Derived from a design interview; every decision below was made explicitly, and the platform
 behaviour is verified against a live storage zone rather than assumed.
@@ -17,7 +18,8 @@ with no server:
 | `mockups/placeholder.html` | synthetic tiles, generic album names | **yes** — 140 KB |
 | `mockups/index.html` | the real library's thumbnails and names | no — personal data |
 
-Both render identically; only the content differs.
+Both render identically; only the content differs. §11's desktop viewer has one of its own,
+`mockups/desktop.html` — four states, synthetic like the placeholder.
 
 ---
 
@@ -28,9 +30,12 @@ Both render identically; only the content differs.
 - **Ingest CLI** — Linux, one self-contained binary (`photos-cli`). Reconciles the zone with a
   local library root in one command, and pulls phone-uploaded albums back down.
 - **iOS app** — browses the zone; can upload new albums, and add photos to existing ones.
+- **Desktop viewer** — Linux, read-only. Browses the library the CLI keeps, from the CLI's own
+  local shards and packs; no network, no credentials (§11).
 
-Both are Kotlin Multiplatform, over one shared domain (§7). The app's UI also runs as a Linux
-desktop harness, which is how it is developed and reviewed (§6).
+All three are Kotlin Multiplatform, over one shared domain (§7). The phone's UI also runs on
+Linux as a harness, which is how it is developed and reviewed (§6); the desktop viewer is a
+different product that shares its components, not its screens.
 
 **Hard constraints**
 - **No backend.** Every derivative is pre-generated at ingest; nothing is resized on demand.
@@ -1013,6 +1018,31 @@ layout**, because no interactive layout transition is provided; and it **cannot 
 the desktop harness**, which has no pinch gesture. The grid's behaviour at scale is therefore
 the one part of §6 that only a device can confirm.
 
+**The UI is three modules, because there are now two UIs.** The harness is the phone, drawn on
+Linux, and nothing more; §11's desktop viewer is a second product with its own layout. What the
+two share is components, and a module boundary is what keeps it that way — the compiler, not a
+convention, stops the desktop reaching into a phone screen:
+
+| module | targets | holds |
+|---|---|---|
+| `:ui:shared` | jvm, ios | theme, icons, thumbnail, grid cell, media mark, scroll memory, viewer pieces, the album list, the calendar sheet, the nav bar |
+| `:ui:phone` | jvm, ios | the phone's screens: `App`, settings, setup, upload, the maps |
+| `:ui:desktop` | jvm | §11's sidebar and main pane |
+
+The harness is `:app:harness` — renamed from `:app:desktop`, which now names §11's root — and it
+and `:app:ios` both link `:ui:phone`. The cost is accepted with the split: Kotlin's `internal`
+is per module, so a helper both UIs use becomes public API of `:ui:shared`.
+
+**The album list is one component with two sizes**, not two lists. Its sticky stacked headers
+are the subtle part of it, and they are written and tested once: `Regular` is the phone's, and
+`Compact` is §11's sidebar, which differs in **the cover alone** (54pt → 32dp). Everything the
+cache adds to a row — the strip, the revealed actions — is the phone's, and a list built without
+a cache shows neither.
+
+**The model splits the same way.** `AppModel`'s list state — query, range, sort, the rows, the
+album tree, the calendar's days — is a shared core in `:app:domain`. The phone's model adds the
+back stack, the sync, the cache and the upload on top of it; §11's adds a selection.
+
 ### Navigation and chrome
 
 **No tab bar.** The album list is the root; everything else is reached from its nav bar.
@@ -1803,6 +1833,12 @@ what the zone contains; the other two decide nothing at all.
   > profile. What exercised the carry-over was the pull and the merge, which derive a phone
   > upload's files on their way to `encoded`. **Version 2 is the first bump**, and it woke the
   > re-derive for every album: every video transcode written at 1 had lost its soundtrack (§5).
+- **Thumbnail packs are kept locally**, in `packs/` beside `shards/` (~0.5 GB), for §11's
+  viewer to read. A pack the run writes is moved there once its upload returns rather than
+  deleted from `work/`; every run then fetches any pack a shard references — `thumbs_id`, and an
+  addition's own — that is not on disk, and deletes any on disk that no shard references. So the
+  first run after this backfills the library once, and from then on the directory tracks the
+  zone the way `shards/` does: derived, deletable, and repaired by the next run.
 - **One sync at a time**, enforced by an `flock` on a file in the cache directory. The first
   import is several hours and the timer fires hourly, so without it the two overlap repeatedly:
   both derive and upload the same files, and the loser's blobs sit in the zone with nothing
@@ -2299,8 +2335,12 @@ shows whether the overlay keeps up with the native map while panning.
 **H · systemd units** = D. Pull is not part of it: `sync` already pulls and claims
 phone-owned albums, so H is the units and nothing more.
 
+**I · Desktop viewer** = D + E (§11). In order, each its own change: this design; the `:ui`
+split, the model's shared core and the harness rename, as refactors with no new pixels; the
+CLI keeping packs; then the viewer and its suite.
+
 ```
-A → B → C  →  D  →  (E ∥ F)  and  (G ∥ H)
+A → B → C  →  D  →  (E ∥ F)  and  (G ∥ H)  →  I
 critical path: A → B → E
 ```
 
@@ -2396,3 +2436,113 @@ And two that do not, both left by §5's redesign:
   there.
 
 Library-specific open items (unlocated albums, deferred UI) are tracked in `INGEST.md`.
+
+---
+
+## 11. Desktop viewer
+
+> See **`mockups/desktop.html`** for the four states — launch, an album's grid, the viewer and
+> the date filter. Tiles and names are synthetic.
+
+**A viewer, and nothing else.** It reads what the CLI keeps and writes nothing anywhere: no
+network, no credentials, no download queue, no cache. The CLI is already what keeps a laptop in
+step with the zone — `sync` pulls the phone's albums down into the library (§7) — so a second
+thing on the same machine fetching the same bytes would be a second copy of the library with a
+second set of rules for when it is complete. On the desktop, "is this album downloaded?" has no
+meaning, and the viewer offers no control that would give it one.
+
+**Three sources, all local:**
+
+| what | from |
+|---|---|
+| albums, hierarchy, dates, covers, locations | the CLI's shards, `~/.cache/photos-cli/shards` |
+| grid thumbnails | the CLI's packs, `~/.cache/photos-cli/packs` (§7) |
+| pixels | the originals, `$LIBRARY_ROOT/<source_path>/<filename>` |
+
+`source_path` is relative to the library root, so **`--library-path` is required**, as the
+CLI's own flag; the CLI's cache defaults to its default and a flag overrides it. The viewer
+reads shards **without the CLI's lock**: a shard lands by `atomicMove`, so a reader sees one
+whole version or the other, never half of one. A refresh taken mid-run sees some albums before
+the run and some after it, which is exactly what a refresh taken either side of it would show.
+
+**The merged DB is in memory.** It is replayed from the shards at launch and on refresh — §3
+measured 0.39 s for 34,607 rows, §4 budgets 1–3 s with the shard opens, and the real library's
+305 shards take 1.45 s — while the list shows its loading state. Nothing is written to disk, so
+nothing can be stale, and the CLI's cache directory — the one its `flock` guards — never has a
+second writer. "Memory" is a file on the `$XDG_RUNTIME_DIR` tmpfs rather than an in-memory
+SQLite: the catalog opens a reader per question (§4), and every one of them has to see the same
+database, which a private `:memory:` connection would not. It is removed when the window closes.
+
+The merged database carries no `source_path` — the phone has no use for one — so the rebuild
+also records, from the shards it has just read, where each photo's files are in the library.
+
+**Refresh is by hand**: F5, or the sidebar's ⟳. An hourly timer that usually changes nothing is
+not worth a file watcher, and a list that reshuffles under the pointer is worse than one a
+keypress brings up to date.
+
+### Layout
+
+The window opens **maximized, with its title bar**, and closes with the title bar's ✕. Nothing
+is remembered between launches: no album selected, default tile size, default sort.
+
+**It takes the desktop's scheme and scale**, which the JVM finds for itself on neither. The
+scheme is the XDG settings portal's `color-scheme`, followed live through its change signal —
+Compose's own `isSystemInDarkTheme()` answers light on Linux whatever the desktop is set to. The
+scale is `GDK_SCALE`, or else the `Xft.dpi` the desktop publishes to X clients, handed to the JVM
+as `sun.java2d.uiScale` before AWT starts: under XWayland the JVM is told nothing about the
+monitor, and on a 2× desktop the window came up at half size. The harness takes both the same way.
+
+**Left, the album list; right, one album.** The sidebar is §6's album list at its `Compact` size
+— every level, sticky stacked headers, 22dp indents, the heavier line closing each group — with
+the search field and its calendar above it. A container's header is **not selectable**: the main
+pane always shows exactly one album, or, before the first choice, says to choose one.
+
+**Both panes carry §6's two-row nav bar.** The sidebar's holds sort and refresh over the large
+title "Albums"; the album's holds the tile size over the album's name, with its count and date
+span beneath. Opening a photo collapses the album's bar to one row — back, and the name over
+"4 of 212 · file · date" — to give the photo the height. ~90px per pane is the accepted price of
+one bar design across both products.
+
+**Kept from the phone**: search, the date filter (§6's calendar sheet, over the window), and the
+album sort. **Not here**: settings, upload, set-cover, the maps and every cache control — each
+either writes, or needs the network, or both. The map is not ruled out, only not in the first
+version; it would be the album pane's toggle, as on the phone.
+
+**The grid** is square tiles — §6's grid cell, from §5's square packs — at a target size, the
+column count following the window's width. The size steps between 96, 160 and 256dp, from the
+bar's S/M/L, Ctrl+scroll or Ctrl±.
+
+**The viewer opens in the album pane**, and the sidebar stays. ←/→ page, Esc returns to the grid,
+scrolled as §6's is on the way back; Ctrl+scroll or a pinch zooms about the pointer, and a drag
+pans once zoomed. Stills are the originals, decoded by the same native shim the CLI encodes with
+(JPEG, HEIC, a CR2's carved JPEG turned by the CR2's own orientation), shrunk on load to the
+screen's long edge and converted through their ICC profile to sRGB. The shim's PNG and TIFF path
+is ffmpeg's, which its shared object cannot link, so those go to Skia instead — PNG decodes, a
+TIFF does not. A video plays through libvlc as soon as it opens, with a desktop's controls — a click
+pauses and resumes, a bar along the bottom seeks and shows the time, and a click after the end
+plays it again. A Live Photo shows its still, and a click plays its MOV over it once, through
+libvlc too; the still comes back when it ends, and a second click stops it early. There is no fullscreen: the window already is as large as it gets.
+
+**Until an original is decoded, the photo's thumbnail stands in**, fitted rather than cropped.
+That is also all a row with no file on disk ever shows — an addition the CLI has not pulled yet,
+or a file deleted since the last sync — which is §8's answer for a video the laptop has not
+encoded yet: the thumbnail, until there is something better.
+
+**Keyboard.** Arrows move a focus ring through the grid and Enter opens it; ↑/↓ in the sidebar
+move the selection, skipping headers, and the grid follows. In the viewer, Space plays or pauses the open video or
+Live Photo. Ctrl+F is search, F5 is refresh.
+
+### Built and tested
+
+`./gradlew :app:desktop:run` with `--library-path`, and nothing else: no package, no launcher.
+§7's one-binary requirement is the CLI's, because the CLI is what runs unattended; the viewer
+runs from a checkout.
+
+`:app:desktop` is the composition root, and starts `:app:control` when driven — `/state`,
+`/screenshot`, and routes to select an album and open a photo. libvlc, the shim's pixels as
+Compose images and the offscreen frame are `:app:media`'s, which both Linux roots install. The model's shared core and the
+desktop model are unit-tested; `:ui:desktop` is rendered headless and driven by key events; and
+**`:tests:desktop`** runs the real `photos-cli sync` against S3Mock into a synthetic library,
+then drives the viewer over what it left — the one test that proves the two agree on where
+things are.
+

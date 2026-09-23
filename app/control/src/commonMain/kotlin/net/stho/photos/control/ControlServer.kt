@@ -509,14 +509,6 @@ public class ControlServer(
             """"reveal":${scroll.reveal ?: "null"},"moves":${scroll.moves}}"""
     }
 
-    private fun String.json(): String =
-        "\"" + replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
-
-    private suspend fun ApplicationCall.json(body: String) =
-        respondText(body, ContentType.Application.Json)
-
-    private suspend fun ApplicationCall.fail(status: HttpStatusCode, why: String) =
-        respondText(why, ContentType.Text.Plain, status)
 }
 
 /** Why no album is selected, in the dialog's words. */

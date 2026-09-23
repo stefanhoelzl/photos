@@ -14,7 +14,7 @@ import net.stho.photos.app.Screen
  * The map (§6), against a zone: pins come from EXIF GPS through the real rebuild, and a tap goes
  * where a person's would.
  *
- * The basemap here is `:ui`'s stand-in — MapLibre needs a window — so the frames this writes show
+ * The basemap here is `:ui:phone`'s stand-in — MapLibre needs a window — so the frames this writes show
  * the pins and clusters on a plain ground, which is exactly the part the app decides.
  */
 class MapTest {

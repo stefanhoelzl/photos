@@ -87,8 +87,11 @@ val buildHostShim by tasks.registering {
         // Decode only, and deliberately so. The full shim cannot become a shared object at
         // all: ffmpeg's swscale and x265 both ship hand-written assembly with absolute
         // relocations, which a `.so` cannot carry. Neither is needed to *read* a photograph --
-        // swscale resizes, x265 encodes -- and the app only ever decodes.
-        val units = listOf("pi_decode.c", "pi_common.c", "pi_heif.c", "pi_jpeg.c", "pi_color.c")
+        // swscale resizes, x265 encodes -- and the app only ever decodes. `pi_exif.c` is here
+        // because decoding a JPEG reads its orientation: the phone's previews are all HEIC and
+        // never reached it, but §11's viewer decodes the library's own JPEGs, and without it the
+        // first one ended the JVM on an unresolved symbol.
+        val units = listOf("pi_decode.c", "pi_common.c", "pi_heif.c", "pi_jpeg.c", "pi_color.c", "pi_exif.c")
         providers.exec {
             commandLine(
                 listOf("gcc", "-O2", "-fPIC", "-std=c11", "-shared",
@@ -98,7 +101,7 @@ val buildHostShim by tasks.registering {
                     nativeIncludes.get() + nativeLibraryPaths.get() +
                     listOf(
                         "-Wl,--start-group",
-                        "-lheif", "-lde265", "-ljpeg", "-llcms2", "-lavutil",
+                        "-lheif", "-lde265", "-ljpeg", "-llcms2", "-lexif", "-lavutil",
                         "-Wl,--end-group", "-lstdc++", "-lm", "-lpthread", "-ldl",
                     ),
             )
@@ -274,7 +277,7 @@ kotlin {
     jvmToolchain(libs.versions.jdk.get().toInt())
     // Both runtimes here are Linux; what differs is Kotlin/Native-with-cinterop versus the
     // JVM. That is a source set, not a second module -- and Gradle resolves per target, so
-    // `:app:cli` never sees the JVM variant and `:app:desktop` never sees cinterop.
+    // `:app:cli` never sees the JVM variant and `:app:harness` never sees cinterop.
     jvm {
         compilations.getByName("main").compileTaskProvider.configure { dependsOn(buildHostShim) }
     }

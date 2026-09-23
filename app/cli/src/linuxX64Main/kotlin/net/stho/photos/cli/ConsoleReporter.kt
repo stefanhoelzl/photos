@@ -138,6 +138,12 @@ internal class ConsoleReporter(private val console: Console) {
                     "${formatBytes(report.skippedBytes)} not re-sent",
             )
         }
+        // The cache's copy of every pack, for the desktop viewer (§7). Silent once it is whole.
+        if (report.fetchedPacks > 0 || report.removedPacks > 0) {
+            console.line(
+                "thumbnail packs kept locally: ${report.fetchedPacks} fetched, ${report.removedPacks} removed",
+            )
+        }
         if (report.abandonedUploads > 0) {
             unresolved(
                 "abandoned upload(s)",

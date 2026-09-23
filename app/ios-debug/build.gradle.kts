@@ -19,14 +19,15 @@ kotlin {
         target.binaries.framework {
             baseName = "PhotosKit"
             isStatic = true
-            export(project(":ui"))
+            export(project(":ui:phone"))
+            export(project(":ui:shared"))
         }
     }
 
     sourceSets {
         iosMain.dependencies {
             api(project(":app:ios"))
-            api(project(":ui"))
+            api(project(":ui:phone"))
             implementation(project(":app:domain"))
             implementation(project(":app:control"))
             implementation(compose.runtime)

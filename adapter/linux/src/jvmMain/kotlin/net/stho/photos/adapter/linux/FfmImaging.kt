@@ -51,6 +51,18 @@ public class FfmImaging(
         ),
     )
 
+    /** `int pi_convert_to_srgb(pi_image*, pi_error*)` — through the image's own ICC profile. */
+    private val convertToSrgb: MethodHandle = handle(
+        "pi_convert_to_srgb",
+        FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS),
+    )
+
+    /** `int pi_image_apply_orientation(pi_image*, int, pi_error*)` — EXIF's 1–8. */
+    private val applyOrientation: MethodHandle = handle(
+        "pi_image_apply_orientation",
+        FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.ADDRESS),
+    )
+
     private val imageFree: MethodHandle =
         handle("pi_image_free", FunctionDescriptor.ofVoid(ValueLayout.ADDRESS))
 
@@ -74,7 +86,7 @@ public class FfmImaging(
      * §5's whole preview tier is HEIC. Reading from a path costs nothing here: browse-to-cache
      * has already put the blob on disk.
      */
-    public fun decodeFile(path: String, maxLongEdge: Int = 0): Decoded? = Arena.ofConfined().use { call ->
+    public fun decodeFile(path: String, maxLongEdge: Int = 0, srgb: Boolean = false): Decoded? = Arena.ofConfined().use { call ->
         val image = call.allocate(IMAGE)
         val error = call.allocate(ERROR)
         imageInit.invokeExact(image)
@@ -84,10 +96,51 @@ public class FfmImaging(
             return null
         }
         try {
-            image.toDecoded()
+            image.finish(orientation = 1, srgb = srgb, error = error)
         } finally {
             imageFree.invokeExact(image)
         }
+    }
+
+    /**
+     * Decodes a bare JPEG stream — a CR2's carved one (§11) — turned by [orientation], which such a
+     * stream does not carry itself, and converted to sRGB when [srgb] asks.
+     */
+    public fun decodeJpeg(encoded: ByteArray, maxLongEdge: Int, orientation: Int, srgb: Boolean): Decoded? =
+        Arena.ofConfined().use { call ->
+            val input = call.allocate(encoded.size.toLong()).apply {
+                MemorySegment.copy(encoded, 0, this, ValueLayout.JAVA_BYTE, 0, encoded.size)
+            }
+            val image = call.allocate(IMAGE)
+            val error = call.allocate(ERROR)
+            imageInit.invokeExact(image)
+            val result = decodeMemory.invokeExact(input, encoded.size.toLong(), maxLongEdge, image, error) as Int
+            if (result != PI_OK) {
+                onError(error.errorMessage(), result)
+                return null
+            }
+            try {
+                image.finish(orientation, srgb, error)
+            } finally {
+                imageFree.invokeExact(image)
+            }
+        }
+
+    /**
+     * The decoded image turned and colour-converted in place, then copied out. A step that fails
+     * is reported and skipped: a photograph drawn unturned or in its own colours is still the
+     * photograph, where null is none at all.
+     */
+    private fun MemorySegment.finish(orientation: Int, srgb: Boolean, error: MemorySegment): Decoded {
+        if (orientation != 1) {
+            val turned = applyOrientation.invokeExact(this, orientation, error) as Int
+            if (turned != PI_OK) onError(error.errorMessage(), turned)
+        }
+        if (srgb) {
+            val converted = convertToSrgb.invokeExact(this, error) as Int
+            if (converted != PI_OK) onError(error.errorMessage(), converted)
+        }
+        return toDecoded()
     }
 
     public fun decode(encoded: ByteArray, maxLongEdge: Int = 0): Decoded? = Arena.ofConfined().use { call ->

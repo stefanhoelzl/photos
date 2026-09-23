@@ -126,6 +126,9 @@ public class Ingest(
      */
     private val blobsInZone = mutableMapOf<String, Long>()
 
+    /** Every pack the shards name, kept on disk for the desktop viewer (§7, §11). */
+    private val packs = LocalPacks(config.cacheRoot, s3)
+
     // ------------------------------------------------------------------------------- the run
 
     public suspend fun run(): IngestReport {
@@ -182,7 +185,13 @@ public class Ingest(
         // neither the zone nor the library moved cannot have produced any. The phone's crash
         // debris waits for the next run that does something, which costs nothing but a week of
         // $0.01/GB.
-        if (!refreshed.changed && !plan.hasWork) return report.build()
+        if (!refreshed.changed && !plan.hasWork) {
+            // Local, and a GET only for a pack not on disk: a run whose packs are all here still
+            // costs the one LIST. The first run after packs started being kept is the one that
+            // backfills them.
+            keepPacks(report, refreshed.shards, refreshed.report.unreadableShards.size)
+            return report.build()
+        }
 
         // Said before anything is uploaded, because the first album's line cannot appear until
         // that album is derived *and* uploaded — minutes, on a link that manages 0.85 MB/s. A
@@ -233,6 +242,7 @@ public class Ingest(
             // The sweep reads every shard now on disk, so it must run after the writes above.
             val after = catalog.refresh()
             sweep(report, after.shards, after.report.unreadableShards, dryRun = false)
+            keepPacks(report, after.shards, after.report.unreadableShards.size)
         } finally {
             config.workRoot.deleteRecursively()
         }
@@ -607,7 +617,9 @@ public class Ingest(
         thumbnails.packThumbnails(into = packed, drivers = drivers)
         val id = ObjectId.ofContent(packed)
         upload(id, Body.File(packed), report)
-        packed.deleteQuietly()
+        // Kept rather than deleted: the viewer reads it from here (§7), and the end of the run
+        // would otherwise fetch back what it has just sent.
+        packs.adopt(id, packed)
         return id
     }
 
@@ -1034,6 +1046,14 @@ public class Ingest(
         if (!dryRun) deleteAll(doomed.map { it.key }, swallowing = false)
     }
 
+    /** Brings `packs/` in line with the shards, and says what that took. */
+    private suspend fun keepPacks(report: ReportBuilder, shards: List<Shard>, unreadable: Int) {
+        val kept = packs.reconcile(shards, unreadable)
+        report.fetchedPacks += kept.fetched
+        report.removedPacks += kept.removed
+        report.failures += kept.failures
+    }
+
     // -------------------------------------------------------------------------------- helpers
 
     private fun libraryPath(sourcePath: String): Path =
@@ -1134,6 +1154,8 @@ private class ReportBuilder {
     var ignoredFiles = 0
     var listedShards = 0
     var fetchedShards = 0
+    var fetchedPacks = 0
+    var removedPacks = 0
     var dryRun = false
 
     fun build(): IngestReport = IngestReport(
@@ -1163,6 +1185,8 @@ private class ReportBuilder {
         ignoredFiles = ignoredFiles,
         listedShards = listedShards,
         fetchedShards = fetchedShards,
+        fetchedPacks = fetchedPacks,
+        removedPacks = removedPacks,
         dryRun = dryRun,
     )
 }
