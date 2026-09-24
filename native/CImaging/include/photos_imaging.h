@@ -26,7 +26,8 @@ enum {
     PI_ERR_ENCODE = 3,
     PI_ERR_UNSUPPORTED = 4,
     PI_ERR_MEMORY = 5,
-    PI_ERR_INVALID = 6
+    PI_ERR_INVALID = 6,
+    PI_ERR_MODEL = 7
 };
 
 typedef struct {
@@ -146,6 +147,43 @@ int pi_video_poster(const char *path, double at, pi_image *out, pi_error *err);
  * and scaling those up would be 20x the pixels for no added detail. */
 int pi_video_transcode(const char *in_path, const char *out_path,
                        int max_height, int quality, int threads, pi_error *err);
+
+/* ------------------------------------------------------------------ faces (§12) */
+/* A face detector and a face embedder, opened from two ONNX files. Not thread-safe: dnn's
+ * networks keep per-forward state, so each pipeline worker opens its own. dnn's thread pool is
+ * held to one thread for the same reason x265's is -- the caller is already one worker per core. */
+typedef struct pi_faces pi_faces;
+
+typedef struct {
+    /* The box, in the analysed image's own pixels. */
+    float x, y, w, h;
+    /* Right eye, left eye, nose tip, right mouth corner, left mouth corner: (x, y) pairs, same
+     * pixels. What the embedder aligns by, kept so a later model can be re-run from them. */
+    float landmarks[10];
+    float score;
+} pi_face;
+
+typedef struct {
+    pi_face *faces;
+    /* count * dims floats, face i at embeddings + i * dims, each L2-normalised -- so the cosine
+     * similarity of two faces is their dot product. */
+    float *embeddings;
+    int count;
+    int dims;
+} pi_face_result;
+
+void pi_face_result_init(pi_face_result *res);
+void pi_face_result_free(pi_face_result *res);
+
+int pi_faces_open(const char *detector_path, const char *embedder_path,
+                  pi_faces **out, pi_error *err);
+void pi_faces_close(pi_faces *faces);
+
+/* Detects on a copy of img fitted to detect_long_edge (never upscaled; 0 = as is), and embeds
+ * each face from img itself, so the embedding sees every pixel the caller decoded. Faces scoring
+ * below min_score are dropped. Zero faces is success with count == 0. */
+int pi_faces_find(pi_faces *faces, const pi_image *img, int detect_long_edge, float min_score,
+                  pi_face_result *out, pi_error *err);
 
 #ifdef __cplusplus
 }

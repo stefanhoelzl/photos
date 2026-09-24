@@ -11,6 +11,7 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -108,6 +109,11 @@ public fun Viewer(
      * the fetch is moving.
      */
     thumbnailUntilPreview: Boolean = false,
+    /**
+     * Drawn over the open photo, inside its zoom, so whatever it places over the photograph stays
+     * on it — the desktop's face boxes (§12). It fills the page; the photograph is fitted in it.
+     */
+    overlay: (@Composable BoxScope.(PhotoRow) -> Unit)? = null,
 ) {
     val photo = photos.getOrNull(index) ?: return
     val pager = rememberPagerState(initialPage = index) { photos.size }
@@ -146,12 +152,18 @@ public fun Viewer(
                     val open = preview ?: nearby[photo.id]
                     if (photo.mediaType == MediaType.PHOTO) {
                         Zoomable(photo.id, onZoomed = { zoomed = it }) {
-                            OpenPhoto(photo, open, videoPath, livePair, moving, standIn(photo))
+                            Box(Modifier.fillMaxSize()) {
+                                OpenPhoto(photo, open, videoPath, livePair, moving, standIn(photo))
+                                overlay?.invoke(this, photo)
+                            }
                         }
                     } else {
                         // A video and a Live Photo play in the platform's own views, which a Compose
                         // layer cannot scale, so zooming is for stills.
-                        OpenPhoto(photo, open, videoPath, livePair, moving, standIn(photo))
+                        Box(Modifier.fillMaxSize()) {
+                            OpenPhoto(photo, open, videoPath, livePair, moving, standIn(photo))
+                            overlay?.invoke(this, photo)
+                        }
                     }
                 } else {
                     val neighbour = nearby[photos[page].id]

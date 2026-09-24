@@ -2,6 +2,8 @@ package net.stho.photos.desktop
 
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import java.io.File
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.stho.photos.adapter.linux.FfmImaging
@@ -12,6 +14,7 @@ import net.stho.photos.app.Preview
 import net.stho.photos.app.Previews
 import net.stho.photos.app.Videos
 import net.stho.photos.media.toImageBitmap
+import net.stho.photos.media.toSkiaImage
 import net.stho.photos.model.MediaType
 import net.stho.photos.model.PhotoRow
 import org.jetbrains.skia.Image
@@ -41,7 +44,13 @@ public class OriginalPreviews(
     private val longEdge: Int,
 ) : Previews, Videos, AutoCloseable {
 
-    private val native = Any()
+    /**
+     * Decodes share it, and [close] takes it alone: the shim decodes on many threads at once — the
+     * CLI's workers do — so what has to be kept apart is a decode and the library being unloaded,
+     * not two decodes. A photo opening and a grid's face crops being cut then overlap.
+     */
+    private val native = java.util.concurrent.locks.ReentrantReadWriteLock()
+    @Volatile
     private var closed = false
 
     private val decoded = object : LinkedHashMap<kotlin.uuid.Uuid, Preview>(8, 0.75f, true) {
@@ -55,7 +64,7 @@ public class OriginalPreviews(
         if (photo.mediaType == MediaType.VIDEO) return null
         val file = library.original(photo) ?: return null
         val image = withContext(Dispatchers.IO) {
-            synchronized(native) { if (closed) null else decode(File(file.toString())) }
+            native.read { if (closed) null else decode(File(file.toString())) }
         } ?: return null
         val preview = Preview(photo.id, image)
         synchronized(decoded) { decoded[photo.id] = preview }
@@ -76,10 +85,33 @@ public class OriginalPreviews(
     }
 
     override fun close() {
-        synchronized(native) {
+        native.write {
             closed = true
             imaging?.close()
         }
+    }
+
+    /**
+     * The original as a Skia image, shrunk on load to [longEdge] — what a face crop is cut from
+     * (§12). The same decoders as the viewer's, behind the same lock.
+     */
+    internal fun skiaImage(file: File, longEdge: Int): Image? {
+        val head = runCatching { file.inputStream().use { it.readNBytes(HEAD) } }.getOrNull() ?: return null
+        native.read {
+            if (closed) return null
+            val shim = imaging
+            if (shim != null) {
+                val pixels = when {
+                    head.isCr2() -> runCatching { file.readBytes().carveCr2() }.getOrNull()
+                        ?.let { shim.decodeJpeg(it.jpeg, longEdge, it.orientation, srgb = true) }
+                    head.isJpeg() || head.isHeif() -> shim.decodeFile(file.path, longEdge, srgb = true)
+                    else -> null
+                }
+                pixels?.let { return it.toSkiaImage() }
+            }
+        }
+        val bytes = runCatching { file.readBytes() }.getOrNull() ?: return null
+        return runCatching { Image.makeFromEncoded(bytes) }.getOrNull()
     }
 
     private fun decode(file: File): androidx.compose.ui.graphics.ImageBitmap? {

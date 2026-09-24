@@ -10,6 +10,7 @@ import net.stho.photos.adapter.linux.FfmImaging
 import net.stho.photos.adapter.linux.JdbcSqlDrivers
 import net.stho.photos.app.DesktopModel
 import net.stho.photos.app.LocalLibrary
+import net.stho.photos.app.LocalPeople
 import net.stho.photos.app.MergedCatalogSource
 import net.stho.photos.app.PackDirectory
 
@@ -31,6 +32,8 @@ public class PhotosViewer(
     decodeLibrary: String?,
     /** The longest edge worth decoding a photo to, in pixels: the screen's. */
     longEdge: Int,
+    /** Where face crops are kept (§12); `$XDG_CACHE_HOME/photos-viewer/crops` unless a test says otherwise. */
+    cropCache: File? = null,
 ) : AutoCloseable {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -62,6 +65,9 @@ public class PhotosViewer(
         previews = originals,
         videos = originals,
         scope = scope,
+        // §12: the CLI's index, and the one file in the library this viewer writes.
+        people = LocalPeople(cliCache, libraryRoot, drivers, library::takenAt),
+        crops = FaceCropStore(library, originals, cropDirectory(cropCache)),
     )
 
     public fun start(): Unit = model.start()
@@ -74,6 +80,13 @@ public class PhotosViewer(
     }
 
     private companion object {
+        fun cropDirectory(given: File?): File {
+            if (given != null) return given
+            val cache = System.getenv("XDG_CACHE_HOME")?.takeIf { it.isNotBlank() }?.let(::File)
+                ?: File(System.getProperty("user.home"), ".cache")
+            return File(cache, "photos-viewer/crops")
+        }
+
         fun scratchDirectory(): File {
             val runtime = System.getenv("XDG_RUNTIME_DIR")?.takeIf { File(it).isDirectory }
                 ?: System.getProperty("java.io.tmpdir")

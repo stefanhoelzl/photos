@@ -11,10 +11,13 @@ import kotlinx.cinterop.toKString
 import kotlinx.coroutines.runBlocking
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
+import net.stho.photos.faces.FaceModelStore
+import net.stho.photos.faces.FaceModels
 import net.stho.photos.fixtures.withScratchDirectory
 import net.stho.photos.storage.S3Client
 import net.stho.photos.storage.asStorageUrl
 import platform.posix.getenv
+import platform.posix.symlink
 
 /**
  * One end-to-end scenario: declare state, run the shipped binary, assert state.
@@ -42,6 +45,7 @@ internal fun scenario(label: String, body: suspend Scenario.() -> Unit) {
         val cacheRoot = Path(scratch, "cache")
         SystemFileSystem.createDirectories(libraryRoot)
         SystemFileSystem.createDirectories(cacheRoot)
+        seedFaceModels(cacheRoot)
         val http = HttpClient(Curl)
         try {
             runBlocking {
@@ -59,6 +63,24 @@ internal fun scenario(label: String, body: suspend Scenario.() -> Unit) {
         }
     }
 }
+
+/**
+ * The build's verified copies of §12's models, linked into the cache where a run looks for them —
+ * so a scenario, each with a fresh cache, does not fetch 38 MB of weights from GitHub. The fetch
+ * itself is `FaceModelStore`'s, and proven there.
+ */
+private fun seedFaceModels(cacheRoot: Path) {
+    val models = Path(cacheRoot, FaceModelStore.DIRECTORY)
+    SystemFileSystem.createDirectories(models)
+    for (model in listOf(FaceModels.DETECTOR, FaceModels.EMBEDDER)) {
+        symlink(faceFixture(model.name.removeSuffix(".onnx")), Path(models, model.name).toString())
+    }
+}
+
+/** A file the build resolved for this suite: the face models, and the NASA portraits. */
+internal fun faceFixture(name: String): String =
+    requireNotNull(getenv("PHOTOS_FACE_FIXTURES")?.toKString()) { "PHOTOS_FACE_FIXTURES is not set; run through Gradle" }
+        .split(':').single { it.substringAfterLast('/').startsWith(name) }
 
 /** S3Mock does not validate signatures, so any secret does. The signer is proven elsewhere. */
 internal const val TEST_PASSWORD: String = "e2e-secret"

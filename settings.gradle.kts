@@ -53,6 +53,14 @@ dependencyResolutionManagement {
         tarballs("native.expat", github, "libexpat/libexpat/releases/download/[classifier]/[module]-[revision].[ext]")
         tarballs("native.dbus", "https://dbus.freedesktop.org/releases/dbus", "[module]-[revision].[ext]")
         tarballs("native.sqlite", "https://sqlite.org", "[classifier]/[module]-[revision].[ext]")
+        // GitHub's tag archive: the file is named for the tag alone, not the project.
+        tarballs("native.opencv", github, "opencv/opencv/archive/refs/tags/[revision].[ext]")
+
+        // Test data for the face adapter (DESIGN §12), fetched and verified like the tarballs: the
+        // models by opencv_zoo commit, and public-domain portraits from NASA's own image library,
+        // by photo number. (Not Wikimedia Commons, which answers Gradle's downloads with 429.)
+        tarballs("testdata.opencv-zoo", "https://media.githubusercontent.com/media/opencv/opencv_zoo", "[revision]/models/[classifier]/[module].[ext]")
+        tarballs("testdata.nasa", "https://images-assets.nasa.gov/image", "[module]/[module]~orig.[ext]")
     }
 }
 

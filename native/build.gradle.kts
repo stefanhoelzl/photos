@@ -245,3 +245,45 @@ val sqlite by tasks.registering(ConfigureMake::class) {
     )
 }
 nativeLibraries.publish("sqlite", sqlite)
+
+// ---------------------------------------------------------------- opencv
+// Face detection and embedding (DESIGN §12): YuNet through FaceDetectorYN and SFace through
+// FaceRecognizerSF, both ONNX models read by dnn with no conversion step, and the five-point
+// alignment `alignCrop` does. Four modules and what they pull in -- calib3d, features2d and flann
+// come with objdetect -- rather than a default build, which would add video I/O, GUI and codecs
+// that duplicate what is already here.
+//
+// Nothing is fetched during the build: IPP's ICV binaries, ITT, ADE and the prebuilt KleidiCV are
+// all off, and protobuf -- dnn's ONNX importer needs it -- is the copy in OpenCV's own 3rdparty
+// tree. zlib likewise, because core insists on one and the upstream-confined find cannot see the
+// sysroot's. dnn runs on OpenCV's own pthreads pool, sized to one thread by the shim: the
+// pipeline is already one worker per core.
+val opencv by tasks.registering(CMakeBuild::class) {
+    source.from(nativeLibraries.source("opencv", "tar.gz"))
+    args.addAll(
+        "-DBUILD_LIST=core,imgproc,dnn,objdetect",
+        "-DBUILD_TESTS=OFF", "-DBUILD_PERF_TESTS=OFF", "-DBUILD_EXAMPLES=OFF", "-DBUILD_DOCS=OFF",
+        "-DBUILD_opencv_apps=OFF", "-DBUILD_JAVA=OFF", "-DBUILD_opencv_python3=OFF",
+        "-DBUILD_opencv_js=OFF", "-DBUILD_opencv_world=OFF",
+        "-DBUILD_PROTOBUF=ON", "-DWITH_PROTOBUF=ON", "-DBUILD_ZLIB=ON",
+        "-DWITH_IPP=OFF", "-DWITH_ITT=OFF", "-DWITH_ADE=OFF", "-DWITH_KLEIDICV=OFF",
+        "-DWITH_OPENCL=OFF", "-DWITH_OPENCLAMDFFT=OFF", "-DWITH_OPENCLAMDBLAS=OFF",
+        "-DWITH_VA=OFF", "-DWITH_VA_INTEL=OFF", "-DWITH_CUDA=OFF", "-DWITH_VULKAN=OFF",
+        "-DWITH_OPENVINO=OFF", "-DWITH_TBB=OFF", "-DWITH_OPENMP=OFF", "-DWITH_PTHREADS_PF=ON",
+        "-DWITH_EIGEN=OFF", "-DWITH_LAPACK=OFF", "-DWITH_FLATBUFFERS=OFF", "-DWITH_TIMVX=OFF",
+        "-DWITH_CANN=OFF", "-DWITH_WEBNN=OFF", "-DWITH_HALIDE=OFF", "-DWITH_ONNX=OFF",
+        "-DOPENCV_DNN_OPENCL=OFF", "-DOPENCV_DNN_CUDA=OFF", "-DOPENCV_DNN_TFLITE=OFF",
+        // No image codecs: the shim hands dnn pixels it already decoded.
+        "-DWITH_JPEG=OFF", "-DWITH_OPENJPEG=OFF", "-DWITH_JASPER=OFF", "-DWITH_PNG=OFF",
+        "-DWITH_SPNG=OFF", "-DWITH_TIFF=OFF", "-DWITH_WEBP=OFF", "-DWITH_OPENEXR=OFF",
+        "-DWITH_AVIF=OFF", "-DWITH_JPEGXL=OFF", "-DWITH_GDAL=OFF", "-DWITH_GDCM=OFF",
+        "-DWITH_IMGCODEC_HDR=OFF", "-DWITH_IMGCODEC_PFM=OFF", "-DWITH_IMGCODEC_PXM=OFF",
+        "-DWITH_IMGCODEC_SUNRASTER=OFF",
+        "-DOPENCV_GENERATE_PKGCONFIG=ON",
+        "-DINSTALL_CREATE_DISTRIB=OFF", "-DOPENCV_ENABLE_NONFREE=OFF",
+        // The install otherwise nests archives under lib/opencv4/3rdparty, beside a cmake
+        // config normalize deletes; flat is what `-L<prefix>/lib` finds.
+        "-DOPENCV_3P_LIB_INSTALL_PATH=lib",
+    )
+}
+nativeLibraries.publish("opencv", opencv)

@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>People mockup</title>
+<style>
+:root{
+  --surface:#000; --low:#101216; --cont:#16191E; --high:#1C2026; --variant:#1C1C1E;
+  --on:#E9EDF2; --muted:#8B96A5; --outline:#3C444E; --outlineVar:#22262C; --primary:#0A84FF;
+  --ok:#30D158; --no:#FF453A;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#2a2d33;color:var(--on);font:13px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif;padding:24px}
+h1{font-size:18px;margin:0 0 4px}
+h2{font-size:15px;margin:36px 0 4px}
+p.note{color:#b8c0cc;margin:0 0 12px;max-width:1000px}
+.win{width:1180px;height:640px;border-radius:10px;overflow:hidden;background:var(--surface);box-shadow:0 12px 40px #0008;display:flex;flex-direction:column;border:1px solid #444}
+.titlebar{height:30px;background:#26292f;display:flex;align-items:center;justify-content:center;color:#aab;font-size:12px;flex:none}
+.body{flex:1;display:flex;min-height:0}
+.side{width:300px;border-right:1px solid var(--outlineVar);display:flex;flex-direction:column;min-height:0;flex:none}
+.main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.hdr{height:44px;display:flex;align-items:center;padding:0 12px;gap:6px;flex:none}
+.hdr .t{font-weight:700;font-size:22px;flex:1}
+.ib{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:var(--on);font-size:15px}
+.search{margin:4px 12px 8px;height:34px;border-radius:8px;background:var(--variant);display:flex;align-items:center;padding:0 10px;gap:8px;color:var(--muted);flex:none}
+.search span{flex:1}
+.list{flex:1;overflow:hidden}
+.h{height:30px;background:var(--low);display:flex;align-items:center;padding:0 12px;font-size:11px;letter-spacing:.06em;color:var(--muted);font-weight:600}
+.row{display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:.5px solid var(--outlineVar)}
+.row .c{width:32px;height:32px;border-radius:6px;flex:none}
+.row .c.face{border-radius:50%}
+.row .n{font-weight:500;flex:1}
+.row .d{color:var(--muted);font-size:11.5px}
+.row .badge{background:var(--primary);color:#fff;border-radius:9px;padding:0 6px;font-size:11px;font-weight:600}
+.row.sel{background:#16324F}
+.row.ind{padding-left:34px}
+.seg{display:flex;border:1px solid var(--outline);border-radius:7px;overflow:hidden}
+.seg span{padding:3px 10px;color:var(--muted);font-size:12px}
+.seg span.on{background:var(--high);color:var(--on)}
+.big{padding:6px 16px 8px;flex:none}
+.big .top{display:flex;justify-content:flex-end;gap:8px;height:36px;align-items:center}
+.big .top .back{margin-right:auto;font-size:15px}
+.big .lt{font-size:30px;font-weight:700;line-height:1.1;display:flex;align-items:center;gap:12px}
+.big .lt .av{width:44px;height:44px;border-radius:50%}
+.big .st{color:var(--muted);font-size:12px;margin-top:2px}
+.sec{display:flex;align-items:center;gap:10px;padding:10px 16px 6px;font-weight:600}
+.sec .m{color:var(--muted);font-weight:400;font-size:12px;flex:1}
+.btn{padding:5px 12px;border-radius:16px;background:var(--high);color:var(--on);font-size:12px;font-weight:600;border:1px solid var(--outline)}
+.btn.p{background:var(--primary);border-color:var(--primary);color:#fff}
+.faces{display:grid;grid-template-columns:repeat(auto-fill,88px);gap:8px;padding:0 16px 8px}
+.fc{width:88px;height:88px;border-radius:8px;position:relative;overflow:hidden}
+.fc::before{content:"";position:absolute;left:24px;top:14px;width:40px;height:50px;border-radius:50%;background:#0003}
+.fc .sc{position:absolute;left:4px;bottom:3px;font-size:10px;color:#fff;text-shadow:0 0 3px #000}
+.fc .act{position:absolute;right:3px;top:3px;display:flex;gap:3px}
+.fc .act i{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-style:normal;font-size:11px;background:#000a}
+.fc .act i.y{color:var(--ok)} .fc .act i.x{color:var(--no)}
+.fc.ld{background:var(--high)!important}.fc.ld::before{display:none}.fc.ld::after{content:"";position:absolute;left:34px;top:34px;width:20px;height:20px;border-radius:50%;border:2px solid var(--outline);border-top-color:var(--primary)}
+.fc.s{outline:3px solid var(--primary);outline-offset:-3px}.fc.s::after{content:"✓";position:absolute;right:4px;top:3px;width:18px;height:18px;border-radius:50%;background:var(--primary);color:#fff;font-size:11px;display:grid;place-items:center}
+.fc.f{box-shadow:0 0 0 2px #fff}
+.fc.off{opacity:.35}
+.fc.off::after{content:"✕";position:absolute;inset:0;display:grid;place-items:center;font-size:30px;color:var(--no)}
+.namebar{margin:4px 16px 10px;display:flex;gap:8px;align-items:center}
+.namebar .in{width:280px;height:34px;border-radius:8px;background:var(--variant);border:1px solid var(--primary);display:flex;align-items:center;padding:0 10px}
+.namebar .in::after{content:"";width:1px;height:16px;background:var(--on);margin-left:1px;animation:b 1s steps(1) infinite}
+@keyframes b{50%{opacity:0}}
+.drop{margin:0 16px;width:280px;background:var(--cont);border:1px solid var(--outline);border-radius:8px;overflow:hidden;position:relative;z-index:2}
+.drop div{padding:6px 10px}
+.drop div.on{background:#16324F}
+.viewer{flex:1;display:grid;place-items:center;background:#000;position:relative}
+.viewer .ph{width:74%;aspect-ratio:3/2;background:linear-gradient(135deg,#7a5a3a,#c69c6d 40%,#3e6b8a 75%,#1d3550);position:relative}
+.box{position:absolute;border:2px solid #fffc;border-radius:4px}
+.box.s{border-style:dashed;border-color:#FFD60A}
+.box.u{border-color:#fff6}
+.box span{position:absolute;left:-2px;top:100%;margin-top:3px;white-space:nowrap;background:#000c;padding:1px 6px;border-radius:4px;font-size:11px}
+.box.s span{color:#FFD60A}
+.pop{position:absolute;background:var(--cont);border:1px solid var(--outline);border-radius:10px;width:220px;padding:6px 0;box-shadow:0 8px 24px #000a}
+.pop div{padding:6px 12px}
+.pop div.on{background:#16324F}
+.pop hr{border:0;border-top:1px solid var(--outlineVar);margin:4px 0}
+.vbar{height:40px;display:flex;align-items:center;gap:10px;padding:0 16px;flex:none}
+.vbar .t{flex:1}
+.legend{color:#b8c0cc;font-size:12px;margin:10px 0 0;max-width:1180px;columns:2;column-gap:32px}
+.legend li{margin-bottom:4px}
+kbd{background:#3a3e46;border-radius:4px;padding:0 5px;font-size:11px}
+</style>
+</head>
+<body>
+<h1>People in the desktop viewer: the agreed v1</h1>
+<p class="note">DESIGN §12. Faces are colour stand-ins. <code>photos-cli sync</code> detects the faces and computes suggestions and unknown groups. The viewer reads them from the CLI's cache, writes your verdicts to <code>$LIBRARY_ROOT/.photos/people.db</code>, and the next sync picks them up. The viewer cuts the face crops from the originals itself and caches them on disk, so a tile may show a spinner the first time. Nothing on the phone in v1.</p>
+
+<h2>1. A person: reviewing suggestions</h2>
+<p class="note">A PEOPLE section above the album tree. "Unknown" is a disclosure, collapsed at launch (▸): → or a click on it expands its groups into the sidebar and ← collapses them, with one sidebar and one pane, the same model as albums. ↑/↓ moves through people and albums alike. The right pane is a person: suggestions from the last sync on top, confirmed faces below. Person management in v1 is rename and merge only. There is no delete and no cover choice: the avatar is the most confident confirmed face.</p>
+<div class="win"><div class="titlebar">Photos</div><div class="body">
+  <div class="side">
+    <div class="hdr"><span class="t">Albums</span><span class="ib">⇅</span><span class="ib">⟳</span></div>
+    <div class="search">🔍 <span>Search</span> 📅</div>
+    <div class="list">
+      <div class="h">PEOPLE</div>
+      <div class="row sel"><div class="c face" style="background:#c98f6b"></div><span class="n">Anna</span><span class="d">412</span><span class="badge">38</span></div>
+      <div class="row"><div class="c face" style="background:#7d9bb8"></div><span class="n">Ben</span><span class="d">230</span><span class="badge">4</span></div>
+      <div class="row"><div class="c face" style="background:#b8a07d"></div><span class="n">Oma</span><span class="d">96</span></div>
+      <div class="row"><div class="c face" style="background:#3a3e46;display:grid;place-items:center;color:var(--muted)">?</div><span class="n">Unknown</span><span class="d">17 groups ▸</span></div>
+      <div class="h">ALBUMS</div>
+      <div class="row"><div class="c" style="background:#4a6b52"></div><div class="n">2024<div class="d">3 albums</div></div></div>
+      <div class="row ind"><div class="c" style="background:#3e6b8a"></div><div class="n">Neuseeland<div class="d">1,755 · Jan–Feb 2024</div></div></div>
+      <div class="row ind"><div class="c" style="background:#8a6b3e"></div><div class="n">Sommer<div class="d">212 · Jul 2024</div></div></div>
+    </div>
+  </div>
+  <div class="main">
+    <div class="big"><div class="top"><span class="btn">Rename</span><span class="btn" style="position:relative;border-color:var(--primary)">Merge into…<span class="pop" style="right:0;top:32px;font-weight:400;z-index:3"><div style="color:var(--muted);font-size:11px">Merge Anna into</div><div class="on">Anna B. <span style="color:var(--muted)">· 12</span></div><div>Ben <span style="color:var(--muted)">· 230</span></div><div>Oma <span style="color:var(--muted)">· 96</span></div></span></span><div class="seg"><span>S</span><span class="on">M</span><span>L</span></div></div>
+      <div class="lt"><div class="av" style="background:#c98f6b"></div>Anna</div>
+      <div class="st">412 confirmed · 38 suggested · 2009–2024</div></div>
+    <div class="sec">Suggested <span class="m">38 faces, most confident first · 5 selected</span></div>
+    <div class="sub" style="padding:0 16px 8px;color:var(--muted);font-size:12px"><kbd>←↑↓→</kbd> move · <kbd>Shift</kbd>+arrows select · <kbd>Ctrl+A</kbd> all · <kbd>Enter</kbd> confirm / unconfirm · <kbd>N</kbd> not Anna · <kbd>I</kbd> ignore · <kbd>Space</kbd> open photo · <kbd>Esc</kbd> clear</div>
+    <div class="faces" id="sugA"></div>
+    <div class="sec">Confirmed <span class="m">412</span><span class="btn">Photos ▸</span></div>
+    <div class="faces" id="confA"></div>
+  </div>
+</div></div>
+<ul class="legend">
+<li><b>Badge</b> = suggestions waiting for review for that person.</li>
+<li><b>Selection:</b> arrows move the focus (white ring), and Shift+arrows extend the selection (blue, ✓), as in the album grid. The mouse does the same: click, Shift-click a range, Ctrl-click one.</li>
+<li><b>Enter</b> toggles the selection: suggested faces become confirmed, and confirmed faces lose their verdict (back to suggested or unknown at the next sync). <b>N</b> rejects the selection for Anna, and <b>I</b> ignores it. Ctrl+A then Enter confirms everything.</li>
+<li><b>Photos ▸</b> shows the person's photos as the normal photo grid (the phone's People mode would show the same thing).</li>
+<li><b>Merge into…</b> moves all of Anna's verdicts to the chosen person and removes Anna. It's how duplicates and wrongly created people are fixed, since there is no delete.</li>
+<li><b>Suggestions</b> are for faces whose best match among a person's confirmed faces is above the threshold and clearly ahead of the next person. Rejected pairs are never suggested again. The score is a debugging aid.</li>
+<li><b>Confirmations</b> take effect at the next sync: that's when the suggestions improve and the badge updates.</li>
+<li><b>Tile spinner</b>: a crop being cut from the original for the first time. After that it comes from the viewer's disk cache.</li>
+</ul>
+
+<h2>2. An unknown group: naming it</h2>
+<p class="note">Cold start. The CLI clustered faces that match nobody. Groups of three or more are listed largest first, and singletons are in "Other". A group opens with <b>every face selected</b>. <kbd>Space</kbd> toggles the focused face out (or back in), and Shift+arrows or Ctrl-click adjust ranges. Typing opens the name field (it autocompletes existing people or creates one), and Enter names the selected faces. Deselected faces stay in the group. <kbd>Delete</kbd> (or <b>Ignore</b>) gives the selection the ignore verdict — not <kbd>I</kbd>, since every letter here belongs to the name (strangers, blurry faces): they're hidden everywhere and never suggested again. </p>
+<div class="win" style="height:520px"><div class="titlebar">Photos</div><div class="body">
+  <div class="side">
+    <div class="hdr"><span class="t">Albums</span><span class="ib">⇅</span><span class="ib">⟳</span></div>
+    <div class="search">🔍 <span>Search</span> 📅</div>
+    <div class="list">
+      <div class="h">PEOPLE</div>
+      <div class="row"><div class="c face" style="background:#c98f6b"></div><span class="n">Anna</span><span class="d">412</span><span class="badge">38</span></div>
+      <div class="row"><div class="c face" style="background:#7d9bb8"></div><span class="n">Ben</span><span class="d">230</span><span class="badge">4</span></div>
+      <div class="row"><div class="c face" style="background:#3a3e46;display:grid;place-items:center;color:var(--muted)">?</div><span class="n">Unknown</span><span class="d">17 groups ▾</span></div>
+      <div class="row ind sel"><div class="c face" style="background:#9a7b6b"></div><span class="n">214 faces</span></div>
+      <div class="row ind"><div class="c face" style="background:#6b7d9a"></div><span class="n">88 faces</span></div>
+      <div class="row ind"><div class="c face" style="background:#7b9a6b"></div><span class="n">41 faces</span></div>
+      <div class="row ind"><div class="c face" style="background:#3a3e46"></div><span class="n">Other</span><span class="d">1,903</span></div>
+    </div>
+  </div>
+  <div class="main">
+    <div class="big"><div class="top"><span class="btn">Ignore</span></div>
+      <div class="lt">Unknown · 214 faces</div>
+      <div class="st">in 61 albums · 2011–2023</div></div>
+    <div class="namebar"><div class="in">Om</div><span class="btn p">Name 211 selected</span><span class="m" style="color:var(--muted)">3 deselected stay in the group</span></div>
+    <div class="drop"><div class="on">Oma <span style="color:var(--muted)">· 96</span></div><div>+ New person “Om”</div></div>
+    <div class="faces" id="grpC" style="margin-top:-60px;padding-top:0"></div>
+  </div>
+</div></div>
+
+<h2>3. The photo viewer with face boxes</h2>
+<p class="note"><kbd>F</kbd> toggles the boxes. Solid white is confirmed, dashed yellow is a suggestion, faint is unknown. Clicking a box opens the same choices as the grids, so any photo can be corrected where you see it. <b>Someone else…</b> opens the name field from the unknown group (autocomplete or a new person). Every choice is a verdict in <code>people.db</code>.</p>
+<div class="win" style="height:520px"><div class="titlebar">Photos</div><div class="body">
+  <div class="side">
+    <div class="hdr"><span class="t">Albums</span><span class="ib">⇅</span><span class="ib">⟳</span></div>
+    <div class="search">🔍 <span>Search</span> 📅</div>
+    <div class="list">
+      <div class="h">ALBUMS</div>
+      <div class="row sel ind"><div class="c" style="background:#8a6b3e"></div><div class="n">Sommer<div class="d">212 · Jul 2024</div></div></div>
+    </div>
+  </div>
+  <div class="main">
+    <div class="vbar"><span>‹</span><div class="t"><b>Sommer</b><div style="color:var(--muted);font-size:12px">4 of 212 · IMG_2210.heic · 14 Jul 2024</div></div><span class="btn" style="border-color:var(--primary)">Faces · F</span></div>
+    <div class="viewer"><div class="ph">
+      <div class="box" style="left:18%;top:22%;width:9%;height:18%"><span>Anna</span></div>
+      <div class="box s" style="left:40%;top:18%;width:10%;height:20%"><span>Ben?</span></div>
+      <div class="box u" style="left:66%;top:30%;width:7%;height:14%"><span style="color:var(--muted)">Unknown</span></div>
+      <div class="pop" style="left:47%;top:42%">
+        <div class="on">✓ Ben</div><div>✕ Not Ben</div><hr><div>Someone else…</div><div>Ignore this face</div>
+      </div>
+    </div></div>
+  </div>
+</div></div>
+
+<script>
+const pal=["#c98f6b","#b57a58","#d4a07e","#a86e4f","#c4906f","#bf8662","#d8ab8a","#9c6a4c"];
+function fill(id,n,opts={}){
+  const el=document.getElementById(id);
+  for(let i=0;i<n;i++){
+    const d=document.createElement("div");d.className="fc";
+    d.style.background=pal[(i*5+id.length)%pal.length];
+    if(opts.score){d.innerHTML=`<span class="sc">${(0.92-i*0.012).toFixed(2)}</span>`}
+    if(opts.focus===i)d.classList.add("f");
+    if(opts.sel&&opts.sel.includes(i))d.classList.add("s");
+    if(opts.allsel&&!(opts.except||[]).includes(i))d.classList.add("s");
+    if(opts.off&&opts.off.includes(i))d.classList.add("off");
+    if(opts.ld&&opts.ld.includes(i))d.classList.add("ld");
+    el.appendChild(d);
+  }
+}
+fill("sugA",18,{score:true,focus:4,sel:[0,1,2,3,4]});
+fill("confA",18,{ld:[14,15,16,17]});
+fill("grpC",27,{allsel:true,except:[4,11,19],focus:11});
+</script>
+</body>
+</html>

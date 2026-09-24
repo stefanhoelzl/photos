@@ -1,6 +1,7 @@
 package net.stho.photos.app
 
 import kotlin.concurrent.Volatile
+import kotlin.time.Instant
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -44,6 +45,10 @@ public class LocalLibrary(
     @Volatile
     private var files: Map<Uuid, Files> = emptyMap()
 
+    /** When each photo was taken, from the shards the last rebuild read — for §12's people order. */
+    @Volatile
+    private var taken: Map<Uuid, Instant> = emptyMap()
+
     /** A pack in the CLI's `packs/`, named as the CLI names it (§7). */
     public fun packPath(id: ObjectId): Path = Path(packs, "$id.db")
 
@@ -77,6 +82,9 @@ public class LocalLibrary(
                 }
             }
         }
+        taken = buildMap {
+            for (shard in read) for (photo in shard.photos) photo.takenAt?.let { put(photo.id, it) }
+        }
         return Rebuilt(summary.albums, summary.photos, skipped)
     }
 
@@ -89,6 +97,11 @@ public class LocalLibrary(
 
     /** A Live Photo's MOV beside its still, when both are on disk. */
     public fun liveVideo(photo: PhotoRow): Path? = files[photo.id]?.video?.takeIf(SystemFileSystem::exists)
+
+    public fun takenAt(photo: Uuid): Instant? = taken[photo]
+
+    /** The original a photo id names, for a face crop (§12) — where only the id is at hand. */
+    public fun original(photo: Uuid): Path? = files[photo]?.still?.takeIf(SystemFileSystem::exists)
 
     override fun close() {
         writer?.close()

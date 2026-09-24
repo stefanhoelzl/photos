@@ -1,0 +1,77 @@
+import kotlin.Boolean;
+import kotlin.time.Instant;
+import kotlin.uuid.Uuid;
+import net.stho.photos.faces.VerdictKind;
+
+-- What `sync` concluded from every album's faces and every verdict (§12), for the desktop viewer:
+-- `people_index.db` in the CLI's cache. Derived, never uploaded, deletable at any moment.
+--
+-- Rebuilt wholesale inside one transaction, like §4's merged database and for the same reason:
+-- the viewer reads it without the run lock, and WAL is what lets it see the old index until the
+-- new one commits.
+CREATE TABLE IF NOT EXISTS index_info (
+  id            INTEGER PRIMARY KEY CHECK (id = 1),
+  model_version TEXT NOT NULL,
+  -- A digest of everything the index was built from: every faces file and the labels snapshot.
+  -- A run whose inputs digest the same skips the rebuild.
+  inputs        TEXT NOT NULL,
+  built_at      INTEGER AS Instant NOT NULL
+);
+
+-- One row per face in the library. No embeddings: the viewer needs boxes and conclusions.
+CREATE TABLE IF NOT EXISTS indexed_face (
+  face_id    TEXT AS Uuid PRIMARY KEY,
+  album_id   TEXT AS Uuid NOT NULL,
+  photo_id   TEXT AS Uuid NOT NULL,
+  x          REAL NOT NULL,
+  y          REAL NOT NULL,
+  w          REAL NOT NULL,
+  h          REAL NOT NULL,
+  score      REAL NOT NULL,
+  -- The verdict this face carried when the index was built; the viewer overlays the labels file
+  -- as it is now.
+  verdict    TEXT AS VerdictKind,
+  -- The confirmed person, or else the suggested one.
+  person_id  TEXT AS Uuid,
+  suggested  INTEGER AS Boolean NOT NULL,
+  similarity REAL,
+  -- The unknown group, for a face that has neither a verdict nor a suggestion. Numbered from 1,
+  -- largest group first; NULL for a face in a group too small to show ("Other").
+  cluster_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS ix_indexed_photo ON indexed_face(photo_id);
+CREATE INDEX IF NOT EXISTS ix_indexed_person ON indexed_face(person_id);
+CREATE INDEX IF NOT EXISTS ix_indexed_cluster ON indexed_face(cluster_id);
+
+-- What the zone holds of `faces/` and `people/`, by digest: a file whose digest matches is not
+-- sent again. Kept across rebuilds.
+CREATE TABLE IF NOT EXISTS uploaded (
+  key    TEXT PRIMARY KEY,
+  sha256 TEXT NOT NULL
+);
+
+selectInfo:
+SELECT model_version, inputs, built_at FROM index_info WHERE id = 1;
+
+replaceInfo:
+INSERT OR REPLACE INTO index_info (id, model_version, inputs, built_at) VALUES (1, ?, ?, ?);
+
+clearFaces:
+DELETE FROM indexed_face;
+
+insertFace:
+INSERT INTO indexed_face (face_id, album_id, photo_id, x, y, w, h, score, verdict, person_id, suggested, similarity, cluster_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+selectFaces:
+SELECT * FROM indexed_face;
+
+selectUploaded:
+SELECT key, sha256 FROM uploaded;
+
+recordUploaded:
+INSERT INTO uploaded (key, sha256) VALUES (?, ?)
+ON CONFLICT(key) DO UPDATE SET sha256 = excluded.sha256;
+
+forgetUploaded:
+DELETE FROM uploaded WHERE key = ?;

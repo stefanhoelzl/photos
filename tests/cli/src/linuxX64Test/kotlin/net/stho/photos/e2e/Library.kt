@@ -1,6 +1,8 @@
 package net.stho.photos.e2e
 
+import kotlinx.io.buffered
 import kotlinx.io.files.Path
+import kotlinx.io.readByteArray
 import kotlinx.io.files.SystemFileSystem
 import net.stho.photos.fixtures.deleteTree
 import net.stho.photos.fixtures.syntheticJpeg
@@ -49,6 +51,13 @@ internal class LibraryBuilder(private val root: Path) {
 }
 
 internal class AlbumBuilder(private val directory: Path) {
+
+    /** A real photograph from the build's fixtures — a NASA portrait, for §12's faces. */
+    fun portrait(name: String, photo: String) {
+        SystemFileSystem.source(Path(faceFixture(photo))).buffered().use { source ->
+            Path(directory, name).write(source.readByteArray())
+        }
+    }
 
     fun jpeg(name: String, width: Int = 320, height: Int = 240, orientation: Int? = null) {
         val bytes = if (orientation == null) {

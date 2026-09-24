@@ -44,7 +44,32 @@ val e2e by tasks.registering {
 val e2eRequested = objects.property<Boolean>().convention(false)
 gradle.taskGraph.whenReady { e2eRequested.set(hasTask(e2e.get())) }
 
+// §12's models, which every scenario's cache is seeded with, and the NASA portraits the faces
+// scenario photographs. The same verified files `:adapter:linux`'s face test uses.
+val faceFixtures = configurations.create("faceFixtures") {
+    isCanBeConsumed = false
+    isTransitive = false
+}
+fun DependencyHandler.fixture(group: String, name: String, version: String, directory: String?, extension: String) =
+    add(faceFixtures.name, "$group:$name:$version") {
+        (this as ExternalModuleDependency).artifact {
+            this.name = name
+            type = extension
+            this.extension = extension
+            if (directory != null) classifier = directory
+        }
+    }
+val zoo = "47534e27c9851bb1128ccc0102f1145e27f23f98"
+dependencies {
+    fixture("testdata.opencv-zoo", "face_detection_yunet_2023mar", zoo, "face_detection_yunet", "onnx")
+    fixture("testdata.opencv-zoo", "face_recognition_sface_2021dec", zoo, "face_recognition_sface", "onnx")
+    for (photo in listOf("s63-20056", "S69-31743", "s64-29926")) fixture("testdata.nasa", photo, "1", null, "jpg")
+}
+
 tasks.named<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest>("linuxX64Test") {
+    val fixtures: FileCollection = faceFixtures
+    inputs.files(fixtures).withPropertyName("faceFixtures")
+    doFirst { environment("PHOTOS_FACE_FIXTURES", fixtures.files.joinToString(":") { it.absolutePath }) }
     val requested = e2eRequested
     onlyIf { requested.get() }
     dependsOn(":app:cli:linkReleaseExecutableLinuxX64")

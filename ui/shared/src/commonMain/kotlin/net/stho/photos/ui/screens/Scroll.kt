@@ -39,6 +39,8 @@ internal suspend fun LazyListState.follow(scroll: Scroll?, keys: State<List<Stri
 internal suspend fun LazyGridState.follow(scroll: Scroll?, keys: State<List<String>>, onScrolled: (String?, Int, Int) -> Unit) {
     val (index, offset) = scroll.target(keys.value)
     scrollToItem(index, offset)
+    // The row beyond first, then the photo itself, so the photo is whole whatever the row did.
+    scroll?.ahead?.takeIf { it in keys.value.indices }?.let { reveal(it) }
     scroll?.reveal?.takeIf { it in keys.value.indices }?.let { reveal(it) }
     settled({ isScrollInProgress }, { firstVisibleItemIndex to firstVisibleItemScrollOffset }, keys, onScrolled)
 }
@@ -47,7 +49,7 @@ internal suspend fun LazyGridState.follow(scroll: Scroll?, keys: State<List<Stri
  * Brings the tile at [index] wholly into view by the shortest scroll: a row above the viewport
  * lands on its top edge, a row below on its bottom edge, and one already whole stays put.
  */
-internal suspend fun LazyGridState.reveal(index: Int) {
+public suspend fun LazyGridState.reveal(index: Int) {
     // Before the first measure there is nothing to look at: wait for the restored layout.
     snapshotFlow { layoutInfo }.first { it.visibleItemsInfo.isNotEmpty() }
     fun tile() = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }

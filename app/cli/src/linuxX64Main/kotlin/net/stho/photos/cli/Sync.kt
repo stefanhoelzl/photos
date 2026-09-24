@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.io.files.Path
 import net.stho.photos.adapter.linux.CImagingBackend
+import net.stho.photos.adapter.linux.CImagingFaces
 import net.stho.photos.adapter.linux.CImagingPipeline
 import net.stho.photos.adapter.linux.CImagingProbe
 import net.stho.photos.adapter.linux.nativeKeyring
@@ -30,8 +31,10 @@ import net.stho.photos.adapter.linux.NativeSqlDrivers
 import net.stho.photos.adapter.linux.PosixInterrupts
 import net.stho.photos.adapter.linux.XdgPaths
 import net.stho.photos.catalog.CatalogSync
+import net.stho.photos.faces.FaceModelStore
 import net.stho.photos.ingest.Credentials
 import net.stho.photos.ingest.ExitCode
+import net.stho.photos.ingest.FacePhase
 import net.stho.photos.ingest.Ingest
 import net.stho.photos.ingest.IngestConfig
 import net.stho.photos.pipeline.MediaClassifier
@@ -203,20 +206,30 @@ internal class SyncCommand(private val console: Console = Console()) : CoreClikt
         // Ktor is the transport abstraction, not a port (§7); the retry policy is installed here so
         // the whole of it is visible where the client is built.
         val http = HttpClient(Curl) { retryStorageFailures() }
+        var faces: CImagingFaces? = null
         try {
             val s3 = S3Client(storage = storage, secretAccessKey = password, http = http)
             // The composition root is the only place that knows which adapter satisfies which
             // port (§7), and the SQL driver is now one of them.
             val drivers = NativeSqlDrivers()
+
+            // §12's models, fetched on first use, before anything is written. A dry run only says
+            // what it would fetch.
+            val store = FaceModelStore(config.cacheRoot, http)
+            val missingModels = store.missing().map { it.name }
+            if (!config.dryRun) faces = CImagingFaces(store.ensure())
+
             CatalogSync(s3, config.cacheRoot, drivers).use { catalog ->
+                val pipeline = CImagingPipeline(config.workRoot.toString(), backend, ids = ids, faces = faces)
                 Ingest(
                     config = config,
                     s3 = s3,
                     catalog = catalog,
-                    pipeline = CImagingPipeline(config.workRoot.toString(), backend, ids = ids),
+                    pipeline = pipeline,
                     classifier = MediaClassifier(probe, backend),
                     ids = ids,
                     drivers = drivers,
+                    faces = FacePhase(config, s3, pipeline, drivers, ids),
                 ).use { ingest ->
                     // Written as it happens, never buffered to the end: a 39-hour run has to be
                     // watchable, and legible in the journal while it is still going. The flow has
@@ -231,7 +244,10 @@ internal class SyncCommand(private val console: Console = Console()) : CoreClikt
                     subscribed.await()
 
                     try {
-                        val report = ingest.run()
+                        var report = ingest.run()
+                        if (config.dryRun) {
+                            report = report.copy(faces = report.faces?.copy(modelsToFetch = missingModels))
+                        }
                         console.clearProgress()
                         reporter.render(report)
                         if (report.hasProblems) ExitCode.COMPLETED_WITH_FAILURES else ExitCode.CLEAN
@@ -241,6 +257,7 @@ internal class SyncCommand(private val console: Console = Console()) : CoreClikt
                 }
             }
         } finally {
+            faces?.close()
             http.close()
         }
     }

@@ -20,6 +20,7 @@ with no server:
 
 Both render identically; only the content differs. §11's desktop viewer has one of its own,
 `mockups/desktop.html` — four states, synthetic like the placeholder.
+§12's people have `mockups/people.html` — three states, synthetic too.
 
 ---
 
@@ -30,8 +31,9 @@ Both render identically; only the content differs. §11's desktop viewer has one
 - **Ingest CLI** — Linux, one self-contained binary (`photos-cli`). Reconciles the zone with a
   local library root in one command, and pulls phone-uploaded albums back down.
 - **iOS app** — browses the zone; can upload new albums, and add photos to existing ones.
-- **Desktop viewer** — Linux, read-only. Browses the library the CLI keeps, from the CLI's own
-  local shards and packs; no credentials, and no network but the map's tiles (§11).
+- **Desktop viewer** — Linux. Browses the library the CLI keeps, from the CLI's own local shards
+  and packs; no credentials, and no network but the map's tiles (§11). It writes one file, the
+  people labels (§12).
 
 All three are Kotlin Multiplatform, over one shared domain (§7). The phone's UI also runs on
 Linux as a harness, which is how it is developed and reviewed (§6); the desktop viewer is a
@@ -248,13 +250,15 @@ Consequence: no edge caching, so on-device caching matters.
 
 ### Keys
 
-The zone holds exactly three prefixes.
+The zone holds exactly five prefixes.
 
 ```
 meta/<album-uuid>.db         per-album catalog shard
 addition/<uuid>.db           transient: photos the phone uploaded into an album, new or existing (§8)
 blob/<sha256>                every derivative and thumbnail pack
 blob/<uuid>                  transient: an upload the phone cannot hash yet
+faces/<album-uuid>.db        an album's faces; read by the laptop only (§12)
+people/people.db             the people and every verdict: a snapshot of the library's labels (§12)
 ```
 
 **`addition/` is its own prefix rather than a folder under `meta/`**, because keys never nest
@@ -297,7 +301,7 @@ import resumes** rather than re-uploading what it finished, and **a profile bump
 thumbnail packs at all**: thumbnails do not change when the image profile does, both encoders
 are byte-deterministic (measured), and identical bytes hash identically. That listing is taken
 after the early return described in §7, so a run that changes nothing still costs only its two
-shard LISTs.
+shard LISTs — and §12's two, on `faces/` and `people/`.
 
 **The cost, paid explicitly: a blob can have more than one referent.** "This album stopped
 pointing at it" is no longer "nobody wants it", so **nothing deletes blobs eagerly any more**.
@@ -596,6 +600,13 @@ expression indexes, `CHECK`, the PRAGMAs above — is older still. There are no 
 `RETURNING`, no window functions, no JSON functions, no FTS and no R-Tree. iOS 18 ships far
 newer than that floor, and so does every desktop distribution. **On iOS the platform's SQLite
 is therefore used as-is.**
+
+**One statement is newer, and it is outside the dialect on purpose.** `sync` snapshots the labels
+file with `VACUUM INTO` (§12), which is SQLite 3.27: a viewer writing at that moment is wholly in
+the copy or wholly not, and the same labels make the same bytes, which is what keeps `people.db`
+from being uploaded on every run. It is issued through the raw driver, so the 3.24 pin never sees
+it, and it runs only in the CLI, whose SQLite is the one `:native` pins — 3.53 — never on a
+phone's.
 
 **The Linux CLI links its own anyway, and the reason is the link, not the SQL.** A distro's
 `libsqlite3.so` is compiled against that distro's glibc — Ubuntu 24.04's needs `GLIBC_2.38` —
@@ -1423,7 +1434,7 @@ port is four methods: `has`, `fetch`, `delete`, `present`.
 > scheduler, the model, the ports and §4's on-device cache live there, and `:ui` is composables
 > and nothing else.
 >
-> The line between them is not taste. `:app:cli` links `:domain` into a 26.7 MiB binary with a
+> The line between them is not taste. `:app:cli` links `:domain` into a 37.1 MiB binary with a
 > glibc 2.19 floor (§7), so `:domain` carries no Compose — while `:app:domain` carries exactly
 > one Compose type, `ImageBitmap`, because a decoded preview is what the viewer draws and
 > converting it twice would be worse.
@@ -1556,10 +1567,11 @@ against its own bundled crosstool-NG toolchain — gcc 8.3.0, glibc 2.19 — so 
 is built with *that same toolchain* rather than the host's, and the result names no symbol
 newer than **GLIBC_2.17**. That is CentOS 7 vintage: older than any desktop distribution still
 in use. **26.7 MiB stripped** — against 80.4 MiB for the statically linked predecessor, which
-is what dynamic libc and a smaller runtime buy. x86-64 only: `linuxX64` is the one native
+is what dynamic libc and a smaller runtime buy — and **37.1 MiB** since §12 linked OpenCV's dnn
+in, with the floor unchanged. x86-64 only: `linuxX64` is the one native
 target declared, so no ARM64 binary has been produced and none is claimed.
 
-**libheif, x265, ffmpeg, libcurl, OpenSSL, SQLite and libstdc++ are all statically linked in.** What
+**libheif, x265, ffmpeg, OpenCV, libcurl, OpenSSL, SQLite and libstdc++ are all statically linked in.** What
 remains dynamic is base-system only — libc, libm, libpthread, libdl, librt, libz, libgcc_s.
 The link passes `--as-needed`, without which Kotlin/Native records a `DT_NEEDED` for every
 library on its default link line whether a symbol is taken from it or not. Four were spurious,
@@ -1580,7 +1592,7 @@ of *libsecret*, not of libdbus, which has no glib dependency at all. The client 
 **Every green CI run publishes the binary.** `./gradlew :app:cli:dist` strips the release
 executable with konan's own `strip` — the toolchain that linked it, so a checkout that can
 build at all can package — into `app/cli/build/dist/photos-cli`, and the workflow uploads that
-as `photos-cli-linux-x64`, kept 7 days. The strip is what makes the artifact the 26.7 MiB above
+as `photos-cli-linux-x64`, kept 7 days. The strip is what makes the artifact the 37.1 MiB above
 rather than the linker's much larger output; the cost is that a crash in a downloaded binary
 prints addresses instead of Kotlin frames, which is the right trade for a build fetched to try
 by hand. It strips to a *copy*: the `.kexe` is left alone, so `:tests:cli` still forks an
@@ -1894,8 +1906,9 @@ what the zone contains; the other two decide nothing at all.
 
 ### Unattended sync (systemd user units)
 
-- `OnCalendar=hourly`, `Persistent=true`, `RandomizedDelaySec=5m`. A no-op run is two LISTs —
-  `meta/` and `addition/` — which is exactly what the ETag cache beside the shards buys.
+- `OnCalendar=hourly`, `Persistent=true`, `RandomizedDelaySec=5m`. A no-op run is four LISTs —
+  `meta/` and `addition/`, which is exactly what the ETag cache beside the shards buys, and
+  §12's `faces/` and `people/`.
 - `SuccessExitStatus=75`, which covers all three deferrals: a keyring still locked before the
   first login, an hourly firing that lands while a long run still holds the lock, and a zone
   that cannot be reached at all — no DNS, no route, a refused connection.
@@ -2445,11 +2458,12 @@ Library-specific open items (unlocated albums, deferred UI) are tracked in `INGE
 > to the map's view, an album on its map, an album's grid, the viewer and the date filter. Tiles
 > and names are synthetic.
 
-**A viewer, and nothing else.** It reads what the CLI keeps and writes nothing anywhere: no
-network, no credentials, no download queue, no cache. **One exception, the basemap's tiles** (see
-*The maps*): fetched from VersaTiles and kept in MapLibre's own cache, exactly as on the phone.
-Nothing the viewer shows *of the library* — a pin, a thumbnail, a count — comes from anywhere but
-the CLI's cache and the library. The CLI is already what keeps a laptop in
+**A viewer, and nothing else.** It reads what the CLI keeps and writes nothing anywhere — but the
+people labels and its own face crops (§12): no network, no credentials, no download queue, no
+cache of what the CLI holds. **One exception, the basemap's tiles** (see *The maps*): fetched from
+VersaTiles and kept in MapLibre's own cache, exactly as on the phone. Nothing the viewer shows *of
+the library* — a pin, a thumbnail, a count — comes from anywhere but the CLI's cache and the
+library. The CLI is already what keeps a laptop in
 step with the zone — `sync` pulls the phone's albums down into the library (§7) — so a second
 thing on the same machine fetching the same bytes would be a second copy of the library with a
 second set of rules for when it is complete. On the desktop, "is this album downloaded?" has no
@@ -2496,14 +2510,16 @@ scale is `GDK_SCALE`, or else the `Xft.dpi` the desktop publishes to X clients, 
 as `sun.java2d.uiScale` before AWT starts: under XWayland the JVM is told nothing about the
 monitor, and on a 2× desktop the window came up at half size. The harness takes both the same way.
 
-**Left, the album list; right, the library's map or one album.** The sidebar is §6's album list
-at its `Compact` size — every level, sticky stacked headers, 22dp indents, the heavier line
-closing each group — with the search field and its calendar above it. A container's header is
+**Left, people and albums; right, the library's map, one album, or a person (§12).** The sidebar
+is headed "Photos". Its search field and calendar sit at the top and narrow people and albums
+alike; beneath them are two sections a click on the heading folds away — PEOPLE (§12), and
+ALBUMS: §6's album list at its `Compact` size, every level, sticky stacked headers, 22dp indents,
+the heavier line closing each group. A container's header is
 **not selectable**: the main pane shows exactly one album, or, with none selected — at launch, and
 after Esc — the library's map.
 
 **Both panes carry §6's two-row nav bar.** The sidebar's holds sort, the map and refresh over the
-large title "Albums"; the map's is "Map" over what it places; the album's holds the grid/map
+large title "Photos"; the map's is "Map" over what it places; the album's holds the grid/map
 toggle and the tile size over the album's name, with its count and date span beneath. Opening a photo collapses the album's bar to one row — back, and the name over
 "4 of 212 · file · date" — to give the photo the height. ~90px per pane is the accepted price of
 one bar design across both products.
@@ -2601,3 +2617,176 @@ rendered headless and driven by key events and a drag across the stand-in basema
 then drives the viewer over what it left — the one test that proves the two agree on where
 things are, down to the pins, placed from the EXIF GPS the fixtures carry.
 
+
+---
+
+## 12. Faces and people
+
+> See **`mockups/people.html`** for the viewer's three states — a person with suggestions to
+> review, an unknown group being named, and a photograph's face boxes. Faces are synthetic. What
+> the real viewer draws, `:tests:desktop`'s people scenario writes to
+> `tests/desktop/build/scenarios/people/`.
+
+**`sync` finds the faces and says who they probably are; the desktop viewer is where a person
+says who they are.** Nothing is labelled by hand face by face: the CLI pre-labels, and the viewer
+confirms, rejects or ignores. The phone gets nothing in the first version — a later, read-only
+People mode (like the map) reads what the zone already holds for it.
+
+**One writer, so nothing to conflict.** The CLI detects and suggests; the viewer confirms; the
+phone will only ever read. §2's write-conflict model is not involved.
+
+### Three kinds of data, kept apart
+
+| what | written by | local | zone |
+|---|---|---|---|
+| persons and verdicts | the viewer | `$LIBRARY_ROOT/.photos/people.db` — the master copy | `people/people.db`, a snapshot `sync` uploads |
+| faces: box, score, landmarks, embedding | `sync` | the CLI's cache, `faces/<album-uuid>.db` | `faces/<album-uuid>.db`, read by the laptop only |
+| suggestions and unknown groups | `sync`, every run that changes an input | the CLI's cache, `people_index.db` | never |
+| face crops | the viewer | `$XDG_CACHE_HOME/photos-viewer/crops/` | never |
+
+**A verdict names its face by photo and box, never by a face id.** Face ids belong to one run of
+one model; a verdict has to outlive both. A re-detected face takes the verdict whose box it
+overlaps by at least half (IoU ≥ 0.5). A face has at most one `confirmed` or `ignored` verdict and
+any number of `rejected` ones; confirming a face as someone withdraws a rejection of that someone.
+The rules live in `Labels`, which both the viewer and `sync` use.
+
+**The labels are the only irreplaceable thing here**, which is why they live in the library
+rather than in any cache: they are backed up with the originals. The walker reserves `.photos/` at
+the library root the way it reserves `.photosignore`. The viewer stays offline and holds no
+credentials; `sync` takes a `VACUUM INTO` snapshot — a viewer writing at that moment is wholly in
+it or wholly not, and the same labels make the same bytes — and uploads it when its digest
+differs from what the zone was last sent.
+
+**Faces are per album** so that one album's change uploads one small file, the way a thumbnail pack
+is per album. The cache holds the truth, since the laptop is the only writer, and the zone its
+copy: a faces file the cache lost comes back from the zone rather than being scanned again, and a
+deleted album's faces file is deleted with it. The index is kept out of the per-album files
+because it changes with every verdict, across the whole library.
+
+**No shard bump, and no rollout order.** Album shards are untouched; the two new prefixes are
+invisible to an older CLI — its sweep lists only `blob/` — and to an older phone. The cost is two
+more LISTs per run than §7's one: a run with nothing else to do still has faces work of its own, a
+backfill or a labelling session since the last run.
+
+### Pre-labelling
+
+**Nothing is learned; every confirmation is one more reference photograph.** A face is compared
+with each person's confirmed faces directly — the best cosine similarity per person, nearest
+neighbour, so a child is matched against the photographs of the same child at the nearest age
+rather than an average of every age. The top person is suggested when that is at least 0.40, at
+least 0.05 ahead of the next person, and the face has not been rejected as them. Rejections count
+against their neighbours too: a face at least as close to a face rejected as someone as to any of
+their confirmed faces is not suggested as them.
+
+**Cold start is groups, not single faces.** Faces nobody is suggested for are grouped — greedily
+around group centres at 0.45, best-detected first, then groups with alike centres merged — and a
+group of three or more is listed, largest first; the rest are "Other". Naming a group confirms the
+faces selected in it. Average-linkage agglomeration was the first choice and is rejected on
+memory: it holds every pair, and a first run's unknown faces run to tens of thousands.
+
+**Every threshold is a starting point.** SFace's own "same person" threshold is 0.363; the
+suggestion threshold sits above it because a wrong suggestion costs a click, and the grouping one
+above that because a mixed group costs several. Tuning them is the evaluation below.
+
+### Inference
+
+**OpenCV, a minimal static build** — core, imgproc, dnn and objdetect, and what objdetect pulls in
+— in `:native` like everything else, with its own protobuf and zlib and nothing fetched during the
+build. It reads ONNX directly, and `FaceDetectorYN`, `FaceRecognizerSF` and their five-point
+`alignCrop` mean the shim's own share is one C++ unit, `pi_face.cpp`, behind the same flat C
+header. 10.4 MiB of the shipped binary, measured stripped. Only the Linux CLI runs inference;
+the viewer and the phone never do.
+
+**Models: YuNet and SFace first, and the final choice by measurement.** Both are from OpenCV's
+model zoo, MIT and Apache licensed, pinned by zoo commit and SHA-256 in `FaceModels`. The
+candidate to beat is InsightFace's SCRFD with ArcFace, whose weights are licensed for
+non-commercial research only. Confirmed verdicts are model-independent boxes, so the faces a person
+confirms become the evaluation set: re-embed them with each candidate and compare suggestion
+precision and recall. Switching is a new `FaceModels.VERSION`, and the next run scans the library
+again with it — every scanned photo is recorded against the version.
+
+**Fetched on first use, not linked in.** 38 MB of weights would more than double a 27 MB binary.
+`sync` fetches them into `models/` in its cache before anything is written, checks the digest, and
+lands them by `atomicMove`. An answer that is wrong — an HTTP error, a digest mismatch — aborts the
+run (exit 3): a broken install should surface through `OnFailure=`, not sync photographs and
+quietly leave faces behind. Nothing answering at all is §1's "not now" and defers (75), as an
+unreachable zone does. `--dry-run` fetches nothing and says what it would.
+
+**The original, decoded once.** A new photograph's faces come from the decode its derivatives are
+made from, at §5's 3200 px; detection runs on a copy fitted to 1280 px, so small faces in a group
+photograph survive, and each face is aligned and embedded from the full decode. A Live Photo is its
+still; a CR2 is its carved JPEG; video is left out of the first version. Photographs already in the
+library are scanned by a `faces` step after everything else a run does — the backfill — on
+ingest's encoder threads, with no time budget, counted like the other phases. A photo with no
+faces is recorded as scanned too, so nothing is decoded twice. A file that will not decode is
+reported once and recorded; a file not on disk yet is tried again next run.
+
+### In the desktop viewer
+
+**The sidebar is "Photos"**: the search field at its top filters people by name and albums alike
+— "Ignored" and "Unknown" step aside while it has text — and PEOPLE and ALBUMS are headed
+sections that a click on the heading folds away. **A PEOPLE section above the album tree**: every person with their confirmed count and a badge
+for suggestions waiting — the person with the most recent confirmed photograph first, so the
+people in this year's albums are at the top — then "Unknown", which ↑/↓ skip until → or a click expands it to its
+groups. Below the people, "Ignored" keeps every ignored face for a second look: Enter there takes
+the ignore back, and the naming menu names a face outright. Selecting a person or a group puts its faces in the album pane, as selecting an album puts
+its photos there.
+
+**The face grids are selection-based**, like the album grid's focus ring. Arrows move the focus,
+Shift+arrows select a range from where it started, Ctrl+A selects all, Esc clears; the mouse does
+the same with click, Shift-click and Ctrl-click, and a double click opens the face's
+photograph in its album — Esc comes back to the face. On a person, suggestions come first, most
+alike first, then the confirmed faces; Space opens the focused face's photograph there. Enter
+confirms the selection as them, or, when all of it already is, withdraws the confirmations, so the
+faces fall back to whatever the next sync suggests. N rejects the selection for them and I ignores
+it. A decision clears the selection and moves the focus to the face after the last one decided —
+the next suggestion to look at — rather than following the confirmed faces to the bottom of the
+grid. Ctrl+Z takes decisions back, one at a time, for as long as the viewer is open: each
+decision records the verdicts it added and those it replaced, and undoing it removes the one and
+restores the other. A person's grid pins its section's header — Suggested or Confirmed — to its
+top while it scrolls. A right-click opens a menu over the
+selection — or over the face clicked, selected alone, when it is not in it — with a name field that
+narrows the people already named, a new person when nothing matches, "not them" on a person, and
+ignore. Ctrl+Enter opens it at the focused face — and so do the Menu key and Shift+F10, the
+desktop's own; Ctrl alone is not a key of its own here, being Ctrl-click's and Ctrl+A's. An unknown group opens with every face selected,
+since a group is mostly one person: Space takes the focused face in or out, typing opens the name
+field — completing the people already named, or creating one — and Enter names the selection.
+Delete ignores it there, because every letter on a group belongs to the name.
+
+**Decisions show at once; suggestions move at the next sync.** The viewer lays the labels file as
+it is now over the index `sync` built: a face confirmed here leaves its group and joins its person
+immediately, a face rejected here stops being suggested immediately, and nothing is suggested that
+`sync` did not suggest.
+
+**People are renamed and merged, not deleted.** Merging moves every verdict to the other person
+and removes the first, which also undoes a person created by mistake. A person's avatar is their
+most confident confirmed face; there is no cover choice in the first version.
+
+**F draws the open photograph's faces** — solid for a confirmed face, dashed for a suggestion,
+faint for an unknown one — inside the viewer's zoom, so they stay on the faces. A click on a box
+offers what the grids do: confirm the suggestion, not this person, someone else by name, or
+ignore.
+
+**Crops are cut on demand** from the original, decoded to 2048 px by the viewer's own shim, and
+kept in the viewer's cache named by photo and box. An original never changes (§7), so a crop never
+goes stale; the directory can be deleted at any moment.
+
+### Built and tested
+
+The `FaceBackend` of this design is `Pipeline.findFaces` and `Derivatives.faces` rather than a port
+of its own: face detection needs a decode, and the pipeline is the port that owns decoding.
+
+- `:domain`'s tests cover the matching — suggestion, margin, rejection and its neighbours, the
+  later verdict winning, a verdict finding a re-detected face and not the one beside it, grouping —
+  and the labels file's rules, on made-to-measure embeddings.
+- `:adapter:linux`'s `FacesTest` runs the real OpenCV, YuNet and SFace on public-domain NASA
+  portraits: Mae Jemison in 1987 and 1992, Buzz Aldrin in 1963 and 1969, Michael Collins in 1964
+  and 1969. Aldrin and Collins are the hard pair. Each person's two portraits are closer than any
+  two people's, and above SFace's own threshold. The portraits are fetched from NASA's image
+  library and verified like the tarballs; Wikimedia Commons answers Gradle's downloads with 429.
+- `:tests:cli`'s `FacesTest` runs the shipped binary: faces uploaded, a confirmation made as the
+  viewer makes one, the next run's suggestion for the other Aldrin and none for Collins, a quiet
+  run after, and the album's faces gone with the album. Every scenario's cache is seeded with the
+  pinned models, so no scenario fetches 38 MB.
+- `:tests:desktop`'s people scenario syncs the portraits, names a face in "Other", syncs again,
+  confirms the suggestion with Space and opens the photograph with its boxes.

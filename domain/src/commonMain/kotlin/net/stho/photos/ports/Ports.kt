@@ -8,6 +8,7 @@ import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.flow.SharedFlow
 import net.stho.photos.exif.ExifTags
+import net.stho.photos.faces.DetectedFace
 import net.stho.photos.pipeline.Derivatives
 import net.stho.photos.pipeline.MediaFormat
 import net.stho.photos.pipeline.MediaItem
@@ -218,6 +219,16 @@ public interface Pipeline {
     public val events: SharedFlow<PipelineEvent>
 
     public fun derive(item: MediaItem): Derivatives
+
+    /**
+     * The faces in one photograph, decoded afresh — §12's backfill, for photos derived before
+     * faces were looked for. A photo being derived gets its faces in [Derivatives.faces] instead,
+     * from the decode it already has.
+     *
+     * Null when this pipeline was built without face models. Throws [MediaUnreadable] for a file
+     * that cannot be decoded. Safe to call from many threads at once, like [derive].
+     */
+    public fun findFaces(item: MediaItem): List<DetectedFace>? = null
 }
 
 /**

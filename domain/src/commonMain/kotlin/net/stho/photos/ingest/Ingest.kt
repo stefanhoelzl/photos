@@ -24,6 +24,7 @@ import net.stho.photos.IngestAbort
 import net.stho.photos.catalog.AlbumInfo
 import net.stho.photos.catalog.AlbumState
 import net.stho.photos.derivative.DerivativeSpec
+import net.stho.photos.faces.DetectedFace
 import net.stho.photos.catalog.BLOB_PREFIX
 import net.stho.photos.catalog.CatalogSync
 import net.stho.photos.catalog.SHARD_SCHEMA_VERSION
@@ -75,6 +76,8 @@ public class Ingest(
     private val ids: Ids,
     private val drivers: SqlDrivers,
     private val clock: Clock = Clock.System,
+    /** §12's faces step. Null runs without looking for faces. */
+    private val faces: FacePhase? = null,
 ) : AutoCloseable {
 
     /**
@@ -129,6 +132,12 @@ public class Ingest(
     /** Every pack the shards name, kept on disk for the desktop viewer (§7, §11). */
     private val packs = LocalPacks(config.cacheRoot, s3)
 
+    /**
+     * The faces this run's derives found, by the row id each photo ended up with — so the faces
+     * step does not decode a new photograph a second time (§12).
+     */
+    private val derivedFaces = mutableMapOf<Uuid, List<DetectedFace>>()
+
     // ------------------------------------------------------------------------------- the run
 
     public suspend fun run(): IngestReport {
@@ -177,6 +186,7 @@ public class Ingest(
         if (config.dryRun) {
             fillDryRun(report, plan)
             sweep(report, refreshed.shards, refreshed.report.unreadableShards, dryRun = true)
+            faces?.let { report.faces = IngestReport.FacesOutcome(toScan = it.pendingCount(refreshed.shards)) }
             return report.build()
         }
 
@@ -190,6 +200,13 @@ public class Ingest(
             // costs the one LIST. The first run after packs started being kept is the one that
             // backfills them.
             keepPacks(report, refreshed.shards, refreshed.report.unreadableShards.size)
+            // Not a no-op for faces: a backfill, or labels changed since the last run, is work of
+            // its own — at the price of two more LISTs than §7's one.
+            try {
+                findFaces(report, refreshed.shards, refreshed.report.unreadableShards.size)
+            } finally {
+                config.workRoot.deleteRecursively()
+            }
             return report.build()
         }
 
@@ -243,6 +260,7 @@ public class Ingest(
             val after = catalog.refresh()
             sweep(report, after.shards, after.report.unreadableShards, dryRun = false)
             keepPacks(report, after.shards, after.report.unreadableShards.size)
+            findFaces(report, after.shards, after.report.unreadableShards.size)
         } finally {
             config.workRoot.deleteRecursively()
         }
@@ -386,9 +404,10 @@ public class Ingest(
             val previous = sources.associateBy(PhotoRow::diskFilename)
             produced.map { made ->
                 val before = previous[made.row.diskFilename] ?: return@map made
-                Produced(made.row.copy(id = before.id), made.thumbnail, made.uploadedBytes)
+                Produced(made.row.copy(id = before.id), made.thumbnail, made.uploadedBytes, made.faces)
             }
         }
+        for (made in carried) made.faces?.let { derivedFaces[made.row.id] = it }
 
         try {
             val rows = kept + carried.map(Produced::row)
@@ -452,6 +471,7 @@ public class Ingest(
         val row: PhotoRow,
         val thumbnail: ByteArray,
         val uploadedBytes: Long,
+        val faces: List<DetectedFace>? = null,
     )
 
     /**
@@ -549,7 +569,7 @@ public class Ingest(
         bytes += upload(imageId, Body.Bytes(derived.image), report)
         row = row.copy(imageId = imageId)
 
-        return Produced(row, derived.thumbnail, bytes)
+        return Produced(row, derived.thumbnail, bytes, derived.faces)
     }
 
     /**
@@ -1046,6 +1066,14 @@ public class Ingest(
         if (!dryRun) deleteAll(doomed.map { it.key }, swallowing = false)
     }
 
+    /** §12's step, over the shards as they now stand. */
+    private suspend fun findFaces(report: ReportBuilder, shards: List<Shard>, unreadable: Int) {
+        val phase = faces ?: return
+        val outcome = phase.run(shards, unreadable, derivedFaces, { encoders.value }) { emit(IngestEvent.Status(it)) }
+        report.faces = outcome.summary
+        report.failures += outcome.failures
+    }
+
     /** Brings `packs/` in line with the shards, and says what that took. */
     private suspend fun keepPacks(report: ReportBuilder, shards: List<Shard>, unreadable: Int) {
         val kept = packs.reconcile(shards, unreadable)
@@ -1158,7 +1186,10 @@ private class ReportBuilder {
     var removedPacks = 0
     var dryRun = false
 
+    var faces: IngestReport.FacesOutcome? = null
+
     fun build(): IngestReport = IngestReport(
+        faces = faces,
         albums = albums.toList(),
         deletedAlbums = deletedAlbums.toList(),
         pulledAlbums = pulledAlbums.toList(),
