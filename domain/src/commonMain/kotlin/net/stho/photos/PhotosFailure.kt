@@ -245,6 +245,16 @@ public sealed class IngestAbort(message: String) : PhotosFailure(message) {
      */
     public class UnidentifiableShard(public val detail: String) :
         IngestAbort("a shard could not be identified: $detail")
+
+    /**
+     * A face model could not be brought to disk, or arrived with the wrong bytes (§12).
+     *
+     * A broken install rather than a bad file: every run needs the models, so a run without them
+     * refuses to start instead of syncing photographs and quietly leaving faces behind. Fetched
+     * before anything is written, which is what makes it this tier.
+     */
+    public class FaceModelUnavailable(public val model: String, public val detail: String) :
+        IngestAbort("face model $model is unavailable: $detail")
 }
 
 private fun describeMismatches(mismatches: List<ByteMismatch>): String =

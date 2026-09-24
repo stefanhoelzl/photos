@@ -4,12 +4,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -55,6 +57,8 @@ public fun PhotoGrid(
     onOpen: (index: Int) -> Unit,
     /** The tile the arrow keys are on, outlined in the active colour (§11); null when none is. */
     focused: Int? = null,
+    /** The desktop's scroll bar, drawn over the grid's right edge; the phone passes none. */
+    scrollbar: (@Composable BoxScope.(LazyGridState) -> Unit)? = null,
 ) {
     if (photos.isEmpty()) {
         EmptyState("No photos in this album")
@@ -66,14 +70,17 @@ public fun PhotoGrid(
     val report by rememberUpdatedState(onScrolled)
     // Once on arrival, and again whenever the model moves the grid; scrolls of its own are reported.
     LaunchedEffect(scroll?.moves) { grid.follow(scroll, keys) { key, index, offset -> report(key, index, offset) } }
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(columns),
-        state = grid,
-        modifier = Modifier.fillMaxSize().padding(horizontal = 2.dp).densityGesture(onDensity),
-    ) {
-        itemsIndexed(photos, key = { _, photo -> photo.id.toString() }) { index, photo ->
-            Tile(photo, thumbnails[photo.id], focused = index == focused) { onOpen(index) }
+    Box(Modifier.fillMaxSize()) {
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(columns),
+            state = grid,
+            modifier = Modifier.fillMaxSize().padding(horizontal = 2.dp).densityGesture(onDensity),
+        ) {
+            itemsIndexed(photos, key = { _, photo -> photo.id.toString() }) { index, photo ->
+                Tile(photo, thumbnails[photo.id], focused = index == focused) { onOpen(index) }
+            }
         }
+        scrollbar?.invoke(this, grid)
     }
 }
 

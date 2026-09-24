@@ -33,7 +33,10 @@ public class ShimPreviewDecoder(private val imaging: FfmImaging) : PreviewDecode
  * The shim hands back interleaved RGB or RGBA, top-down; Skia wants a colour type named up
  * front, so the channel count picks one rather than being assumed.
  */
-public fun FfmImaging.Decoded.toImageBitmap(): ImageBitmap {
+public fun FfmImaging.Decoded.toImageBitmap(): ImageBitmap = toSkiaImage().toComposeImageBitmap()
+
+/** The same pixels as a Skia image, for a caller that draws or encodes rather than shows them. */
+public fun FfmImaging.Decoded.toSkiaImage(): Image {
     val info = ImageInfo(
         width = width,
         height = height,
@@ -41,7 +44,7 @@ public fun FfmImaging.Decoded.toImageBitmap(): ImageBitmap {
         alphaType = ColorAlphaType.UNPREMUL,
     )
     val rgba = if (channels == 4) pixels else pixels.toRgbx()
-    return Image.makeRaster(info, rgba, width * 4).toComposeImageBitmap()
+    return Image.makeRaster(info, rgba, width * 4)
 }
 
 /** Skia has no 24-bit raster type, so three-channel pixels get an opaque fourth. */

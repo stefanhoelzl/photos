@@ -24,7 +24,7 @@ download queue and no screen to keep in order.
 | `:app:map` | the map's basemap and nothing else: MapLibre Native drawing VersaTiles' vector tiles behind `:ui:shared`'s `BaseMap` port. The harness window, the desktop viewer's window and the phone install it; a headless render — `/screenshot`, `:tests:app`, `:tests:desktop` — keeps `:ui:shared`'s plain stand-in, since MapLibre needs a window to present into |
 | `:app:media` | media for both Linux roots: libvlc behind the `VideoSurface` port, the decode shim's pixels as Compose images, and the offscreen frame behind `/screenshot` |
 | `:adapter:linux` | the imaging backend over `native/CImaging`, the Secret Service — one protocol over two transports, libdbus for the CLI and dbus-java for the app — the flock run lock, XDG paths |
-| `:native` | the native libraries `:adapter:linux` and `:domain` link — libjpeg-turbo, lcms2, libexif, libde265, x265, libheif, ffmpeg, expat, libdbus and SQLite — each built from a pinned tarball with Kotlin/Native's gcc toolchain, one task per library, and served from the build cache after the first build |
+| `:native` | the native libraries `:adapter:linux` and `:domain` link — libjpeg-turbo, lcms2, libexif, libde265, x265, libheif, ffmpeg, expat, libdbus, SQLite and OpenCV's dnn for §12's faces — each built from a pinned tarball with Kotlin/Native's gcc toolchain, one task per library, and served from the build cache after the first build |
 | `:adapter:ios` | the phone's half of the same ports: the SQL driver over the platform SQLite, and the app container's directories |
 | `:app:cli` | the shipped `photos-cli`: argument parsing, a composition root, exit codes |
 | `:app:control` | the control server the roots start when driven by a test or an agent — `/state`, navigation, cache actions, the date filter (`/calendar`, `/range`), the map (`/map` and its camera, taps and sheet), `/upload/…`, `/setup`, `/logout`; and the desktop viewer's own, `ViewerControlServer`, with its maps; kept out of the iOS release build |
@@ -43,7 +43,7 @@ Not modules, and not Kotlin:
 
 | | |
 |---|---|
-| `native/CImaging` | ~2,200 lines of our own C. libjpeg reports errors through `setjmp`/`longjmp`, which no managed runtime can safely be on the far end of, so the error handler has to live in C — and once it does, one flat API over five libraries costs nothing more. Bound by cinterop with no glue layer. |
+| `native/CImaging` | ~2,200 lines of our own C. libjpeg reports errors through `setjmp`/`longjmp`, which no managed runtime can safely be on the far end of, so the error handler has to live in C — and once it does, one flat API over five libraries costs nothing more. Bound by cinterop with no glue layer. One C++ unit beside it, `pi_face.cpp`, because OpenCV's API is C++; nothing C++ crosses the header. |
 | `testdata/sigv4` | AWS's published SigV4 vectors, 38 cases. The only thing that proves the signer. |
 
 ## Toolchain
@@ -204,8 +204,9 @@ value, which is *absent* and which is *not now*.
 
 ## The shipped binary
 
-**26.7 MiB stripped, glibc floor `GLIBC_2.17`** — older than any desktop distribution still in
-use. libheif, x265, ffmpeg, libcurl, OpenSSL, SQLite and libstdc++ are all linked in; what
+**37.1 MiB stripped, glibc floor `GLIBC_2.17`** — older than any desktop distribution still in
+use; 10.4 MiB of it is OpenCV's dnn, for §12's faces. libheif, x265, ffmpeg, OpenCV, libcurl,
+OpenSSL, SQLite and libstdc++ are all linked in; what
 remains dynamic is base-system only:
 
 ```
@@ -269,10 +270,15 @@ these are the short forms.
   the pipeline extracts it and grafts the RAW's EXIF on, rather than demosaicing.
 - **A C shim is not stylistic.** libjpeg reports errors through `setjmp`/`longjmp`, which no
   managed runtime can safely be on the far end of, so the error handler has to live in C.
-- **Fixtures are generated, never committed.** The library is personal data, and a committed
-  corpus goes stale in a way generated inputs cannot.
+- **Fixtures are generated or pinned, never committed.** The library is personal data, and a
+  committed corpus goes stale in a way generated inputs cannot. The one exception to *generated*
+  is faces, which no synthetic image has: the face tests use public-domain NASA portraits and the
+  face models, fetched and checked against pinned digests like `:native`'s tarballs. No
+  photograph from the library is ever used.
 - **The SQL floor is enforced, not asserted.** The query dialect is pinned to SQLite 3.24 — the
   oldest release with `ON CONFLICT … DO UPDATE`, the newest syntax anything here uses — so SQL
-  that would fail on an older device's library fails the build instead. And the two libraries
+  that would fail on an older device's library fails the build instead. One statement stands
+  outside it, named in DESIGN §3: the CLI's `VACUUM INTO` snapshot of the labels, which runs only
+  against the CLI's own pinned SQLite. And the two libraries
   that floor spans are both run: the catalog suites execute against the pinned SQLite on Linux
   and against **iOS's own** on a simulator, every CI run.

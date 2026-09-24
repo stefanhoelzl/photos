@@ -9,12 +9,13 @@ plugins {
 // the D-Bus keyring, the flock run lock and the XDG paths.
 
 // What the shim and the two interops include; `:native` brings along what these link against.
-native.link("heif", "ffmpeg", "jpeg", "lcms2", "exif", "sqlite", "dbus")
+native.link("heif", "ffmpeg", "jpeg", "lcms2", "exif", "sqlite", "dbus", "opencv")
 
 val shimSource: File = rootDir.resolve("native/CImaging")
 val shimOut = layout.buildDirectory.dir("shim")
 val nativeLibs: FileCollection = native.libraries
-val nativeIncludes = native.includeFlags()
+// OpenCV installs its headers one level down, as `include/opencv4/opencv2/...`.
+val nativeIncludes = native.includeFlags("include/opencv4")
 val nativeLibraryPaths = native.libraryFlags
 
 /**
@@ -34,6 +35,7 @@ val buildShim by tasks.registering {
     // Locals rather than the script's vals, so the action does not capture the script object --
     // which the configuration cache cannot store. The same goes for `buildHostShim`.
     val gcc = native.tool("gcc")
+    val gxx = native.tool("g++")
     val ar = native.tool("ar")
     val shimOut = shimOut
     val shimSource = shimSource
@@ -41,12 +43,14 @@ val buildShim by tasks.registering {
     val providers = providers
     doLast {
         val out = shimOut.get().asFile.apply { mkdirs() }
-        val sources = shimSource.listFiles { f -> f.name.endsWith(".c") }!!.sortedBy { it.name }
+        // C, and the one C++ unit OpenCV's API forces: pi_face.cpp.
+        val sources = shimSource.listFiles { f -> f.name.endsWith(".c") || f.name.endsWith(".cpp") }!!.sortedBy { it.name }
 
         sources.forEach { c ->
+            val compiler = if (c.name.endsWith(".cpp")) listOf(gxx.get(), "-std=c++11") else listOf(gcc.get(), "-std=c11")
             providers.exec {
                 commandLine(
-                    listOf(gcc.get(), "-O2", "-fPIC", "-std=c11", "-c", c.absolutePath,
+                    compiler + listOf("-O2", "-fPIC", "-c", c.absolutePath,
                         "-I", shimSource.resolve("include").absolutePath) +
                         nativeIncludes.get() +
                         listOf("-o", out.resolve(c.nameWithoutExtension + ".o").absolutePath),
@@ -135,7 +139,7 @@ val imagingDef by tasks.registering(WriteText::class) {
             compilerOpts = -I$shimInclude ${includes.joinToString(" ")}
             staticLibraries = libphotosimaging.a
             libraryPaths = ${shimOut.get().asFile}
-            linkerOpts = ${paths.joinToString(" ")} --start-group -lheif -lde265 -lx265 -lavfilter -lavformat -lavcodec -lswscale -lswresample -lavutil -ljpeg -llcms2 -lexif -lsqlite3 -lz --end-group $libstdcxx -lm -lpthread -lrt -ldl
+            linkerOpts = ${paths.joinToString(" ")} --start-group -lheif -lde265 -lx265 -lavfilter -lavformat -lavcodec -lswscale -lswresample -lavutil -ljpeg -llcms2 -lexif -lsqlite3 -lopencv_objdetect -lopencv_calib3d -lopencv_features2d -lopencv_dnn -lopencv_imgproc -lopencv_flann -lopencv_core -llibprotobuf -lz --end-group $libstdcxx -lm -lpthread -lrt -ldl
 
             """.trimIndent()
         }
@@ -336,6 +340,38 @@ kotlin {
             implementation(project(":tests:fixtures"))
         }
     }
+}
+
+// §12's face models and a handful of real faces, for the one test that runs the real detector and
+// embedder: two NASA portraits each of three astronauts, years apart. Resolved as verified
+// dependencies, like `:native`'s tarballs, and handed to the test binary through the environment.
+val faceFixtures = configurations.create("faceFixtures") {
+    description = "Face models and public-domain portraits for the face adapter test."
+    isCanBeConsumed = false
+    isTransitive = false
+}
+fun DependencyHandler.fixture(group: String, name: String, version: String, directory: String?, extension: String) =
+    add(faceFixtures.name, "$group:$name:$version") {
+        (this as ExternalModuleDependency).artifact {
+            this.name = name
+            type = extension
+            this.extension = extension
+            if (directory != null) classifier = directory
+        }
+    }
+val zoo = "47534e27c9851bb1128ccc0102f1145e27f23f98"
+dependencies {
+    fixture("testdata.opencv-zoo", "face_detection_yunet_2023mar", zoo, "face_detection_yunet", "onnx")
+    fixture("testdata.opencv-zoo", "face_recognition_sface_2021dec", zoo, "face_recognition_sface", "onnx")
+    // A NASA photo number names one photograph for good, so the version is only a label.
+    for (photo in listOf("s87-45893", "S92-40463", "s63-20056", "S69-31743", "s64-29926", "S69-31742")) {
+        fixture("testdata.nasa", photo, "1", null, "jpg")
+    }
+}
+tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest>().configureEach {
+    val fixtures: FileCollection = faceFixtures
+    inputs.files(fixtures).withPropertyName("faceFixtures")
+    doFirst { environment("PHOTOS_FACE_FIXTURES", fixtures.files.joinToString(":") { it.absolutePath }) }
 }
 
 // The FFM tests load the shared object by path rather than by `System.loadLibrary`, so the

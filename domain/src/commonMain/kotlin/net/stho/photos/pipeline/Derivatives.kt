@@ -1,6 +1,7 @@
 package net.stho.photos.pipeline
 
 import net.stho.photos.exif.ExifTags
+import net.stho.photos.faces.DetectedFace
 import net.stho.photos.model.PhotoRow
 
 /**
@@ -30,6 +31,11 @@ public data class Derivatives(
     public val liveStill: String? = null,
     /** A Live Photo's paired MOV, uploaded as-is so `PHLivePhotoView` gets what it expects. */
     public val liveVideo: String? = null,
+    /**
+     * The faces in the still, found in the same decode (§12). Null when none were looked for — a
+     * video, or a pipeline without face models — which is not the same as an empty list.
+     */
+    public val faces: List<DetectedFace>? = null,
 )
 
 /** A stage completing, for a caller that wants to show progress. */

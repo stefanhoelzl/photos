@@ -162,7 +162,34 @@ internal class ConsoleReporter(private val console: Console) {
             )
         }
 
+        report.faces?.let { faces(it, report.dryRun) }
+
         console.line("── " + summary(report).joinToString(", "))
+    }
+
+    /**
+     * §12's step, in one line — and silent on an hourly run where nothing about faces moved, like
+     * the packs line above.
+     */
+    private fun faces(faces: IngestReport.FacesOutcome, dryRun: Boolean) {
+        if (dryRun) {
+            val parts = buildList {
+                if (faces.modelsToFetch.isNotEmpty()) add("would fetch ${faces.modelsToFetch.joinToString()}")
+                if (faces.toScan > 0) add("${faces.toScan} photo(s) to scan for faces")
+            }
+            if (parts.isNotEmpty()) console.line("faces: " + parts.joinToString(", "))
+            return
+        }
+        val moved = faces.scannedPhotos > 0 || faces.uploadedFiles > 0 || faces.deletedFiles > 0 ||
+            faces.labelsUploaded || faces.indexRebuilt
+        if (!moved) return
+        val parts = buildList {
+            if (faces.scannedPhotos > 0) add("${faces.scannedPhotos} photo(s) scanned, ${faces.foundFaces} face(s) found")
+            if (faces.labelsUploaded) add("labels uploaded")
+            add("${faces.totalFaces} faces: ${faces.confirmed} confirmed, ${faces.suggested} suggested, ${faces.groups} unknown group(s)")
+            add("${faces.people} people")
+        }
+        console.line("faces: " + parts.joinToString(", "))
     }
 }
 

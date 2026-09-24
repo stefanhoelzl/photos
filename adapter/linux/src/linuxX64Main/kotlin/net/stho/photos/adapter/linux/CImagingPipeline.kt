@@ -14,6 +14,7 @@ import kotlinx.io.files.SystemFileSystem
 import net.stho.photos.derivative.DerivativeSpec
 import net.stho.photos.exif.ExifTags
 import net.stho.photos.exif.toPhotoRow
+import net.stho.photos.faces.DetectedFace
 import net.stho.photos.model.MediaType
 import net.stho.photos.pipeline.Derivatives
 import net.stho.photos.pipeline.MediaItem
@@ -47,6 +48,8 @@ public class CImagingPipeline(
     private val encoderThreads: Int = 1,
     /** Row identity. Injected so a run's rows can be asserted on at all (§7). */
     private val ids: Ids = Ids { Uuid.random() },
+    /** §12's face models. Null derives without looking for faces. */
+    private val faces: CImagingFaces? = null,
 ) : Pipeline {
 
     // `bufferingNewest(256)` by another name: a caller that stops reading progress must never
@@ -149,7 +152,9 @@ public class CImagingPipeline(
             height = decoded.sourceHeight,
         )
 
-        return Derivatives(row, tags, thumbnail, image)
+        // The decode the image and thumbnail were made from, so a new photograph costs its faces
+        // no second decode (§12).
+        return Derivatives(row, tags, thumbnail, image, faces = faces?.find(decoded))
     }
 
     /** 3200px long edge, aspect preserved, never upscaled, source ICC carried through. */
@@ -168,6 +173,23 @@ public class CImagingPipeline(
             square.applyColorHandling(DerivativeSpec.THUMBNAIL_COLOR)
             square.encodedJpeg(quality = DerivativeSpec.THUMBNAIL_QUALITY, optimize = true)
         }
+
+    override fun findFaces(item: MediaItem): List<DetectedFace>? {
+        val faces = faces ?: return null
+        return try {
+            when (item.kind) {
+                MediaItem.Kind.Still, is MediaItem.Kind.LivePhoto ->
+                    PixelImage.decode(item.path, DerivativeSpec.IMAGE_LONG_EDGE).use(faces::find)
+                MediaItem.Kind.Raw ->
+                    PixelImage.decodeJpeg(carveEmbeddedJpeg(item.path).jpeg, DerivativeSpec.IMAGE_LONG_EDGE)
+                        .use(faces::find)
+                // §12 leaves video out of the first version.
+                MediaItem.Kind.Video -> emptyList()
+            }
+        } catch (failure: ImagingException) {
+            throw MediaUnreadable(failure.message, failure)
+        }
+    }
 
     // ---------------------------------------------------------------- video
 

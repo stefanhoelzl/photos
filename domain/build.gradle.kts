@@ -120,9 +120,9 @@ tasks.withType<Test>().configureEach {
     environment("PHOTOS_SIGV4_FIXTURES", sigv4Fixtures)
 }
 
-// Four databases because there are four schemas (§3): the per-album shard and its thumbnail
-// pack, both of which are objects in the zone, and the merged database and sync state, which
-// are per-device and never uploaded.
+// Seven databases because there are seven schemas: §3's four -- the per-album shard and its
+// thumbnail pack, both of which are objects in the zone, and the merged database and sync state,
+// which are per-device and never uploaded -- and §12's three, below.
 //
 // The dialect is pinned to **SQLite 3.24** — the floor DESIGN §3 claims and the oldest release
 // that has `ON CONFLICT … DO UPDATE`, the newest syntax anything here uses. Pinning it is what
@@ -148,6 +148,24 @@ sqldelight {
         create("SyncStateDatabase") {
             packageName.set("net.stho.photos.catalog.syncstate")
             srcDirs.setFrom("src/commonMain/sqldelight/syncstate")
+            dialect(libs.sqldelight.dialect.sqlite324)
+        }
+        // §12's three: an album's faces, which is an object in the zone; the labels file, which
+        // lives in the library and is uploaded as a snapshot; and the index `sync` derives from
+        // both for the desktop viewer, which is per-device and never uploaded.
+        create("FacesDatabase") {
+            packageName.set("net.stho.photos.faces.file")
+            srcDirs.setFrom("src/commonMain/sqldelight/faces")
+            dialect(libs.sqldelight.dialect.sqlite324)
+        }
+        create("PeopleDatabase") {
+            packageName.set("net.stho.photos.faces.people")
+            srcDirs.setFrom("src/commonMain/sqldelight/people")
+            dialect(libs.sqldelight.dialect.sqlite324)
+        }
+        create("PeopleIndexDatabase") {
+            packageName.set("net.stho.photos.faces.index")
+            srcDirs.setFrom("src/commonMain/sqldelight/peopleindex")
             dialect(libs.sqldelight.dialect.sqlite324)
         }
     }

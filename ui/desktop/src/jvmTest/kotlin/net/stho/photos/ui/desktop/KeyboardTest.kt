@@ -56,6 +56,25 @@ class KeyboardTest {
     @AfterTest
     fun stop(): Unit = scopes.forEach(CoroutineScope::cancel)
 
+    /**
+     * A list longer than the window has a scroll bar that can be seen: on the dark scheme's black
+     * ground, Compose's default thumb — black at 12% — was there and invisible.
+     */
+    @Test
+    fun aLongAlbumListShowsAScrollBar() = screen(extraAlbums = 60) {
+        // The sidebar is 340dp at density 1; its list's scroll bar is the 8px against its right edge,
+        // from the top of the list down.
+        assertTrue(litPixels(x = 336, fromY = 170) > 32, "a visible thumb at the list's right edge")
+    }
+
+    /** The album's grid, too, once it holds more photos than the pane shows. */
+    @Test
+    fun aLongAlbumShowsAScrollBar() = screen(photosEach = 200) {
+        press(Key.DirectionDown)
+        assertEquals("Rome", model.state.value.selected?.name)
+        assertTrue(litPixels(x = 1276, fromY = 150) > 32, "a visible thumb at the grid's right edge")
+    }
+
     @Test
     fun theSidebarsArrowsChangeTheAlbumAndEnterMovesIntoItsGrid() = screen {
         press(Key.DirectionDown)
@@ -147,7 +166,17 @@ class KeyboardTest {
 
     // ------------------------------------------------------------------------------ harness
 
-    private inner class Screen(val model: DesktopModel, private val scene: ImageComposeScene, private val play: PlayToggle) {
+    private inner class Screen(val model: DesktopModel, val scene: ImageComposeScene, private val play: PlayToggle) {
+        /** How many pixels down column [x] are brighter than the dark scheme's ground: a thumb's. */
+        fun litPixels(x: Int, fromY: Int): Int {
+            val frame = scene.render(1_000_000_000L)
+            val pixels = org.jetbrains.skia.Bitmap().also { it.allocN32Pixels(frame.width, frame.height); frame.readPixels(it) }
+            return (fromY until frame.height).count { y ->
+                val colour = pixels.getColor(x, y)
+                ((colour shr 16) and 0xff) + ((colour shr 8) and 0xff) + (colour and 0xff) > 90
+            }
+        }
+
         fun playPresses(): Int = play.presses
 
         private var time = 0L
@@ -198,9 +227,9 @@ class KeyboardTest {
      * The scene, the model and the keys on one thread, which is also the scene's coroutine
      * context: an effect that suspends resumes there, never mid-frame (see `renderFrame`).
      */
-    private fun screen(body: suspend Screen.() -> Unit) = runBlocking(frames) {
+    private fun screen(extraAlbums: Int = 0, photosEach: Int = 5, body: suspend Screen.() -> Unit) = runBlocking(frames) {
         val scope = CoroutineScope(frames).also { scopes += it }
-        val library = Library()
+        val library = Library(extraAlbums, photosEach)
         val model = DesktopModel(library, library, library, NoPreviews, NoVideos, scope)
         model.start()
         val play = PlayToggle()
@@ -220,13 +249,13 @@ class KeyboardTest {
     }
 
     /** Two albums of photos under a container, all in memory. */
-    private class Library : Catalog, Rebuilder, Thumbnails {
+    private class Library(extra: Int = 0, photosEach: Int = 5) : Catalog, Rebuilder, Thumbnails {
         private val trips = album("Trips", 0).copy(photoCount = 0)
         private val rome = album("Rome", 2024).copy(parent = trips.id, latitude = 41.9, longitude = 12.5)
         private val lisbon = album("Lisbon", 2022).copy(parent = trips.id, latitude = 38.72, longitude = -9.14)
-        private val albums = listOf(trips, rome, lisbon)
+        private val albums = listOf(trips, rome, lisbon) + (1..extra).map { album("Album $it", 2000 + it % 20) }
         private val photos = listOf(rome, lisbon).associate { album ->
-            album.id to (1..5).map { PhotoRow(id = Uuid.random(), filename = "${album.name}-$it.jpg") }
+            album.id to (1..photosEach).map { PhotoRow(id = Uuid.random(), filename = "${album.name}-$it.jpg") }
         }
 
         override fun rebuild(): Rebuilt = Rebuilt(albums.size, 10, skipped = 0)

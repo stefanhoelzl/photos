@@ -121,6 +121,11 @@ public data class Scroll(
     /** A photo index the grid must show whole, once, after it restores [key]: see [BackStack.pop]. */
     val reveal: Int? = null,
     /**
+     * A photo to bring into view before [reveal]: the row past it in the direction the arrow keys
+     * are moving, so the desktop grid turns its page a row early (§11). Null for none.
+     */
+    val ahead: Int? = null,
+    /**
      * Bumped each time the model moves the list — the control server — which the screen then
      * scrolls to. A scroll the screen reports leaves it alone, since the list is already there.
      */

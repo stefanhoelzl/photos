@@ -76,7 +76,30 @@ public data class IngestReport(
     /** Packs removed from `packs/` because no shard names them any more. */
     public val removedPacks: Int = 0,
     public val dryRun: Boolean = false,
+    /** §12's faces phase; null when the run did not look for faces. */
+    public val faces: FacesOutcome? = null,
 ) {
+    /**
+     * What the faces phase did (§12). A dry run fills [toScan] and [modelsToFetch] instead of
+     * scanning anything.
+     */
+    public data class FacesOutcome(
+        public val scannedPhotos: Int = 0,
+        public val foundFaces: Int = 0,
+        public val toScan: Int = 0,
+        public val modelsToFetch: List<String> = emptyList(),
+        public val uploadedFiles: Int = 0,
+        public val deletedFiles: Int = 0,
+        public val labelsUploaded: Boolean = false,
+        /** The index as it stands after the run — rebuilt or not. */
+        public val indexRebuilt: Boolean = false,
+        public val people: Int = 0,
+        public val confirmed: Int = 0,
+        public val suggested: Int = 0,
+        public val groups: Int = 0,
+        public val totalFaces: Int = 0,
+    )
+
     public data class AlbumOutcome(
         public val path: String,
         public val uploaded: Int,

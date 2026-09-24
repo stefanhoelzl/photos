@@ -41,6 +41,8 @@ native-ffmpeg = "7.1.1"
 native-expat = "2.6.4"
 native-dbus = "1.14.10"
 native-sqlite = "3530400"
+# Face detection and embedding (DESIGN §12): only core, imgproc, dnn and objdetect are built.
+native-opencv = "4.14.0"
 
 [libraries]
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -93,6 +95,7 @@ native-ffmpeg = { module = "native.ffmpeg:ffmpeg", version.ref = "native-ffmpeg"
 native-expat = { module = "native.expat:expat", version.ref = "native-expat" }
 native-dbus = { module = "native.dbus:dbus", version.ref = "native-dbus" }
 native-sqlite = { module = "native.sqlite:sqlite-autoconf", version.ref = "native-sqlite" }
+native-opencv = { module = "native.opencv:opencv", version.ref = "native-opencv" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

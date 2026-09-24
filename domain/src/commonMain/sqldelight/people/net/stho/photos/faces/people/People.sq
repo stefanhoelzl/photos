@@ -1,0 +1,74 @@
+import kotlin.time.Instant;
+import kotlin.uuid.Uuid;
+import net.stho.photos.faces.VerdictKind;
+
+-- The people in the library, and every decision made about a face (§12).
+--
+-- The one file in the system that holds nothing derivable: it lives in the library root, at
+-- `.photos/people.db`, and is backed up with the originals. The desktop viewer writes it; `sync`
+-- uploads a snapshot as `people/people.db`, where a later phone version reads it.
+CREATE TABLE IF NOT EXISTS people_info (
+  id             INTEGER PRIMARY KEY CHECK (id = 1),
+  schema_version INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS person (
+  id         TEXT AS Uuid PRIMARY KEY,
+  name       TEXT NOT NULL,
+  created_at INTEGER AS Instant NOT NULL
+);
+
+-- A verdict names its face by photo and box rather than by a face id: face ids belong to one
+-- run of one model, and a verdict has to outlive both. A re-detected face takes the verdict whose
+-- box it overlaps.
+--
+-- A face has at most one `confirmed` or `ignored` verdict, and any number of `rejected` ones --
+-- "not Anna", "not Ben".
+CREATE TABLE IF NOT EXISTS verdict (
+  id         TEXT AS Uuid PRIMARY KEY,
+  photo_id   TEXT AS Uuid NOT NULL,
+  x          REAL NOT NULL,
+  y          REAL NOT NULL,
+  w          REAL NOT NULL,
+  h          REAL NOT NULL,
+  kind       TEXT AS VerdictKind NOT NULL,
+  person_id  TEXT AS Uuid REFERENCES person(id),
+  decided_at INTEGER AS Instant NOT NULL,
+  CHECK (kind IN ('confirmed', 'rejected', 'ignored')),
+  CHECK ((kind = 'ignored') = (person_id IS NULL))
+);
+CREATE INDEX IF NOT EXISTS ix_verdict_photo ON verdict(photo_id);
+CREATE INDEX IF NOT EXISTS ix_verdict_person ON verdict(person_id);
+
+selectSchemaVersion:
+SELECT schema_version FROM people_info WHERE id = 1;
+
+insertInfo:
+INSERT OR IGNORE INTO people_info (id, schema_version) VALUES (1, ?);
+
+selectPeople:
+SELECT * FROM person ORDER BY name COLLATE NOCASE, id;
+
+insertPerson:
+INSERT INTO person (id, name, created_at) VALUES (?, ?, ?);
+
+renamePerson:
+UPDATE person SET name = ? WHERE id = ?;
+
+deletePerson:
+DELETE FROM person WHERE id = ?;
+
+selectVerdicts:
+SELECT * FROM verdict;
+
+selectVerdictsForPhoto:
+SELECT * FROM verdict WHERE photo_id = ?;
+
+insertVerdict:
+INSERT INTO verdict (id, photo_id, x, y, w, h, kind, person_id, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+deleteVerdict:
+DELETE FROM verdict WHERE id = ?;
+
+moveVerdicts:
+UPDATE verdict SET person_id = :to WHERE person_id = :from;

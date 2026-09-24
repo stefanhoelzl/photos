@@ -1,0 +1,55 @@
+import kotlin.uuid.Uuid;
+
+-- One album's faces (§12): `faces/<album-uuid>.db` in the zone and in the CLI's cache.
+--
+-- Written only by the CLI, and rewritten whole whenever the album's faces change, the way a
+-- thumbnail pack is repacked: one small object per album, so a change to one album uploads one
+-- file. Only the laptop reads it back -- the phone never lists `faces/`.
+CREATE TABLE IF NOT EXISTS faces_info (
+  id             INTEGER PRIMARY KEY CHECK (id = 1),
+  album_id       TEXT AS Uuid NOT NULL,
+  -- The detector and embedder every row here came from (FaceModels.VERSION). A file from
+  -- another version is scanned again from nothing.
+  model_version  TEXT NOT NULL,
+  schema_version INTEGER NOT NULL
+);
+
+-- Every photo analysed, faces or not. A photo with none is here too, which is what stops an
+-- empty landscape being decoded again on every run.
+CREATE TABLE IF NOT EXISTS scanned (
+  photo_id TEXT AS Uuid PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS face (
+  id        TEXT AS Uuid PRIMARY KEY,
+  photo_id  TEXT AS Uuid NOT NULL,
+  -- Fractions of the photo's display width and height, as FaceBox holds them.
+  x         REAL NOT NULL,
+  y         REAL NOT NULL,
+  w         REAL NOT NULL,
+  h         REAL NOT NULL,
+  score     REAL NOT NULL,
+  -- Ten little-endian float32: the detector's five (x, y) points, same fractions.
+  landmarks BLOB NOT NULL,
+  -- Little-endian float32, L2-normalised.
+  embedding BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_face_photo ON face(photo_id);
+
+insertInfo:
+INSERT INTO faces_info (id, album_id, model_version, schema_version) VALUES (1, ?, ?, ?);
+
+selectInfo:
+SELECT album_id, model_version, schema_version FROM faces_info WHERE id = 1;
+
+insertScanned:
+INSERT INTO scanned (photo_id) VALUES (?);
+
+selectScanned:
+SELECT photo_id FROM scanned;
+
+insertFace:
+INSERT INTO face (id, photo_id, x, y, w, h, score, landmarks, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+selectFaces:
+SELECT * FROM face;

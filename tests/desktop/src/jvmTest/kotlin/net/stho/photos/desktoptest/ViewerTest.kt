@@ -16,6 +16,9 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import kotlinx.io.files.Path
 import net.stho.photos.app.DesktopUi
+import net.stho.photos.app.Face
+import net.stho.photos.app.FaceState
+import net.stho.photos.app.Showing
 import net.stho.photos.app.ListEntry
 import net.stho.photos.app.MapCamera
 import net.stho.photos.app.MapPin
@@ -204,6 +207,85 @@ class ViewerTest {
         }
     }
 
+    /**
+     * §12 end to end: faces the CLI found, named in an unknown group, the next sync's suggestion
+     * confirmed with Space, and the boxes over the photograph — on NASA portraits, Buzz Aldrin
+     * twice and Michael Collins once.
+     */
+    @Test
+    fun facesAreNamedHereAndSuggestedByTheNextSync() = scenario("people") {
+        library {
+            portrait("Crew/aldrin-1963.jpg", "s63-20056")
+            portrait("Crew/aldrin-1969.jpg", "S69-31743")
+            portrait("Crew/collins-1964.jpg", "s64-29926")
+        }
+        sync()
+        val viewer = launch()
+        val model = viewer.model
+        val crew = model.state.value.albums.single { it.name == "Crew" }
+        model.select(crew)
+        val photos = await(viewer, "Crew's photos") { it.photos.size == 3 }.photos.associate { it.diskFilename to it.id }
+
+        // Three faces and nobody named: too few to group, so all of them are "Other".
+        val start = model.state.value.people
+        assertTrue(start.people.isEmpty())
+        val other = start.groups.single()
+        assertEquals(Face.OTHER, other.id)
+        model.expandUnknown(true)
+        model.show(Showing.Group(Face.OTHER))
+        val group = await(viewer, "the group's crops") { ui -> ui.faces.all { it.id in ui.crops } }
+        assertEquals(group.faces.map { it.id }.toSet(), group.faceSelection, "a group opens all selected")
+        shot(viewer, "group")
+
+        // Only the 1963 sitter is Buzz: select it alone, and name it.
+        val sitter = group.faces.filter { it.photoId == photos.getValue("aldrin-1963.jpg") }.maxBy { it.score }
+        model.clickFace(group.faces.indexOf(sitter), range = false, toggle = false)
+        model.editName("Buzz")
+        model.submitName()
+        val named = model.state.value
+        val buzz = named.people.people.single()
+        assertEquals("Buzz", buzz.person.name)
+        assertEquals(1, buzz.confirmed)
+        assertTrue(File(libraryRoot, ".photos/people.db").isFile, "the labels file, in the library")
+
+        // The next sync reads the labels and suggests the 1969 photograph; F5 shows it.
+        sync()
+        model.refresh()
+        await(viewer, "the suggestion") { ui -> ui.people.person(buzz.person.id)?.suggested == 1 }
+        model.show(Showing.Person(buzz.person.id))
+        val pane = await(viewer, "Buzz's crops") { ui -> ui.faces.size == 2 && ui.faces.all { it.id in ui.crops } }
+        val suggested = pane.faces.first()
+        assertEquals(FaceState.SUGGESTED, suggested.state)
+        assertEquals(photos.getValue("aldrin-1969.jpg"), suggested.photoId)
+        assertTrue(pane.faces.none { it.photoId == photos.getValue("collins-1964.jpg") }, "Collins is not Buzz")
+        shot(viewer, "person-suggested")
+
+        // Enter confirms the focused suggestion.
+        model.moveFaceFocus(0, extend = false)
+        model.confirmChosen()
+        val confirmed = model.state.value
+        assertEquals(2, confirmed.person?.confirmed)
+        assertEquals(0, confirmed.suggestedCount)
+        shot(viewer, "person-confirmed")
+
+        // Enter opens the face's photograph with its boxes; Esc comes back to Buzz.
+        model.openFace(0)
+        await(viewer, "the original decoded") { it.preview != null }
+        assertTrue(model.state.value.faceBoxes)
+        assertTrue(model.state.value.openFaces.any { it.person == buzz.person.id })
+        shot(viewer, "viewer-faces")
+        model.closePhoto()
+        assertEquals(Showing.Person(buzz.person.id), model.state.value.showing)
+
+        // A right-click on the face left in "Other" — Collins — and a new name typed into its menu.
+        model.show(Showing.Group(Face.OTHER))
+        val collins = model.state.value.faces.indexOfFirst { it.photoId == photos.getValue("collins-1964.jpg") }
+        model.contextFace(collins)
+        model.nameChosen(null, "Michael")
+        assertEquals(listOf("Buzz", "Michael"), model.state.value.people.people.map { it.person.name }.sorted())
+        viewer.close()
+    }
+
     // -------------------------------------------------------------------------------- fixtures
 
     private fun List<ListEntry>.names(): List<String> = filterIsInstance<ListEntry.Row>().map { it.album.name }
@@ -252,6 +334,7 @@ class ViewerTest {
          * the environment, a cache of the scenario's own, and a first run that empties the zone.
          */
         fun sync() {
+            seedFaceModels()
             val binary = System.getProperty("photos.cli.binary") ?: error("photos.cli.binary unset")
             val process = ProcessBuilder(
                 binary, "sync", "--library-path", libraryRoot.path, "--cache-dir", cliCache.path,
@@ -267,6 +350,15 @@ class ViewerTest {
             check(process.exitValue() == 0) { "photos-cli sync exited ${process.exitValue()}:\n$output" }
         }
 
+        /** The build's verified copies of §12's models, where a run looks for them — never fetched here. */
+        private fun seedFaceModels() {
+            val models = cliCache.resolve("models").apply { mkdirs() }
+            for (name in listOf("face_detection_yunet_2023mar", "face_recognition_sface_2021dec")) {
+                val target = models.resolve("$name.onnx")
+                if (!target.exists()) java.nio.file.Files.createSymbolicLink(target.toPath(), File(faceFixture(name)).toPath())
+            }
+        }
+
         fun packs(): List<String> = cliCache.resolve("packs").list()?.filter { it.endsWith(".db") }.orEmpty()
 
         /** The viewer's composition root over this scenario's cache and library, minus the window. */
@@ -276,6 +368,7 @@ class ViewerTest {
                 libraryRoot = Path(libraryRoot.path),
                 decodeLibrary = System.getProperty("photos.decode.library"),
                 longEdge = 1280,
+                cropCache = scratch.resolve("crops"),
             )
             viewer.start()
             await(viewer, "the first rebuild") { !it.loading }
@@ -302,6 +395,9 @@ class ViewerTest {
     }
 
     private class Library(private val root: File) {
+        /** A NASA portrait from the build's fixtures, for §12's faces. */
+        fun portrait(path: String, photo: String) = file(path, File(faceFixture(photo)))
+
         fun file(path: String, from: File) {
             val target = root.resolve(path)
             target.parentFile.mkdirs()
@@ -310,6 +406,10 @@ class ViewerTest {
     }
 
     private companion object {
+        fun faceFixture(name: String): String =
+            (System.getProperty("photos.face.fixtures") ?: error("photos.face.fixtures unset"))
+                .split(':').single { File(it).name.startsWith(name) }
+
         /** S3Mock does not validate signatures, so any secret does. */
         const val PASSWORD = "desktop-secret"
     }

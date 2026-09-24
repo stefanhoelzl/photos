@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -149,6 +151,11 @@ public fun AlbumList(
     beneathField: (@Composable () -> Unit)? = null,
     /** What an empty list says in place of the search's or the range's own line. */
     emptyText: String? = null,
+    /**
+     * Drawn over the list, beside its right edge: the desktop's scroll bar, which is a JVM-only
+     * component, so the root that has one passes it in. The phone scrolls by touch and passes none.
+     */
+    scrollbar: (@Composable BoxScope.(LazyListState) -> Unit)? = null,
 ) {
     // The spinner answers a pull and nothing else. Every launch syncs too, and a spinner over the
     // list each time the app opens would read as the list not being ready when it is.
@@ -164,7 +171,7 @@ public fun AlbumList(
         ) {
             ListBody(
                 rows, query, range, thumbnails, arrivals, loading, cache, actions, order, scroll, onScrolled, onOpen, onAction,
-                size, selected, loadingText, emptyText,
+                size, selected, loadingText, emptyText, scrollbar,
             )
         }
     }
@@ -189,6 +196,7 @@ private fun ListBody(
     selected: Uuid?,
     loadingText: String?,
     emptyText: String?,
+    scrollbar: (@Composable BoxScope.(LazyListState) -> Unit)?,
 ) {
     Column(Modifier.fillMaxSize()) {
         if (rows.isEmpty() && loading != null) {
@@ -259,6 +267,7 @@ private fun ListBody(
                 Column(Modifier.fillMaxWidth()) {
                     pinned.forEach { id -> headers[id]?.let { header -> key(id) { row(header) } } }
                 }
+                scrollbar?.invoke(this, list)
             }
         }
     }
@@ -559,13 +568,15 @@ private val GROUP_DIVIDER = 2.5.dp
  * tap reopens the calendar on it, and ✕ clears it.
  */
 @Composable
-private fun SearchField(
+public fun SearchField(
     query: String,
     range: DateRange?,
     onSearch: (String) -> Unit,
     onCalendar: () -> Unit,
     onClearRange: () -> Unit,
     focus: FocusRequester?,
+    /** What the empty field says: the phone's searches albums, the desktop's people too (§12). */
+    placeholder: String = "Search albums",
 ) {
     val frame = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
         .height(48.dp).clip(RoundedCornerShape(10.dp))
@@ -595,7 +606,7 @@ private fun SearchField(
                 onSearch(it.text)
             },
             singleLine = true,
-            placeholder = { Text("Search albums", fontSize = 13.sp) },
+            placeholder = { Text(placeholder, fontSize = 13.sp) },
             leadingIcon = { Icon(Icons.search, contentDescription = null, Modifier.size(16.dp)) },
             trailingIcon = { FieldIcon(Icons.calendar, "Filter by date", onCalendar) },
             colors = TextFieldDefaults.colors(

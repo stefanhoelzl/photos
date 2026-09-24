@@ -3,6 +3,7 @@ package net.stho.photos.library
 import kotlinx.io.IOException
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
+import net.stho.photos.faces.Labels
 
 /** One directory of the library that holds media, with the files it holds. */
 public data class LibraryAlbum(
@@ -87,8 +88,9 @@ public class LibraryWalker(
 
             for (entry in entries) {
                 val name = entry.name
-                // The one exclusion that is not in the file: the file itself.
-                if (name == IgnoreRules.FILENAME && isRoot(directory)) continue
+                // The two exclusions that are not in the file: the file itself, and the labels
+                // directory beside it (§12), which holds a database rather than photographs.
+                if ((name == IgnoreRules.FILENAME || name == Labels.DIRECTORY) && isRoot(directory)) continue
 
                 val metadata = SystemFileSystem.metadataOrNull(entry)
                 val isDirectory = metadata?.isDirectory == true

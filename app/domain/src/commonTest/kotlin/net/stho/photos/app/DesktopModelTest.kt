@@ -16,6 +16,13 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import net.stho.photos.catalog.Album
+import net.stho.photos.faces.FaceBox
+import net.stho.photos.faces.IndexEntry
+import net.stho.photos.faces.LabelSet
+import net.stho.photos.faces.Labels
+import net.stho.photos.faces.Person
+import net.stho.photos.faces.Verdict
+import net.stho.photos.faces.VerdictKind
 import net.stho.photos.model.PhotoRow
 
 /**
@@ -190,6 +197,21 @@ class DesktopModelTest {
         assertNull(ui.open)
         assertEquals(2, ui.focus, "back on the grid, on the photo the viewer was left on")
         assertEquals(2, ui.scroll?.reveal)
+    }
+
+    /** Down a row, and the grid is asked to show the row after it too: the page turns a row early. */
+    @Test
+    fun movingDownAsksForTheRowBeyondTheFocus() = runTest {
+        val rome = album("Rome", 2024)
+        val model = model(this, Library(rome).photos(rome, *Array(12) { "p$it" })).started()
+        model.select(rome)
+        model.moveFocus(1, columns = 3)
+        model.moveFocus(3, columns = 3)
+        assertEquals(3, model.state.value.focus)
+        assertEquals(3, model.state.value.scroll?.reveal)
+        assertEquals(6, model.state.value.scroll?.ahead)
+        model.moveFocus(-3, columns = 3)
+        assertEquals(0, model.state.value.scroll?.ahead, "up: the row above, clamped to the first")
     }
 
     @Test
@@ -461,11 +483,77 @@ class DesktopModelTest {
         assertEquals(1, model.state.value.open)
     }
 
+    // ------------------------------------------------------------------------------ people (§12)
+
+    /**
+     * Enter on a selection of suggestions confirms them, and the focus goes on to the face after
+     * the last of them — the next one to decide about — with nothing selected (§12).
+     */
+    @Test
+    fun confirmingMovesTheFocusToTheFaceAfterTheSelection() = runTest {
+        val people = MemoryPeople(suggestions = 5)
+        val model = model(this, Library(album("Rome", 2024)), people).started()
+        model.show(Showing.Person(people.anna.id))
+        val before = model.state.value.faces.map { it.id }
+        assertEquals(5, before.size)
+
+        // The first two, selected with Shift+→; the third is the one after them.
+        model.moveFaceFocus(0, extend = false)
+        model.moveFaceFocus(1, extend = true)
+        model.confirmChosen()
+
+        val ui = model.state.value
+        assertEquals(before[2], ui.faces[ui.faceFocus!!].id)
+        assertTrue(ui.faceSelection.isEmpty())
+        assertEquals(3, ui.suggestedCount)
+
+        // Ctrl+Z: both back among the suggestions, and the focus on the first of them.
+        model.undo()
+        val undone = model.state.value
+        assertEquals(5, undone.suggestedCount)
+        assertEquals(before[0], undone.faces[undone.faceFocus!!].id)
+
+        // Esc from a person is the library's map again, as it is from an album (§11).
+        model.showLibrary()
+        assertNull(model.state.value.showing)
+        assertTrue(model.state.value.showingLibraryMap)
+    }
+
     // -------------------------------------------------------------------------------- fixtures
 
-    private fun model(scope: TestScope, library: Library): DesktopModel {
+    private fun model(scope: TestScope, library: Library, people: People? = null): DesktopModel {
         val own = CoroutineScope(UnconfinedTestDispatcher(scope.testScheduler)).also { scopes += it }
-        return DesktopModel(library, library, library, NoPreviews, NoVideos, own)
+        return if (people == null) DesktopModel(library, library, library, NoPreviews, NoVideos, own)
+        else DesktopModel(library, library, library, NoPreviews, NoVideos, own, people = people)
+    }
+
+    /** One person and [suggestions] faces suggested as them, decided in memory. */
+    private class MemoryPeople(suggestions: Int) : People {
+        val anna = Person(Uuid.random(), "Anna")
+        private val box = FaceBox(0.1f, 0.1f, 0.2f, 0.2f)
+        private val entries = List(suggestions) { n ->
+            IndexEntry(Uuid.random(), Uuid.random(), Uuid.random(), box, 0.9f, null, anna.id, true, 0.9f - n * 0.01f, null)
+        }
+        private val verdicts = mutableListOf<Verdict>()
+        private var clock = 0L
+
+        override fun read(): PeopleSnapshot = PeopleSnapshot.of(entries, LabelSet(listOf(anna), verdicts.toList()))
+        override fun confirm(faces: List<Face>, person: Uuid): Labels.Change {
+            val added = faces.map { Verdict(Uuid.random(), it.photoId, it.box, VerdictKind.CONFIRMED, person, Instant.fromEpochSeconds(++clock)) }
+            verdicts += added
+            return Labels.Change(emptyList(), added)
+        }
+        override fun revert(change: Labels.Change) {
+            verdicts -= change.added.toSet()
+            verdicts += change.removed
+        }
+        private val nothing = Labels.Change(emptyList(), emptyList())
+        override fun createPerson(name: String): Person = error("not here")
+        override fun rename(person: Uuid, name: String) = Unit
+        override fun merge(from: Uuid, into: Uuid) = Unit
+        override fun reject(faces: List<Face>, person: Uuid) = nothing
+        override fun ignore(faces: List<Face>) = nothing
+        override fun clear(faces: List<Face>) = nothing
     }
 
     private fun DesktopModel.started(): DesktopModel = also { start() }
