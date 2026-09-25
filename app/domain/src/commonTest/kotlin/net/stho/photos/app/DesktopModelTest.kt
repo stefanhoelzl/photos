@@ -519,6 +519,40 @@ class DesktopModelTest {
         assertTrue(model.state.value.showingLibraryMap)
     }
 
+    /** D, a drag, a name: the drawn box is confirmed as that person, and Ctrl+Z takes it back. */
+    @Test
+    fun aBoxDrawnOverAPhotoIsNamedAndCanBeUndone() = runTest {
+        val rome = album("Rome", 2024)
+        val people = MemoryPeople(suggestions = 0)
+        val model = model(this, Library(rome).photos(rome, "a", "b"), people).started()
+        model.select(rome)
+        model.openPhoto(0)
+
+        model.toggleDrawing()
+        assertTrue(model.state.value.drawing)
+        assertTrue(model.state.value.faceBoxes, "the faces already found are what not to draw over")
+        val box = FaceBox(0.4f, 0.3f, 0.1f, 0.12f)
+        model.drawn(box)
+        assertEquals(box, model.state.value.drawnBox)
+
+        model.nameDrawn(people.anna.id)
+        assertNull(model.state.value.drawnBox)
+        val verdict = people.decided.single()
+        assertEquals(model.state.value.photos[0].id, verdict.photoId)
+        assertEquals(box, verdict.box)
+        assertEquals(people.anna.id, verdict.personId)
+
+        model.undo()
+        assertTrue(people.decided.isEmpty())
+
+        // Paging drops a box not yet named; leaving the photo leaves drawing.
+        model.drawn(box)
+        model.step(forward = true)
+        assertNull(model.state.value.drawnBox)
+        model.closePhoto()
+        assertFalse(model.state.value.drawing)
+    }
+
     // -------------------------------------------------------------------------------- fixtures
 
     private fun model(scope: TestScope, library: Library, people: People? = null): DesktopModel {
@@ -535,6 +569,7 @@ class DesktopModelTest {
             IndexEntry(Uuid.random(), Uuid.random(), Uuid.random(), box, 0.9f, null, anna.id, true, 0.9f - n * 0.01f, null)
         }
         private val verdicts = mutableListOf<Verdict>()
+        val decided: List<Verdict> get() = verdicts.toList()
         private var clock = 0L
 
         override fun read(): PeopleSnapshot = PeopleSnapshot.of(entries, LabelSet(listOf(anna), verdicts.toList()))

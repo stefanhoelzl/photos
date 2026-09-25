@@ -11,6 +11,7 @@ import net.stho.photos.faces.Labels
 import net.stho.photos.faces.Matching
 import net.stho.photos.faces.PeopleIndex
 import net.stho.photos.faces.Person
+import net.stho.photos.faces.Suggestion
 import net.stho.photos.faces.VerdictKind
 import net.stho.photos.ports.SqlDrivers
 
@@ -28,8 +29,16 @@ public data class Face(
     /** Confirmed as, or suggested as; null for an unknown face. */
     val person: Uuid?,
     val similarity: Float?,
-    /** Its unknown group, [OTHER] for one too small to show; null unless [state] is unknown. */
+    /**
+     * Its unknown group, [OTHER] for one too small to show; null unless [state] is unknown — and
+     * null for an unknown face the quality rule set aside ([IndexEntry.setAside]): listed nowhere,
+     * only boxed on its photo.
+     */
     val group: Int?,
+    /** The people it is most like as of the last sync, best first — the naming menus' order. */
+    val candidates: List<Suggestion> = emptyList(),
+    /** Drawn by hand, and not yet found by a sync (§12). */
+    val drawn: Boolean = false,
 ) {
     val ref: FaceRef get() = FaceRef(photoId, box)
 
@@ -83,6 +92,22 @@ public class PeopleSnapshot(
     /** Every ignored face, kept for review in the sidebar's "Ignored" (§12). */
     public val ignored: List<Face> get() = faces.filter { it.state == FaceState.IGNORED }.sortedByDescending { it.score }
 
+    /**
+     * Everyone, for naming [faces]: the people they are most like first — each person by their best
+     * similarity to any of them — and the rest after, by name (§12).
+     */
+    public fun ranked(faces: List<Face>): List<Person> {
+        val score = mutableMapOf<Uuid, Float>()
+        for (face in faces) for (candidate in face.candidates) {
+            score[candidate.person] = maxOf(score[candidate.person] ?: -1f, candidate.similarity)
+        }
+        return people.map { it.person }.sortedWith(
+            compareBy<Person> { score[it.id] == null }
+                .thenByDescending { score[it.id] ?: 0f }
+                .thenBy { it.name.lowercase() },
+        )
+    }
+
     /** The faces on one photo, for its boxes in the viewer. Ignored faces are not among them. */
     public fun facesOn(photo: Uuid): List<Face> = byPhoto[photo].orEmpty().filter { it.state != FaceState.IGNORED }
 
@@ -98,9 +123,11 @@ public class PeopleSnapshot(
             entries: List<IndexEntry>,
             labels: LabelSet,
             takenAt: (Uuid) -> Instant? = { null },
+            /** A photo's album, for a drawn face no index row places; null leaves such a face out. */
+            albumOf: (Uuid) -> Uuid? = { null },
         ): PeopleSnapshot {
             val live = labels.verdicts.groupBy { it.photoId }
-            val faces = entries.mapNotNull { entry ->
+            val detected = entries.mapNotNull { entry ->
                 val verdicts = live[entry.photoId].orEmpty()
                     .filter { it.box.overlap(entry.box) >= Labels.SAME_FACE_OVERLAP }
                     .sortedBy { it.decidedAt }
@@ -113,9 +140,29 @@ public class PeopleSnapshot(
                         entry.face(FaceState.SUGGESTED, entry.personId, null)
                     // Unknown: in the group the last sync put it in, or — confirmed or ignored then,
                     // and withdrawn here since — in "Other" until the next sync groups it.
+                    // Set aside: not a face worth listing, only its box on the photo.
+                    entry.setAside -> entry.face(FaceState.UNKNOWN, null, null)
                     else -> entry.face(FaceState.UNKNOWN, null, entry.group ?: Face.OTHER)
-                }
+                }?.let { face -> face.copy(candidates = entry.candidates.filter { it.person !in rejected }) }
             }
+
+            // A face drawn by hand (§12): a confirmation no detected face lies under. It is shown as
+            // the drawn box — at once, before any sync has looked inside it — and it is a face of
+            // its own until a sync finds the face in it and indexes it under the same box.
+            val byPhoto = entries.groupBy(IndexEntry::photoId)
+            val drawn = labels.verdicts.filter { verdict ->
+                verdict.kind == VerdictKind.CONFIRMED &&
+                    byPhoto[verdict.photoId].orEmpty().none { it.box.overlap(verdict.box) >= Labels.SAME_FACE_OVERLAP }
+            }.mapNotNull { verdict ->
+                val album = albumOf(verdict.photoId) ?: return@mapNotNull null
+                Face(
+                    id = verdict.id, albumId = album, photoId = verdict.photoId, box = verdict.box,
+                    // Not the detector's: under every detected face, so never a person's avatar.
+                    score = 0f, state = FaceState.CONFIRMED, person = verdict.personId, similarity = null, group = null,
+                    drawn = true,
+                )
+            }
+            val faces = detected + drawn
 
             val known = labels.people.associateBy(Person::id)
             val people = labels.people.map { person ->
@@ -137,13 +184,13 @@ public class PeopleSnapshot(
             // nobody's, and back among the unknown.
             val settled = faces.map { if (it.person != null && it.person !in known) it.copy(state = FaceState.UNKNOWN, person = null, group = Face.OTHER) else it }
 
-            val unknown = settled.filter { it.state == FaceState.UNKNOWN }.groupBy { it.group ?: Face.OTHER }
+            val unknown = settled.filter { it.state == FaceState.UNKNOWN && it.group != null }.groupBy { it.group!! }
             val groups = unknown.filterKeys { it != Face.OTHER }
                 .map { (id, members) -> GroupSummary(id, members.size, members.maxBy { it.score }) }
                 .filter { it.size >= Matching.MIN_GROUP }
             // A group whose faces have mostly been named since is too small to show on its own.
             val shown = groups.mapTo(mutableSetOf(), GroupSummary::id)
-            val final = settled.map { if (it.state == FaceState.UNKNOWN && it.group !in shown) it.copy(group = Face.OTHER) else it }
+            val final = settled.map { if (it.state == FaceState.UNKNOWN && it.group != null && it.group !in shown) it.copy(group = Face.OTHER) else it }
             val others = final.filter { it.state == FaceState.UNKNOWN && it.group == Face.OTHER }
             val listed = groups.sortedWith(compareByDescending<GroupSummary> { it.size }.thenBy { it.id }) +
                 listOfNotNull(others.maxByOrNull { it.score }?.let { GroupSummary(Face.OTHER, others.size, it) })
@@ -193,11 +240,13 @@ public class LocalPeople(
     drivers: SqlDrivers,
     /** When a photo was taken — the viewer's catalog knows, the index does not. */
     private val takenAt: (Uuid) -> Instant? = { null },
+    /** Which album a photo is in, for a face drawn by hand. */
+    private val albumOf: (Uuid) -> Uuid? = { null },
 ) : People {
     private val index = PeopleIndex(Path(cliCache, PeopleIndex.FILENAME), drivers)
     private val labels = Labels.at(libraryRoot, drivers)
 
-    override fun read(): PeopleSnapshot = PeopleSnapshot.of(index.read(), labels.read(), takenAt)
+    override fun read(): PeopleSnapshot = PeopleSnapshot.of(index.read(), labels.read(), takenAt, albumOf)
 
     override fun createPerson(name: String): Person = labels.createPerson(name)
     override fun rename(person: Uuid, name: String): Unit = labels.rename(person, name)

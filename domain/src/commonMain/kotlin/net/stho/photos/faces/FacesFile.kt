@@ -73,6 +73,7 @@ public class FacesFile(
                         score = face.score.toDouble(),
                         landmarks = face.landmarks.toLittleEndian(),
                         embedding = face.embedding.toLittleEndian(),
+                        sharpness = face.sharpness.toDouble(),
                     )
                 }
             }
@@ -82,8 +83,8 @@ public class FacesFile(
     }
 
     public companion object {
-        /** No reader skips anything yet; the number is there for the first one that must. */
-        public const val SCHEMA_VERSION: Int = 1
+        /** 2 added `face.sharpness`. */
+        public const val SCHEMA_VERSION: Int = 2
 
         /**
          * The file at [path], or null when it is not one this build can read — a newer schema, or
@@ -96,9 +97,14 @@ public class FacesFile(
             try {
                 val queries = database(driver).facesQueries
                 val info = runCatching { queries.selectInfo().executeAsOneOrNull() }.getOrNull() ?: return null
-                if (info.schema_version > SCHEMA_VERSION) return null
+                // Another schema's file is not read at all: its album is scanned again. Asked of the
+                // header rather than tried, because the SQL driver prints a statement that fails to
+                // compile, stack trace and all, even when the failure is caught — which for a
+                // library's worth of older files was hundreds of traces that read as a crash.
+                if (info.schema_version != SCHEMA_VERSION.toLong()) return null
                 val scanned = queries.selectScanned().executeAsList().toSet()
-                val faces = queries.selectFaces().executeAsList().map { row ->
+                val rows = runCatching { queries.selectFaces().executeAsList() }.getOrNull() ?: return null
+                val faces = rows.map { row ->
                     StoredFace(
                         id = row.id,
                         photoId = row.photo_id,
@@ -107,6 +113,7 @@ public class FacesFile(
                             landmarks = row.landmarks.toFloats(),
                             score = row.score.toFloat(),
                             embedding = row.embedding.toFloats(),
+                            sharpness = row.sharpness.toFloat(),
                         ),
                     )
                 }

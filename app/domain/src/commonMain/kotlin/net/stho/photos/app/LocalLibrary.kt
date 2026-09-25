@@ -85,6 +85,9 @@ public class LocalLibrary(
         taken = buildMap {
             for (shard in read) for (photo in shard.photos) photo.takenAt?.let { put(photo.id, it) }
         }
+        albums = buildMap {
+            for (shard in read) for (photo in shard.photos) put(photo.id, shard.info.addsTo ?: shard.info.id)
+        }
         return Rebuilt(summary.albums, summary.photos, skipped)
     }
 
@@ -99,6 +102,12 @@ public class LocalLibrary(
     public fun liveVideo(photo: PhotoRow): Path? = files[photo.id]?.video?.takeIf(SystemFileSystem::exists)
 
     public fun takenAt(photo: Uuid): Instant? = taken[photo]
+
+    /** The album a photo is in — for a face drawn by hand, which no index row places (§12). */
+    public fun albumOf(photo: Uuid): Uuid? = albums[photo]
+
+    @Volatile
+    private var albums: Map<Uuid, Uuid> = emptyMap()
 
     /** The original a photo id names, for a face crop (§12) — where only the id is at hand. */
     public fun original(photo: Uuid): Path? = files[photo]?.still?.takeIf(SystemFileSystem::exists)

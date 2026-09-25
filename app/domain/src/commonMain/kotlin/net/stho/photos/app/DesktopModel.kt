@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import net.stho.photos.catalog.Album
 import net.stho.photos.catalog.foldedForSearch
+import net.stho.photos.faces.FaceBox
 import net.stho.photos.faces.Labels
 import net.stho.photos.faces.Person
 import net.stho.photos.model.MediaType
@@ -125,6 +126,10 @@ public data class DesktopUi(
     val peopleOpen: Boolean = true,
     /** The sidebar's ALBUMS section, unfolded. */
     val albumsOpen: Boolean = true,
+    /** D in the viewer: a drag over the photo marks a face the detector missed (§12). */
+    val drawing: Boolean = false,
+    /** The box just drawn, waiting for its name; the naming menu is open over it. */
+    val drawnBox: FaceBox? = null,
 ) {
     /** How many of [faces] are a person's suggestions, which come first. */
     public val suggestedCount: Int get() = faces.count { it.state == FaceState.SUGGESTED }
@@ -696,7 +701,7 @@ public class DesktopModel(
     /** A click on a tile, or Enter on the focused one: the photo opens over the album pane. */
     public fun openPhoto(index: Int) {
         if (index !in _state.value.photos.indices) return
-        _state.update { it.copy(open = index, focus = index, preview = null, videoPath = null, livePair = null) }
+        _state.update { it.copy(open = index, focus = index, preview = null, videoPath = null, livePair = null, drawnBox = null) }
         load(index)
     }
 
@@ -707,7 +712,7 @@ public class DesktopModel(
     public fun showPhoto(index: Int) {
         val ui = _state.value
         if (ui.open == null || index == ui.open || index !in ui.photos.indices) return
-        _state.update { it.copy(open = index, focus = index, preview = null, videoPath = null, livePair = null) }
+        _state.update { it.copy(open = index, focus = index, preview = null, videoPath = null, livePair = null, drawnBox = null) }
         load(index)
     }
 
@@ -737,6 +742,7 @@ public class DesktopModel(
             val index = ui.open ?: return@update ui
             ui.copy(
                 open = null, preview = null, nearby = emptyMap(), videoPath = null, livePair = null,
+                drawing = false, drawnBox = null,
                 focus = index, scroll = ui.revealing(index),
             )
         }
@@ -983,7 +989,42 @@ public class DesktopModel(
     }
 
     /** F in the viewer: the open photo's face boxes, on or off. */
-    public fun toggleFaceBoxes(): Unit = _state.update { it.copy(faceBoxes = !it.faceBoxes) }
+    public fun toggleFaceBoxes(): Unit = _state.update { it.copy(faceBoxes = !it.faceBoxes, drawing = false, drawnBox = null) }
+
+    /**
+     * D in the viewer: drawing a face the detector missed, on or off. The boxes come on with it —
+     * the faces already found are what not to draw over.
+     */
+    public fun toggleDrawing(): Unit = _state.update { ui ->
+        if (ui.open == null) ui
+        else ui.copy(drawing = !ui.drawing, faceBoxes = ui.faceBoxes || !ui.drawing, drawnBox = null)
+    }
+
+    /** A drag let go over the photo: [box], as fractions of it, waits for a name. */
+    public fun drawn(box: FaceBox): Unit = _state.update { if (it.drawing) it.copy(drawnBox = box) else it }
+
+    /** Esc, or a click away from the naming menu: the drawn box is dropped. */
+    public fun cancelDrawn(): Unit = _state.update { it.copy(drawnBox = null) }
+
+    /**
+     * The drawn box is [person] — or a new person called [name]. A confirmation like any other: it
+     * shows at once, Ctrl+Z takes it back, and the next sync looks inside it for the face (§12).
+     */
+    public fun nameDrawn(person: Uuid?, name: String? = null) {
+        val ui = _state.value
+        val box = ui.drawnBox ?: return
+        val photo = ui.open?.let { ui.photos.getOrNull(it) } ?: return
+        val album = ui.selected?.id ?: return
+        val typed = name?.trim().orEmpty()
+        if (person == null && typed.isEmpty()) return
+        val face = Face(Uuid.random(), album, photo.id, box, 0f, FaceState.UNKNOWN, null, null, null, drawn = true)
+        _state.update { it.copy(drawnBox = null) }
+        decide {
+            val existing = person ?: ui.people.people.map { it.person }
+                .firstOrNull { it.name.equals(typed, ignoreCase = true) }?.id
+            people.confirm(listOf(face), existing ?: people.createPerson(typed).id)
+        }
+    }
 
     /** A choice from a face box's menu in the viewer. */
     public fun decideOnPhoto(face: Face, choice: FaceChoice) {

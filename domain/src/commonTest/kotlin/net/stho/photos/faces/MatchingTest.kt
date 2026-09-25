@@ -51,6 +51,60 @@ class MatchingTest {
     }
 
     @Test
+    fun everyFaceListsThePeopleItIsMostLikeBestFirstLessRejections() {
+        val a = face(embedding(0))
+        val b = face(embedding(1))
+        val mostlyA = face(embedding(0, lean = 0.4f).also { it[1] = 0.3f })
+        val faces = listOf(a, b, mostlyA)
+        val resolved = Matching.resolve(
+            faces,
+            listOf(verdict(a, VerdictKind.CONFIRMED, anna), verdict(b, VerdictKind.CONFIRMED, ben)),
+        )
+        val weighed = Matching.weigh(faces, resolved)
+        assertEquals(listOf(anna, ben), weighed.candidates.getValue(mostlyA.id).map { it.person })
+        // A confirmed face is ranked too: its confirmation could be the mistake.
+        assertEquals(anna, weighed.candidates.getValue(a.id).first().person)
+
+        val rejected = Matching.resolve(faces, resolved.let { listOf(verdict(a, VerdictKind.CONFIRMED, anna), verdict(b, VerdictKind.CONFIRMED, ben), verdict(mostlyA, VerdictKind.REJECTED, anna)) })
+        assertEquals(listOf(ben), Matching.weigh(faces, rejected).candidates.getValue(mostlyA.id).map { it.person })
+    }
+
+    @Test
+    fun aFaceTheDetectorDoubtsIsNotSuggestedHoweverAlikeItLooks() {
+        val confirmed = face(embedding(0))
+        val doubtful = face(embedding(0, lean = 0.1f), score = 0.65f)
+        val faces = listOf(confirmed, doubtful)
+        val resolved = Matching.resolve(faces, listOf(verdict(confirmed, VerdictKind.CONFIRMED, anna)))
+        assertNull(Matching.suggest(faces, resolved)[doubtful.id])
+        // Still ranked for naming it by hand from its box.
+        assertEquals(anna, Matching.weigh(faces, resolved).candidates.getValue(doubtful.id).first().person)
+    }
+
+    /** Confirmed, a doubted face counts as the person's like any other — and helps find them. */
+    @Test
+    fun aConfirmedFaceTheDetectorDoubtedIsStillAReference() {
+        val doubtfulButConfirmed = face(embedding(0), score = 0.6f)
+        val alike = face(embedding(0, lean = 0.3f))
+        val faces = listOf(doubtfulButConfirmed, alike)
+        val resolved = Matching.resolve(faces, listOf(verdict(doubtfulButConfirmed, VerdictKind.CONFIRMED, anna)))
+        assertEquals(anna, resolved.confirmed[doubtfulButConfirmed.id])
+        assertEquals(anna, Matching.suggest(faces, resolved)[alike.id]?.person)
+    }
+
+    @Test
+    fun theSharpnessFloorIsWhereTheBlurriestConfirmedFacesSit() {
+        // 100 confirmed faces, sharpness 1..100: the floor is where the lowest 5% end.
+        val confirmed = List(100) { DetectedFace(box, FloatArray(10), 0.9f, embedding(0), sharpness = (it + 1).toFloat()) }
+        val quality = Matching.Quality.from(confirmed)
+        assertEquals(6f, quality.sharpnessFloor)
+        assertFalse(quality.trusted(DetectedFace(box, FloatArray(10), 0.95f, embedding(0), sharpness = 3f)), "blurred")
+        assertTrue(quality.trusted(DetectedFace(box, FloatArray(10), 0.95f, embedding(0), sharpness = 40f)))
+        assertTrue(quality.trusted(DetectedFace(box, FloatArray(10), 0.95f, embedding(0))), "never measured: confidence decides")
+        // Too few confirmed faces to measure a floor from: confidence alone.
+        assertNull(Matching.Quality.from(confirmed.take(10)).sharpnessFloor)
+    }
+
+    @Test
     fun aRejectionIsNeverSuggestedAgainAndCountsAgainstItsNeighbours() {
         val confirmed = face(embedding(0))
         val rejected = face(embedding(0, lean = 0.5f))
@@ -112,29 +166,30 @@ class MatchingTest {
     }
 
     @Test
-    fun theLastGroupingIsKeptAndOnlyNewFacesArePlaced() {
-        val big = List(5) { face(embedding(0, lean = it * 0.05f)) }
-        val small = List(3) { face(embedding(2, lean = it * 0.05f)) }
-        val first = Matching.group(big + small)
-
-        // Two of the big group named since, and a new photograph of its person.
-        val newcomer = face(embedding(0, lean = 0.12f))
-        val again = Matching.group(big.drop(2) + small + newcomer, previous = first)
-
-        assertTrue(big.drop(2).all { again[it.id] == again[newcomer.id] }, "the newcomer joins the kept group")
-        assertTrue(small.all { again[it.id] == again[small[0].id] })
-        assertTrue(again[newcomer.id] != again[small[0].id])
-    }
-
-    @Test
-    fun unknownFacesFormGroupsLargestFirstAndSmallOnesAreLeftOut() {
-        val big = List(5) { face(embedding(0, lean = it * 0.05f)) }
-        val small = List(3) { face(embedding(2, lean = it * 0.05f)) }
-        val pair = List(2) { face(embedding(4, lean = it * 0.05f)) }
+    fun unknownFacesFormGroupsLargestFirstAndThinOnesAreLeftOut() {
+        val big = List(7) { face(embedding(0, lean = it * 0.03f)) }
+        val small = List(5) { face(embedding(2, lean = it * 0.03f)) }
+        // Too few to be dense: no face here has CORE faces within reach.
+        val pair = List(2) { face(embedding(4, lean = it * 0.03f)) }
         val groups = Matching.group(big + small + pair)
 
         assertTrue(big.all { groups[it.id] == 1 })
         assertTrue(small.all { groups[it.id] == 2 })
-        assertTrue(pair.none { it.id in groups }, "a pair is below MIN_GROUP")
+        assertTrue(pair.none { it.id in groups })
+    }
+
+    /**
+     * A face halfway between two people is within reach of both, but it is no core — so it
+     * cannot join them into one group, the way a greedy pass around centres did.
+     */
+    @Test
+    fun aLookAlikeBetweenTwoPeopleDoesNotChainThemTogether() {
+        val anna = List(6) { face(embedding(0, lean = it * 0.02f)) }
+        val ben = List(6) { face(embedding(1, lean = it * 0.02f)) }
+        val between = face(FloatArray(8).also { it[0] = 0.8f; it[1] = 0.6f })
+        val groups = Matching.group(anna + ben + between)
+        assertTrue(groups[anna[0].id] != groups[ben[0].id])
+        assertTrue(anna.all { groups[it.id] == groups[anna[0].id] })
+        assertTrue(ben.all { groups[it.id] == groups[ben[0].id] })
     }
 }

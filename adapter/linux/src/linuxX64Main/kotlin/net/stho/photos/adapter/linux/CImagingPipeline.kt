@@ -15,6 +15,7 @@ import net.stho.photos.derivative.DerivativeSpec
 import net.stho.photos.exif.ExifTags
 import net.stho.photos.exif.toPhotoRow
 import net.stho.photos.faces.DetectedFace
+import net.stho.photos.faces.FaceModels
 import net.stho.photos.model.MediaType
 import net.stho.photos.pipeline.Derivatives
 import net.stho.photos.pipeline.MediaItem
@@ -174,15 +175,20 @@ public class CImagingPipeline(
             square.encodedJpeg(quality = DerivativeSpec.THUMBNAIL_QUALITY, optimize = true)
         }
 
-    override fun findFaces(item: MediaItem): List<DetectedFace>? {
+    override fun findFaces(item: MediaItem, sensitive: Boolean): List<DetectedFace>? {
         val faces = faces ?: return null
+        val find: (PixelImage) -> List<DetectedFace> = if (sensitive) {
+            { faces.find(it, FaceModels.SENSITIVE_LONG_EDGE, FaceModels.SENSITIVE_MIN_SCORE) }
+        } else {
+            { faces.find(it) }
+        }
         return try {
             when (item.kind) {
                 MediaItem.Kind.Still, is MediaItem.Kind.LivePhoto ->
-                    PixelImage.decode(item.path, DerivativeSpec.IMAGE_LONG_EDGE).use(faces::find)
+                    PixelImage.decode(item.path, DerivativeSpec.IMAGE_LONG_EDGE).use(find)
                 MediaItem.Kind.Raw ->
                     PixelImage.decodeJpeg(carveEmbeddedJpeg(item.path).jpeg, DerivativeSpec.IMAGE_LONG_EDGE)
-                        .use(faces::find)
+                        .use(find)
                 // §12 leaves video out of the first version.
                 MediaItem.Kind.Video -> emptyList()
             }

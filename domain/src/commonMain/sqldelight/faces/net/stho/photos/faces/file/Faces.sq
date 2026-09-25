@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS face (
   -- Ten little-endian float32: the detector's five (x, y) points, same fractions.
   landmarks BLOB NOT NULL,
   -- Little-endian float32, L2-normalised.
-  embedding BLOB NOT NULL
+  embedding BLOB NOT NULL,
+  -- The variance of the Laplacian of the aligned crop the embedding came from (DetectedFace).
+  sharpness REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_face_photo ON face(photo_id);
 
@@ -49,7 +51,7 @@ selectScanned:
 SELECT photo_id FROM scanned;
 
 insertFace:
-INSERT INTO face (id, photo_id, x, y, w, h, score, landmarks, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO face (id, photo_id, x, y, w, h, score, landmarks, embedding, sharpness) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectFaces:
 SELECT * FROM face;

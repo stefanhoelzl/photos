@@ -10,6 +10,7 @@ import net.stho.photos.faces.FaceBox
 import net.stho.photos.faces.IndexEntry
 import net.stho.photos.faces.LabelSet
 import net.stho.photos.faces.Person
+import net.stho.photos.faces.Suggestion
 import net.stho.photos.faces.Verdict
 import net.stho.photos.faces.VerdictKind
 
@@ -97,6 +98,52 @@ class PeopleSnapshotTest {
             takenAt = dates::get,
         )
         assertEquals(listOf("Ben", "Anna", "Cleo"), snapshot.people.map { it.person.name })
+    }
+
+    @Test
+    fun theNamingMenuListsTheMostAlikeFirstAndTheRestByName() {
+        val ben = Person(Uuid.random(), "Ben")
+        val cleo = Person(Uuid.random(), "Cleo")
+        val face = entry(group = 1).copy(candidates = listOf(Suggestion(cleo.id, 0.6f), Suggestion(ben.id, 0.3f)))
+        val snapshot = PeopleSnapshot.of(listOf(face), LabelSet(listOf(anna, ben, cleo), emptyList()))
+        assertEquals(listOf("Cleo", "Ben", "Anna"), snapshot.ranked(snapshot.faces).map { it.name })
+    }
+
+    @Test
+    fun aFaceTheDetectorDoubtsIsListedNowhereButBoxedOnItsPhoto() {
+        val grouped = List(3) { entry(group = 1) }
+        // The CLI decides what is set aside, where the sharpness floor is measured; the viewer reads it.
+        val doubtful = entry(group = 1).copy(score = 0.6f, setAside = true)
+        val snapshot = PeopleSnapshot.of(grouped + doubtful, LabelSet(listOf(anna), emptyList()))
+        assertTrue(snapshot.groups.none { group -> snapshot.facesIn(group.id).any { it.id == doubtful.faceId } })
+        assertEquals(listOf(doubtful.faceId), snapshot.facesOn(doubtful.photoId).map { it.id })
+    }
+
+    /** A verdict stands whatever the detector thought: a confirmed face stays with its person. */
+    @Test
+    fun aConfirmedFaceTheDetectorDoubtedStaysWithItsPerson() {
+        val doubtful = entry(verdict = VerdictKind.CONFIRMED, confirmed = anna.id).copy(score = 0.55f)
+        val snapshot = PeopleSnapshot.of(listOf(doubtful), LabelSet(listOf(anna), listOf(on(doubtful, VerdictKind.CONFIRMED, anna.id))))
+        assertEquals(listOf(doubtful.faceId), snapshot.facesOf(anna.id).map { it.id })
+        assertEquals(1, snapshot.person(anna.id)?.confirmed)
+    }
+
+    /** A box drawn round a missed face shows under its person at once, before any sync saw it. */
+    @Test
+    fun aDrawnFaceIsItsPersonsBeforeTheSyncHasLookedInsideIt() {
+        val detected = entry(verdict = VerdictKind.CONFIRMED, confirmed = anna.id)
+        val photo = Uuid.random()
+        val drawn = Verdict(Uuid.random(), photo, FaceBox(0.6f, 0.2f, 0.1f, 0.15f), VerdictKind.CONFIRMED, anna.id, Instant.fromEpochSeconds(20))
+        val snapshot = PeopleSnapshot.of(
+            listOf(detected),
+            LabelSet(listOf(anna), listOf(on(detected, VerdictKind.CONFIRMED, anna.id), drawn)),
+            albumOf = { if (it == photo) album else null },
+        )
+        val faces = snapshot.facesOf(anna.id)
+        assertEquals(2, faces.size)
+        assertTrue(faces.single { it.photoId == photo }.drawn)
+        assertEquals(2, snapshot.person(anna.id)?.confirmed)
+        assertEquals(listOf(drawn.id), snapshot.facesOn(photo).map { it.id }, "and boxed on its photo")
     }
 
     @Test

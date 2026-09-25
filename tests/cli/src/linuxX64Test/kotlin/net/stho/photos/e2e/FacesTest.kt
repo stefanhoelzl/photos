@@ -7,6 +7,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.io.files.Path
 import net.stho.photos.adapter.linux.NativeSqlDrivers
+import net.stho.photos.faces.FaceBox
 import net.stho.photos.faces.FaceRef
 import net.stho.photos.faces.Labels
 import net.stho.photos.faces.PeopleIndex
@@ -73,6 +74,24 @@ class FacesTest {
         run("sync")
         expect { exit(ExitCode.CLEAN) }
         assertTrue("faces:" !in output, output)
+
+        // A box drawn round Collins in the viewer, twice the size the detector boxed him — too loose
+        // to be taken for that face — and named: the next sync looks inside it, finds him, and
+        // indexes the face under the drawn box, confirmed.
+        val collins = sitter("collins-1964.jpg")
+        val loose = FaceBox(
+            (collins.box.x - collins.box.width / 2).coerceAtLeast(0f),
+            (collins.box.y - collins.box.height / 2).coerceAtLeast(0f),
+            collins.box.width * 2,
+            collins.box.height * 2,
+        )
+        val mike = labels.createPerson("Mike")
+        labels.confirm(listOf(FaceRef(collins.photoId, loose)), mike.id)
+        run("sync")
+        expect { exit(ExitCode.CLEAN) }
+        val drawn = index.read().single { it.photoId == collins.photoId && it.box == loose }
+        assertEquals(VerdictKind.CONFIRMED, drawn.verdict)
+        assertEquals(mike.id, drawn.personId)
 
         // The album goes, and its faces with it.
         library { removeTree("Crew") }

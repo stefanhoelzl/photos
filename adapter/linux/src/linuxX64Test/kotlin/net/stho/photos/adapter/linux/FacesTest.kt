@@ -79,6 +79,8 @@ class FacesTest {
             // A studio portrait: the face is in the upper half, and not a sliver of the frame.
             assertTrue(box.y + box.height / 2 < 0.6f, "box $box")
             assertTrue(box.width > 0.1f, "box $box")
+            // A studio portrait is sharp; the measure is there and well above nothing.
+            assertTrue(face.sharpness > 10f, "sharpness ${face.sharpness}")
             // Unit embedding, so similarity is a dot product.
             assertTrue(kotlin.math.abs(face.embedding.cosine(face.embedding) - 1f) < 1e-3f)
         }

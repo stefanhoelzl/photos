@@ -1,0 +1,10 @@
+import kotlin.uuid.Uuid;
+
+-- The index is derived and rebuilt whenever its inputs change (§12), so nothing is carried across:
+-- the table only has to exist before the next rebuild fills it.
+CREATE TABLE IF NOT EXISTS candidate (
+  face_id    TEXT AS Uuid NOT NULL,
+  person_id  TEXT AS Uuid NOT NULL,
+  similarity REAL NOT NULL,
+  PRIMARY KEY (face_id, person_id)
+);

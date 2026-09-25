@@ -8,6 +8,7 @@ import kotlinx.io.files.SystemFileSystem
 import net.stho.photos.catalog.instantAdapter
 import net.stho.photos.catalog.openDriver
 import net.stho.photos.catalog.uuidAdapter
+import net.stho.photos.faces.index.Candidate
 import net.stho.photos.faces.index.Index_info
 import net.stho.photos.faces.index.Indexed_face
 import net.stho.photos.faces.index.PeopleIndexDatabase
@@ -30,6 +31,10 @@ public data class IndexEntry(
     public val similarity: Float?,
     /** Its unknown group, or null. */
     public val group: Int?,
+    /** The people it is most like, best first (see [Matching.Weighed.candidates]). */
+    public val candidates: List<Suggestion> = emptyList(),
+    /** Under the quality rule with no verdict: listed nowhere, only boxed on its photo. */
+    public val setAside: Boolean = false,
 )
 
 /**
@@ -60,6 +65,7 @@ public class PeopleIndex(public val path: Path, private val drivers: SqlDrivers)
         using(creating = true) { queries ->
             queries.transaction {
                 queries.clearFaces()
+                queries.clearCandidates()
                 for (entry in entries.sortedBy { it.faceId.toString() }) {
                     queries.insertFace(
                         face_id = entry.faceId,
@@ -75,7 +81,11 @@ public class PeopleIndex(public val path: Path, private val drivers: SqlDrivers)
                         suggested = entry.suggested,
                         similarity = entry.similarity?.toDouble(),
                         cluster_id = entry.group?.toLong(),
+                        set_aside = entry.setAside,
                     )
+                    for (candidate in entry.candidates) {
+                        queries.insertCandidate(entry.faceId, candidate.person, candidate.similarity.toDouble())
+                    }
                 }
                 queries.replaceInfo(FaceModels.VERSION, inputs, Instant.fromEpochSeconds(builtAt.epochSeconds))
             }
@@ -85,6 +95,10 @@ public class PeopleIndex(public val path: Path, private val drivers: SqlDrivers)
     public fun read(): List<IndexEntry> {
         if (!exists) return emptyList()
         return using(creating = false) { queries ->
+            // Absent from an index the CLI built before candidates were kept: no order, not an error.
+            val candidates = runCatching { queries.selectCandidates().executeAsList() }.getOrDefault(emptyList())
+                .groupBy({ it.face_id }, { Suggestion(it.person_id, it.similarity.toFloat()) })
+                .mapValues { (_, list) -> list.sortedByDescending { it.similarity } }
             queries.selectFaces().executeAsList().map { row ->
                 IndexEntry(
                     faceId = row.face_id,
@@ -97,6 +111,8 @@ public class PeopleIndex(public val path: Path, private val drivers: SqlDrivers)
                     suggested = row.suggested,
                     similarity = row.similarity?.toFloat(),
                     group = row.cluster_id?.toInt(),
+                    candidates = candidates[row.face_id].orEmpty(),
+                    setAside = row.set_aside,
                 )
             }
         }
@@ -127,6 +143,7 @@ public class PeopleIndex(public val path: Path, private val drivers: SqlDrivers)
         private fun database(driver: SqlDriver) = PeopleIndexDatabase(
             driver,
             index_infoAdapter = Index_info.Adapter(built_atAdapter = instantAdapter),
+            candidateAdapter = Candidate.Adapter(face_idAdapter = uuidAdapter, person_idAdapter = uuidAdapter),
             indexed_faceAdapter = Indexed_face.Adapter(
                 face_idAdapter = uuidAdapter,
                 album_idAdapter = uuidAdapter,

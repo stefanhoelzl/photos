@@ -37,7 +37,11 @@ public class CImagingFaces(private val models: FaceModelFiles) : AutoCloseable {
     private val all = AtomicReference<List<CPointer<pi_faces>>>(emptyList())
 
     /** The faces in [image], boxes as fractions of its width and height. */
-    public fun find(image: PixelImage): List<DetectedFace> {
+    public fun find(
+        image: PixelImage,
+        detectLongEdge: Int = FaceModels.DETECT_LONG_EDGE,
+        minScore: Float = FaceModels.MIN_SCORE,
+    ): List<DetectedFace> {
         val engine = borrow()
         try {
             return memScoped {
@@ -45,7 +49,7 @@ public class CImagingFaces(private val models: FaceModelFiles) : AutoCloseable {
                 pi_face_result_init(result.ptr)
                 try {
                     imagingCall { err ->
-                        pi_faces_find(engine, image.raw.ptr, FaceModels.DETECT_LONG_EDGE, FaceModels.MIN_SCORE, result.ptr, err)
+                        pi_faces_find(engine, image.raw.ptr, detectLongEdge, minScore, result.ptr, err)
                     }
                     val width = image.width.toFloat()
                     val height = image.height.toFloat()
@@ -61,6 +65,7 @@ public class CImagingFaces(private val models: FaceModelFiles) : AutoCloseable {
                             },
                             score = face.score,
                             embedding = FloatArray(dims) { k -> embeddings!![i * dims + k] },
+                            sharpness = face.sharpness,
                         )
                     }
                 } finally {

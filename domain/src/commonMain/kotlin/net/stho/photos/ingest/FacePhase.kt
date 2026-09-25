@@ -24,6 +24,7 @@ import net.stho.photos.faces.Labels
 import net.stho.photos.faces.Matching
 import net.stho.photos.faces.PeopleIndex
 import net.stho.photos.faces.StoredFace
+import net.stho.photos.faces.Verdict
 import net.stho.photos.faces.VerdictKind
 import net.stho.photos.faces.people.PeopleDatabase
 import net.stho.photos.model.MediaType
@@ -104,6 +105,13 @@ public class FacePhase(
             if (!SystemFileSystem.exists(path(id)) && facesKey(id) in zone) fetch(id)
         }
 
+        // Read before the scan, not after it: a box drawn in the viewer is a face the scan has to
+        // go and look for (§12).
+        val snapshot = Path(work, "people.db")
+        status("faces  reading labels")
+        val labelSet = snapshotLabels(snapshot)
+        val drawnByPhoto = labelSet?.verdicts.orEmpty().filter { it.kind == VerdictKind.CONFIRMED }.groupBy { it.photoId }
+
         val files = mutableMapOf<Uuid, FacesFile>()
         var scanned = 0
         var found = 0
@@ -126,14 +134,16 @@ public class FacePhase(
             }
             scanned += results.size
             found += newFaces.size
+            val drawn = findDrawn(album, kept + newFaces, drawnByPhoto, workers, failures)
+            found += drawn.size
 
             val file = FacesFile(
                 albumId = album.info.id,
                 modelVersion = FaceModels.VERSION,
                 scanned = keptScanned + results.map { it.first },
-                faces = kept + newFaces,
+                faces = kept + newFaces + drawn,
             )
-            val changed = existing == null || results.isNotEmpty() ||
+            val changed = existing == null || results.isNotEmpty() || drawn.isNotEmpty() ||
                 kept.size != existing.faces.size || keptScanned.size != existing.scanned.size
             if (changed) {
                 val staged = Path(work, "${album.info.id}.db")
@@ -175,9 +185,6 @@ public class FacePhase(
         }
         val sent = unsent.size
 
-        val snapshot = Path(work, "people.db")
-        status("faces  reading labels")
-        val labelSet = snapshotLabels(snapshot)
         var labelsSent = false
         val labelsDigest = if (labelSet != null) snapshot.sha256Hex() else null
         if (labelsDigest != null && (uploaded[PEOPLE_KEY] != labelsDigest || PEOPLE_KEY !in zone)) {
@@ -197,17 +204,14 @@ public class FacePhase(
             }
         }
         val inputs = (digests.entries.sortedBy { it.key.toString() }.map { "${it.key}:${it.value}" } +
-            "labels:${labelsDigest ?: "-"}" + "model:${FaceModels.VERSION}").joinToString("\n").encodeToByteArray().sha256Hex()
+            "labels:${labelsDigest ?: "-"}" + "model:${FaceModels.VERSION}" + "index:$INDEX_FORMAT").joinToString("\n").encodeToByteArray().sha256Hex()
         val rebuild = index.inputs() != inputs
         val summary = if (rebuild) {
-            // The last grouping, kept rather than redone (see Matching.group) — unless it was made
-            // with another model, whose faces are not these.
-            val previous = if (index.modelVersion() == FaceModels.VERSION) {
-                index.read().mapNotNull { entry -> entry.group?.let { entry.faceId to it } }.toMap()
-            } else {
-                emptyMap()
+            // On the workers, not here: this is minutes of arithmetic on a large library, and on the
+            // run's own thread it also held back every progress line until it was over.
+            val entries = withContext(workers()) {
+                conclude(files.values.toList(), labelSet ?: LabelSet(emptyList(), emptyList()), status)
             }
-            val entries = conclude(files.values.toList(), labelSet ?: LabelSet(emptyList(), emptyList()), previous, status)
             status("faces  writing the index")
             index.rebuild(entries, inputs, clock.now())
             summarise(entries, labelSet)
@@ -287,13 +291,14 @@ public class FacePhase(
         folder: Path,
         workers: () -> CoroutineContext,
         failures: MutableList<IngestReport.Failure>,
+        sensitive: Boolean = false,
     ): Pair<Uuid, List<DetectedFace>>? {
         val name = row.sourceFilename ?: row.filename
         val file = Path(folder, name)
         if (!SystemFileSystem.exists(file)) return null
         val kind = if (name.substringAfterLast('.').equals("CR2", ignoreCase = true)) MediaItem.Kind.Raw else MediaItem.Kind.Still
         return try {
-            val faces = withContext(workers()) { pipeline.findFaces(MediaItem(file.toString(), kind, 0)) } ?: return null
+            val faces = withContext(workers()) { pipeline.findFaces(MediaItem(file.toString(), kind, 0), sensitive) } ?: return null
             row.id to faces
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -301,6 +306,44 @@ public class FacePhase(
             failures += IngestReport.Failure(relative(file), "faces: ${unreadable.message}")
             row.id to emptyList()
         }
+    }
+
+    /**
+     * Faces for the boxes a person drew around faces the scan missed (§12): every confirmed verdict
+     * on this album's photos that no face lies under. Each such photo gets the sensitive pass once,
+     * and the face found inside the drawn box — the detection the box overlaps most, or whose centre
+     * it holds — is kept *under the drawn box*, so the verdict finds it the way it finds any face,
+     * and its embedding makes it one of that person's references. A box with nothing to find stays
+     * as it is, and is looked for again next run.
+     */
+    private suspend fun findDrawn(
+        album: Shard,
+        faces: List<StoredFace>,
+        drawnByPhoto: Map<Uuid, List<Verdict>>,
+        workers: () -> CoroutineContext,
+        failures: MutableList<IngestReport.Failure>,
+    ): List<StoredFace> {
+        val byPhoto = faces.groupBy(StoredFace::photoId)
+        val found = mutableListOf<StoredFace>()
+        val folder = Path(config.libraryRoot, *album.info.sourcePath!!.split('/').toTypedArray())
+        for (row in album.photos.filter(::analysed)) {
+            val missed = drawnByPhoto[row.id].orEmpty().filter { verdict ->
+                byPhoto[row.id].orEmpty().none { it.face.box.overlap(verdict.box) >= Labels.SAME_FACE_OVERLAP }
+            }
+            if (missed.isEmpty()) continue
+            val detections = analyse(row, folder, workers, failures, sensitive = true)?.second ?: continue
+            for (verdict in missed) {
+                val box = verdict.box
+                val inside = detections.filter { face ->
+                    val cx = face.box.x + face.box.width / 2
+                    val cy = face.box.y + face.box.height / 2
+                    face.box.overlap(box) > 0f || (cx in box.x..(box.x + box.width) && cy in box.y..(box.y + box.height))
+                }
+                val best = inside.maxByOrNull { it.box.overlap(box) } ?: continue
+                found += StoredFace(ids.next(), row.id, DetectedFace(box, best.landmarks, best.score, best.embedding, best.sharpness))
+            }
+        }
+        return found
     }
 
     private suspend fun fetch(album: Uuid) {
@@ -339,22 +382,50 @@ public class FacePhase(
 
     // ------------------------------------------------------------------------------ the index
 
-    private fun conclude(
+    private suspend fun conclude(
         files: List<FacesFile>,
         labelSet: LabelSet,
-        previous: Map<Uuid, Int>,
         status: (String) -> Unit,
     ): List<IndexEntry> {
         val faces = files.flatMap { file ->
             file.faces.map { IndexedFace(it.id, file.albumId, it.photoId, it.face) }
         }
-        status("faces  suggesting among ${faces.size} faces")
         val resolved = Matching.resolve(faces, labelSet.verdicts)
-        val suggestions = Matching.suggest(faces, resolved)
-        val unknown = faces.filter {
-            it.id !in resolved.confirmed && it.id !in resolved.ignored && it.id !in suggestions
+        // How sharp a face has to be, measured on what the person has already called a face.
+        val byId = faces.associateBy(IndexedFace::id)
+        val quality = Matching.Quality.from(resolved.confirmed.keys.mapNotNull { byId[it]?.face })
+        val weigher = Matching.Weigher(faces, resolved, quality)
+        // Every face is weighed on its own, so the faces are split across the workers: `jobs`
+        // chunks at a time, the count said after each wave.
+        val chunks = faces.chunked(WEIGH_CHUNK)
+        val weights = mutableMapOf<Uuid, Matching.Weight>()
+        var weighed = 0
+        for (wave in chunks.chunked(config.jobs)) {
+            status("faces  suggesting $weighed/${faces.size}")
+            val results = coroutineScope {
+                wave.map { chunk -> async { chunk.mapNotNull { face -> weigher.weigh(face)?.let { face.id to it } } } }.awaitAll()
+            }
+            for (result in results) weights.putAll(result)
+            weighed += wave.sumOf { it.size }
         }
-        val groups = Matching.group(unknown, previous) { done, total -> status("faces  grouping $done/$total") }
+        val suggestions = weights.mapNotNull { (id, weight) -> weight.suggestion?.let { id to it } }.toMap()
+        // Set-aside faces are no group's: a blurred shape grouped is a group of blurred shapes.
+        val unknown = faces.filter {
+            it.id !in resolved.confirmed && it.id !in resolved.ignored && it.id !in suggestions &&
+                quality.trusted(it.face)
+        }
+        // Every unknown face against every other is the cost; like the weighing, it is split
+        // across the workers, and only the walk over the result runs on one.
+        val grouper = Matching.Grouper(unknown)
+        val neighbours = ArrayList<IntArray>(grouper.size)
+        for (wave in (0 until grouper.size).chunked(WEIGH_CHUNK).chunked(config.jobs)) {
+            status("faces  grouping ${neighbours.size}/${grouper.size}")
+            val results = coroutineScope {
+                wave.map { chunk -> async { grouper.neighbours(chunk.first()..chunk.last()) } }.awaitAll()
+            }
+            for (result in results) neighbours.addAll(result)
+        }
+        val groups = grouper.cluster(neighbours)
         return faces.map { face ->
             val confirmed = resolved.confirmed[face.id]
             val suggestion = suggestions[face.id]
@@ -374,6 +445,8 @@ public class FacePhase(
                 suggested = confirmed == null && suggestion != null,
                 similarity = suggestion?.similarity,
                 group = groups[face.id],
+                candidates = weights[face.id]?.candidates.orEmpty(),
+                setAside = confirmed == null && face.id !in resolved.ignored && !quality.trusted(face.face),
             )
         }
     }
@@ -401,6 +474,17 @@ public class FacePhase(
         public const val FACES_PREFIX: String = "faces/"
         public const val PEOPLE_PREFIX: String = "people/"
         public const val PEOPLE_KEY: String = "people/people.db"
+
+        /** Faces weighed per task: enough to be worth a thread hop, few enough to spread evenly. */
+        private const val WEIGH_CHUNK: Int = 500
+
+        /**
+         * What the index holds, as part of its inputs: raised when a build starts keeping something
+         * new, so an index from before is rebuilt once rather than read without it. 2: candidates.
+         * 3: faces under [Matching.QUALITY_FLOOR] set aside. 4: [Matching.SUGGEST_AT] measured.
+         * 5: top-5 scoring, density grouping, the sharpness floor, `set_aside`.
+         */
+        private const val INDEX_FORMAT: Int = 5
 
         public fun facesKey(album: Uuid): String = "$FACES_PREFIX$album.db"
     }
