@@ -137,7 +137,7 @@ internal class IosScenario(
 
     /**
      * Fixture media into the simulator's own photo library — the phone's gallery for an upload
-     * scenario. The library is the device's, not the app's, so a reinstall does not empty it.
+     * scenario. The library is the device's, not the app's, so resetting the app does not empty it.
      */
     fun addToLibrary(vararg fixtures: String) = simulator.addMedia(fixtures.map { File(media, it) })
 
@@ -182,18 +182,29 @@ internal class IosScenario(
     private var control = Control("http://127.0.0.1:0")
 
     /**
-     * A clean install, launched with its control port, answering `/state`.
+     * The app as a fresh install leaves it: an empty container, no photo-library grant and no
+     * credentials — resetting the keychain because iOS keeps Keychain items across an uninstall, so
+     * without it the next scenario would start already set up.
      *
-     * Reinstalling empties the container, and resetting the keychain removes credentials a
-     * previous scenario stored — iOS keeps Keychain items across an uninstall, so without the
-     * reset the next scenario would start already set up.
+     * Only the suite's first scenario really installs. Every later one puts the same state back
+     * without leaving the app uninstalled: the container is emptied back to what that install left
+     * in it, and the app's privacy grants are reset, which is the rest of what an uninstall undoes.
+     * The app keeps nothing outside its container but the Keychain. An uninstall and install cost
+     * 5-6 s on the runner, twenty-odd times a suite.
      */
     fun install() = timings.measure("install") {
         simulator.boot()
         simulator.terminate()
-        simulator.uninstall()
+        val fresh = installed[simulator.device]
+        if (fresh == null) {
+            simulator.uninstall()
+            simulator.install(app)
+            installed[simulator.device] = FreshContainer.of(simulator.dataContainer())
+        } else {
+            fresh.restore(simulator.dataContainer())
+            simulator.resetPrivacy()
+        }
         simulator.resetKeychain()
-        simulator.install(app)
     }
 
     /**
@@ -284,9 +295,34 @@ internal class IosScenario(
         for (test in uiTests) println(test.tail())
     }
 
-    // The app is left running: the next scenario's [install] stops it before it uninstalls.
+    // The app is left running: the next scenario's [install] stops it before it resets it.
     override fun close() {
         uiTests.forEach(UiTest::close)
+    }
+}
+
+/**
+ * The app's installed state, per device, for the suite's JVM: every scenario runs in this one
+ * process (`maxParallelForks = 1`), so the first one to install is the suite's only install.
+ */
+private val installed = mutableMapOf<String, FreshContainer>()
+
+/**
+ * What a fresh install puts in the app's data container, by path relative to it: the directory
+ * skeleton, and the container manager's own metadata file, which must survive the app's own files.
+ */
+internal class FreshContainer private constructor(private val paths: Set<String>) {
+
+    /** Deletes everything the app has written since, leaving what the install left. */
+    fun restore(container: File) {
+        container.walkBottomUp()
+            .filter { it != container && it.relativeTo(container).path !in paths }
+            .forEach { check(it.deleteRecursively()) { "could not empty $it from the app's container" } }
+    }
+
+    companion object {
+        fun of(container: File): FreshContainer =
+            FreshContainer(container.walkTopDown().filter { it != container }.map { it.relativeTo(container).path }.toSet())
     }
 }
 
@@ -403,13 +439,24 @@ internal class Control(private val base: String) {
 }
 
 /** `xcrun simctl`, one device, and every failure loud. */
+/** Devices this suite's JVM has booted — see [Simulator.boot]. */
+private val booted = mutableSetOf<String>()
+
 internal class Simulator(val device: String, private val timings: Timings) {
 
+    /**
+     * Once per suite: nothing shuts the device down between scenarios, and asking again cost 1-2 s
+     * a scenario.
+     */
     fun boot() {
+        if (!booted.add(device)) return
         // Booting a booted device exits non-zero; `bootstatus -b` is what actually waits.
         run("xcrun", "simctl", "boot", device, allowFailure = true)
         run("xcrun", "simctl", "bootstatus", device, "-b")
     }
+
+    /** Every privacy grant the app holds, gone as an uninstall takes them — [grantPhotos]' among them. */
+    fun resetPrivacy() = run("xcrun", "simctl", "privacy", device, "reset", "all", BUNDLE_ID)
 
     fun install(app: File) = run("xcrun", "simctl", "install", device, app.absolutePath)
 
