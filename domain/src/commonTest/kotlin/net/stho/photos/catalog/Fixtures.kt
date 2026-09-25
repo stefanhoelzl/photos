@@ -3,8 +3,11 @@ package net.stho.photos.catalog
 import app.cash.sqldelight.db.QueryResult
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockRequestHandleScope
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
+import io.ktor.client.request.HttpRequestData
+import io.ktor.client.request.HttpResponseData
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
@@ -15,6 +18,8 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
@@ -311,7 +316,16 @@ internal class FakeZone(private val clock: Clock = Clock.System) {
         objects.remove(key)
     }
 
-    val engine: MockEngine = MockEngine { request ->
+    /**
+     * One request at a time. Ingest deletes up to `DELETE_JOBS` keys at once, each on whatever
+     * thread the engine picked, and [objects] is a plain map: unguarded, two removes could collide
+     * and leave it holding a null key. The tests read [keys] between runs, never during one.
+     */
+    private val serving = Mutex()
+
+    val engine: MockEngine = MockEngine { request -> serving.withLock { serve(request) } }
+
+    private suspend fun MockRequestHandleScope.serve(request: HttpRequestData): HttpResponseData =
         if (request.url.parameters.contains("list-type")) {
             listCount++
             val prefix = request.url.parameters["prefix"].orEmpty()
@@ -368,7 +382,6 @@ internal class FakeZone(private val clock: Clock = Clock.System) {
                 }
             }
         }
-    }
 
     private fun listXml(objects: List<Map.Entry<String, Entry>>): String = buildString {
         append("""<?xml version="1.0" encoding="UTF-8"?>""")
