@@ -266,7 +266,7 @@ class UploadTest {
     /**
      * The edited and the unedited Live Photo, keyed by whether it is edited: seeded by whichever of
      * the two scenarios runs first, in one `xcodebuild` for both. The library is the device's, so a
-     * reinstall leaves them there for the second.
+     * reset of the app leaves them there for the second.
      */
     private fun IosScenario.seededLivePhotos(): Map<Boolean, String> = livePhotos ?: run {
         val seeded = startUiTest(
