@@ -45,6 +45,11 @@ public class DetectedFace(
     public val landmarks: FloatArray,
     public val score: Float,
     public val embedding: FloatArray,
+    /**
+     * The variance of the Laplacian of the aligned crop the embedding came from: low for a blurred
+     * face and for a small one upscaled to the crop's size. NaN where it was never measured.
+     */
+    public val sharpness: Float = Float.NaN,
 )
 
 /** The dot product of two unit vectors, which is their cosine similarity. */

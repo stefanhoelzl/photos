@@ -19,6 +19,7 @@ import net.stho.photos.app.DesktopUi
 import net.stho.photos.app.Face
 import net.stho.photos.app.FaceState
 import net.stho.photos.app.Showing
+import net.stho.photos.faces.FaceBox
 import net.stho.photos.app.ListEntry
 import net.stho.photos.app.MapCamera
 import net.stho.photos.app.MapPin
@@ -283,6 +284,20 @@ class ViewerTest {
         model.contextFace(collins)
         model.nameChosen(null, "Michael")
         assertEquals(listOf("Buzz", "Michael"), model.state.value.people.people.map { it.person.name }.sorted())
+
+        // D on a photograph, a box drawn where the detector found nothing, and a name: the drawn face
+        // is Buzz's at once, with a crop cut from the box.
+        model.select(crew)
+        val aldrin = model.state.value.photos.indexOfFirst { it.diskFilename == "aldrin-1963.jpg" }
+        model.openPhoto(aldrin)
+        await(viewer, "the original decoded") { it.preview != null }
+        model.toggleDrawing()
+        model.drawn(FaceBox(0.05f, 0.7f, 0.2f, 0.2f))
+        shot(viewer, "viewer-drawing")
+        model.nameDrawn(buzz.person.id)
+        model.show(Showing.Person(buzz.person.id))
+        val withDrawn = await(viewer, "the drawn face's crop") { ui -> ui.faces.any { it.drawn && it.id in ui.crops } }
+        assertEquals(1, withDrawn.faces.count { it.drawn })
         viewer.close()
     }
 

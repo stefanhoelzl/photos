@@ -4,6 +4,14 @@ import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.abs
+import kotlin.uuid.Uuid
+import net.stho.photos.faces.FaceBox
+import net.stho.photos.faces.Person
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -467,20 +475,50 @@ private fun FaceTile(
  */
 @Composable
 private fun FacesMenu(ui: DesktopUi, model: DesktopModel, onDismiss: () -> Unit) {
-    var typed by remember { mutableStateOf("") }
     val count = ui.faceSelection.size.coerceAtLeast(1)
     val person = ui.person?.person
-    // The person on screen first: right-clicking their suggestions and naming them is the common case.
-    val everyone = ui.people.people.map { it.person }.sortedBy { if (it.id == person?.id) 0 else 1 }
-    val matches = everyone.filter { typed.isBlank() || it.name.lowercase().startsWith(typed.trim().lowercase()) }
-    val exact = ui.people.people.any { it.person.name.equals(typed.trim(), ignoreCase = true) }
-    fun done(action: () -> Unit) {
+    // Most alike first, by the last sync's scores for the faces being named (§12).
+    val chosen = ui.faces.filter { it.id in ui.faceSelection }
+    NameMenu(
+        title = if (count == 1) "This face is…" else "These $count faces are…",
+        people = ui.people.ranked(chosen),
+        known = ui.people.people.map { it.person },
+        onPerson = { model.nameChosen(it) },
+        onNew = { model.nameChosen(null, it) },
+        onDismiss = onDismiss,
+    ) { done ->
+        if (person != null) {
+            DropdownMenuItem(text = { Text("Not ${person.name}") }, onClick = { done { model.rejectChosen() } })
+        }
+        DropdownMenuItem(text = { Text("Ignore") }, onClick = { done { model.ignoreChosen() } })
+    }
+}
+
+/**
+ * Naming one face or several: a field that narrows [people] — already in the order to offer them
+ * — completes to the first match on Enter, or offers a new person when nothing matches. [extra]
+ * adds what else the menu's caller can decide, below a divider.
+ */
+@Composable
+private fun NameMenu(
+    title: String,
+    people: List<Person>,
+    known: List<Person>,
+    onPerson: (Uuid) -> Unit,
+    onNew: (String) -> Unit,
+    onDismiss: () -> Unit,
+    extra: @Composable (done: (() -> Unit) -> Unit) -> Unit = {},
+) {
+    var typed by remember { mutableStateOf("") }
+    val matches = people.filter { typed.isBlank() || it.name.lowercase().startsWith(typed.trim().lowercase()) }
+    val exact = known.any { it.name.equals(typed.trim(), ignoreCase = true) }
+    val done: (() -> Unit) -> Unit = { action ->
         onDismiss()
         action()
     }
     DropdownMenu(expanded = true, onDismissRequest = onDismiss) {
         Text(
-            if (count == 1) "This face is…" else "These $count faces are…",
+            title,
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
@@ -496,8 +534,8 @@ private fun FacesMenu(ui: DesktopUi, model: DesktopModel, onDismiss: () -> Unit)
                 if ((event.key == Key.Enter || event.key == Key.NumPadEnter) && event.type == KeyEventType.KeyDown) {
                     val pick = matches.firstOrNull()
                     when {
-                        pick != null && typed.isNotBlank() -> done { model.nameChosen(pick.id) }
-                        typed.isNotBlank() -> done { model.nameChosen(null, typed) }
+                        pick != null && typed.isNotBlank() -> done { onPerson(pick.id) }
+                        typed.isNotBlank() -> done { onNew(typed) }
                     }
                     true
                 } else {
@@ -506,16 +544,13 @@ private fun FacesMenu(ui: DesktopUi, model: DesktopModel, onDismiss: () -> Unit)
             },
         )
         for (match in matches.take(MENU_PEOPLE)) {
-            DropdownMenuItem(text = { Text(match.name) }, onClick = { done { model.nameChosen(match.id) } })
+            DropdownMenuItem(text = { Text(match.name) }, onClick = { done { onPerson(match.id) } })
         }
         if (typed.isNotBlank() && !exact) {
-            DropdownMenuItem(text = { Text("New person “${typed.trim()}”") }, onClick = { done { model.nameChosen(null, typed) } })
+            DropdownMenuItem(text = { Text("New person “${typed.trim()}”") }, onClick = { done { onNew(typed) } })
         }
         HorizontalDivider()
-        if (person != null) {
-            DropdownMenuItem(text = { Text("Not ${person.name}") }, onClick = { done { model.rejectChosen() } })
-        }
-        DropdownMenuItem(text = { Text("Ignore") }, onClick = { done { model.ignoreChosen() } })
+        extra(done)
     }
 }
 
@@ -614,14 +649,16 @@ private fun RenameDialog(current: String, onDone: (String?) -> Unit) {
  * The open photo's faces (§12), drawn where they are once F turns them on: solid for a
  * confirmed face, dashed for a suggestion, faint for an unknown one. A click opens the same
  * choices a grid offers.
+ *
+ * With D, a drag over the photo draws a box around a face the detector missed, and the naming
+ * menu opens over it. All of it is inside the viewer's zoom, so it stays on the photograph; the
+ * drag is taken here, so it neither pages to the next photo nor pans.
  */
 @Composable
 internal fun BoxScope.FaceBoxes(ui: DesktopUi, model: DesktopModel, photo: PhotoRow) {
-    if (!ui.faceBoxes) return
+    if (!ui.faceBoxes && !ui.drawing) return
     val width = photo.width ?: return
     val height = photo.height ?: return
-    val faces = ui.openFaces
-    if (faces.isEmpty()) return
     BoxWithConstraints(Modifier.matchParentSize()) {
         // The photograph is fitted into the page, so its rectangle is the page's, letterboxed.
         val scale = minOf(maxWidth.value / width, maxHeight.value / height)
@@ -629,20 +666,102 @@ internal fun BoxScope.FaceBoxes(ui: DesktopUi, model: DesktopModel, photo: Photo
         val shownHeight = height * scale
         val left = (maxWidth.value - shownWidth) / 2
         val top = (maxHeight.value - shownHeight) / 2
-        for (face in faces) {
+        fun at(box: FaceBox) = listOf(
+            (left + box.x * shownWidth).dp, (top + box.y * shownHeight).dp,
+            (box.width * shownWidth).dp, (box.height * shownHeight).dp,
+        )
+        if (ui.faceBoxes) for (face in ui.openFaces) {
+            val (x, y, w, h) = at(face.box)
             FaceBox(
                 face = face,
                 name = face.person?.let { id -> ui.people.person(id)?.person?.name },
                 ui = ui,
                 model = model,
-                x = (left + face.box.x * shownWidth).dp,
-                y = (top + face.box.y * shownHeight).dp,
-                w = (face.box.width * shownWidth).dp,
-                h = (face.box.height * shownHeight).dp,
+                x = x, y = y, w = w, h = h,
+            )
+        }
+        if (ui.drawing) {
+            DrawLayer(left, top, shownWidth, shownHeight, onDrawn = model::drawn)
+            Text(
+                "Drag over a face to mark it · D or Esc to stop",
+                fontSize = 12.sp,
+                color = Color.White,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp)
+                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(6.dp)).padding(horizontal = 10.dp, vertical = 4.dp),
+            )
+        }
+        ui.drawnBox?.let { box ->
+            val (x, y, w, h) = at(box)
+            Box(Modifier.offset(x, y).size(w, h).dashedOutline(DRAWN)) {
+                NameMenu(
+                    title = "This face is…",
+                    // Nobody has been compared with a box the detector never saw: newest first.
+                    people = ui.people.people.map { it.person },
+                    known = ui.people.people.map { it.person },
+                    onPerson = { model.nameDrawn(it) },
+                    onNew = { model.nameDrawn(null, it) },
+                    onDismiss = model::cancelDrawn,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Where a drag draws a box, over the photograph's rectangle — [left], [top], [width] and [height]
+ * in dp — reported as fractions of the photograph, the way every box is kept.
+ */
+@Composable
+private fun BoxScope.DrawLayer(left: Float, top: Float, width: Float, height: Float, onDrawn: (FaceBox) -> Unit) {
+    val density = LocalDensity.current.density
+    var from by remember { mutableStateOf<Offset?>(null) }
+    var to by remember { mutableStateOf<Offset?>(null) }
+    fun fraction(point: Offset): Pair<Float, Float> =
+        ((point.x / density - left) / width).coerceIn(0f, 1f) to ((point.y / density - top) / height).coerceIn(0f, 1f)
+    Box(
+        Modifier.matchParentSize().pointerInput(left, top, width, height) {
+            detectDragGestures(
+                onDragStart = { from = it; to = it },
+                onDrag = { change, _ -> to = change.position; change.consume() },
+                onDragCancel = { from = null; to = null },
+                onDragEnd = {
+                    val start = from
+                    val end = to
+                    from = null
+                    to = null
+                    if (start != null && end != null) {
+                        val (x1, y1) = fraction(start)
+                        val (x2, y2) = fraction(end)
+                        val box = FaceBox(minOf(x1, x2), minOf(y1, y2), abs(x2 - x1), abs(y2 - y1))
+                        // A click, or a sliver, is not a face.
+                        if (box.width > 0.01f && box.height > 0.01f) onDrawn(box)
+                    }
+                },
+            )
+        },
+    ) {
+        val start = from
+        val end = to
+        if (start != null && end != null) {
+            Box(
+                Modifier.offset((minOf(start.x, end.x) / density).dp, (minOf(start.y, end.y) / density).dp)
+                    .size((abs(end.x - start.x) / density).dp, (abs(end.y - start.y) / density).dp)
+                    .dashedOutline(DRAWN),
             )
         }
     }
 }
+
+private fun Modifier.dashedOutline(colour: Color): Modifier = drawBehind {
+    drawRoundRect(
+        color = colour,
+        cornerRadius = CornerRadius(4.dp.toPx()),
+        style = Stroke(width = 2.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f))),
+    )
+}
+
+/** A box being drawn, or drawn and waiting for its name: apart from every face state's colour. */
+private val DRAWN = Color(0xFF64D2FF)
 
 @Composable
 private fun FaceBox(face: Face, name: String?, ui: DesktopUi, model: DesktopModel, x: Dp, y: Dp, w: Dp, h: Dp) {
@@ -685,7 +804,8 @@ private fun FaceBox(face: Face, name: String?, ui: DesktopUi, model: DesktopMode
             if (typing == null) {
                 DropdownMenuItem(text = { Text("Someone else…") }, onClick = { naming = "" })
             } else {
-                val matches = ui.people.people.map { it.person }.filter { typing.isNotBlank() && it.name.lowercase().startsWith(typing.trim().lowercase()) }
+                // Most alike first; typing narrows without reordering.
+                val matches = ui.people.ranked(listOf(face)).filter { it.name.lowercase().startsWith(typing.trim().lowercase()) }
                 OutlinedTextField(
                     value = typing,
                     onValueChange = { naming = it },
@@ -693,7 +813,7 @@ private fun FaceBox(face: Face, name: String?, ui: DesktopUi, model: DesktopMode
                     placeholder = { Text("Name") },
                     modifier = Modifier.padding(horizontal = 8.dp).width(220.dp).onPreviewKeyEvent { event ->
                         if (event.key == Key.Enter && event.type == KeyEventType.KeyDown) {
-                            choose(FaceChoice.Named(matches.firstOrNull()?.name ?: typing))
+                            if (typing.isNotBlank()) choose(FaceChoice.Named(matches.firstOrNull()?.name ?: typing))
                             true
                         } else {
                             false

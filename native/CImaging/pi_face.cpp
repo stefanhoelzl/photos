@@ -99,6 +99,13 @@ extern "C" int pi_faces_find(pi_faces *f, const pi_image *img, int detect_long_e
             cv::Mat aligned, feature;
             f->embedder->alignCrop(bgr, row, aligned);
             f->embedder->feature(aligned, feature);
+
+            // Sharpness, on exactly the pixels the embedding saw.
+            cv::Mat grey, laplacian;
+            cv::cvtColor(aligned, grey, cv::COLOR_BGR2GRAY);
+            cv::Laplacian(grey, laplacian, CV_64F);
+            cv::Scalar mean, deviation;
+            cv::meanStdDev(laplacian, mean, deviation);
             cv::Mat unit;
             cv::normalize(feature.reshape(1, 1), unit, 1.0, 0.0, cv::NORM_L2, CV_32F);
             dims = unit.cols;
@@ -110,6 +117,7 @@ extern "C" int pi_faces_find(pi_faces *f, const pi_image *img, int detect_long_e
             face.h = row.at<float>(0, 3);
             for (int k = 0; k < 10; k++) face.landmarks[k] = row.at<float>(0, 4 + k);
             face.score = score;
+            face.sharpness = (float)(deviation[0] * deviation[0]);
             kept.push_back(face);
             embeddings.insert(embeddings.end(), unit.ptr<float>(0), unit.ptr<float>(0) + dims);
         }

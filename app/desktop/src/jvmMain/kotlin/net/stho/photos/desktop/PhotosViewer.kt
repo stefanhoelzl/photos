@@ -66,7 +66,7 @@ public class PhotosViewer(
         videos = originals,
         scope = scope,
         // §12: the CLI's index, and the one file in the library this viewer writes.
-        people = LocalPeople(cliCache, libraryRoot, drivers, library::takenAt),
+        people = LocalPeople(cliCache, libraryRoot, drivers, library::takenAt, library::albumOf),
         crops = FaceCropStore(library, originals, cropDirectory(cropCache)),
     )
 

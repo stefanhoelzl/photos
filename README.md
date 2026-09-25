@@ -204,8 +204,8 @@ value, which is *absent* and which is *not now*.
 
 ## The shipped binary
 
-**37.1 MiB stripped, glibc floor `GLIBC_2.17`** — older than any desktop distribution still in
-use; 10.4 MiB of it is OpenCV's dnn, for §12's faces. libheif, x265, ffmpeg, OpenCV, libcurl,
+**38.0 MiB stripped, glibc floor `GLIBC_2.17`** — older than any desktop distribution still in
+use; 11.3 MiB of it is §12's faces, most of that OpenCV's dnn. libheif, x265, ffmpeg, OpenCV, libcurl,
 OpenSSL, SQLite and libstdc++ are all linked in; what
 remains dynamic is base-system only:
 

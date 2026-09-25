@@ -21,12 +21,12 @@ import net.stho.photos.storage.sha256Hex
  * exactly like `:native`'s tarballs, so what a run analyses with is decided by this file and by
  * nothing a server says later.
  *
- * [VERSION] names the pair. Every scanned photo is recorded against it (see [FacesFile]), so
+ * [VERSION] names the pair, and what is measured with them — the crop's sharpness since the second. Every scanned photo is recorded against it (see [FacesFile]), so
  * changing either model — the evaluation §12 defers the final choice to — is a new version, and
  * the next run scans the library again with it.
  */
 public object FaceModels {
-    public const val VERSION: String = "yunet-2023mar+sface-2021dec"
+    public const val VERSION: String = "yunet-2023mar+sface-2021dec+sharpness"
 
     /** opencv_zoo at this commit, fetched through GitHub's LFS media host. */
     private const val ZOO =
@@ -55,6 +55,14 @@ public object FaceModels {
      * background is the ignore verdict's business, not the detector's.
      */
     public const val MIN_SCORE: Float = 0.6f
+
+    /**
+     * The sensitive pass, for a photo with a drawn box (§12): the detector at twice the size and
+     * a floor low enough to take its doubtful answers. Only a face inside the drawn box is kept, so
+     * the doubt is the person's to settle, not the detector's.
+     */
+    public const val SENSITIVE_LONG_EDGE: Int = 2560
+    public const val SENSITIVE_MIN_SCORE: Float = 0.3f
 
     public class Model(public val name: String, public val url: String, public val sha256: String)
 }

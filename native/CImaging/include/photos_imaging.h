@@ -161,6 +161,10 @@ typedef struct {
      * pixels. What the embedder aligns by, kept so a later model can be re-run from them. */
     float landmarks[10];
     float score;
+    /* The variance of the Laplacian of the aligned 112x112 grey crop the embedding was taken
+     * from: low for a blurred face, and for a small one upscaled to that size. Comparable across
+     * faces because every crop is the same size. */
+    float sharpness;
 } pi_face;
 
 typedef struct {

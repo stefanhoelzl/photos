@@ -478,6 +478,15 @@ private fun anywhere(
             model.editName(null)
             true
         }
+        // A drawn box waiting for its name first, then drawing itself, before the photo closes.
+        ui.drawnBox != null -> {
+            model.cancelDrawn()
+            true
+        }
+        ui.drawing -> {
+            model.toggleDrawing()
+            true
+        }
         ui.showing != null && ui.open == null && model.clearFaceSelection() -> true
         ui.open != null -> {
             model.closePhoto()
@@ -491,9 +500,13 @@ private fun anywhere(
             true
         }
     }
-    // The open photo's face boxes (§12).
-    ui.open != null && event.key == Key.F && !event.isCtrlPressed -> {
+    // The open photo's face boxes (§12), and drawing one the detector missed.
+    ui.open != null && event.key == Key.F && !event.isCtrlPressed && ui.drawnBox == null -> {
         model.toggleFaceBoxes()
+        true
+    }
+    ui.open != null && event.key == Key.D && !event.isCtrlPressed && ui.drawnBox == null -> {
+        model.toggleDrawing()
         true
     }
     ui.open != null && event.key == Key.DirectionLeft -> {

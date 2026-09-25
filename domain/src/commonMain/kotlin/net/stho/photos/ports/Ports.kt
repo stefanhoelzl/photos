@@ -225,10 +225,13 @@ public interface Pipeline {
      * faces were looked for. A photo being derived gets its faces in [Derivatives.faces] instead,
      * from the decode it already has.
      *
+     * [sensitive] looks harder — a lower confidence floor and a larger detection size — for a photo
+     * where a person drew a box around a face the ordinary pass missed (§12).
+     *
      * Null when this pipeline was built without face models. Throws [MediaUnreadable] for a file
      * that cannot be decoded. Safe to call from many threads at once, like [derive].
      */
-    public fun findFaces(item: MediaItem): List<DetectedFace>? = null
+    public fun findFaces(item: MediaItem, sensitive: Boolean = false): List<DetectedFace>? = null
 }
 
 /**

@@ -1434,7 +1434,7 @@ port is four methods: `has`, `fetch`, `delete`, `present`.
 > scheduler, the model, the ports and §4's on-device cache live there, and `:ui` is composables
 > and nothing else.
 >
-> The line between them is not taste. `:app:cli` links `:domain` into a 37.1 MiB binary with a
+> The line between them is not taste. `:app:cli` links `:domain` into a 38.0 MiB binary with a
 > glibc 2.19 floor (§7), so `:domain` carries no Compose — while `:app:domain` carries exactly
 > one Compose type, `ImageBitmap`, because a decoded preview is what the viewer draws and
 > converting it twice would be worse.
@@ -1567,7 +1567,7 @@ against its own bundled crosstool-NG toolchain — gcc 8.3.0, glibc 2.19 — so 
 is built with *that same toolchain* rather than the host's, and the result names no symbol
 newer than **GLIBC_2.17**. That is CentOS 7 vintage: older than any desktop distribution still
 in use. **26.7 MiB stripped** — against 80.4 MiB for the statically linked predecessor, which
-is what dynamic libc and a smaller runtime buy — and **37.1 MiB** since §12 linked OpenCV's dnn
+is what dynamic libc and a smaller runtime buy — and **38.0 MiB** since §12 linked OpenCV's dnn
 in, with the floor unchanged. x86-64 only: `linuxX64` is the one native
 target declared, so no ARM64 binary has been produced and none is claimed.
 
@@ -1592,7 +1592,7 @@ of *libsecret*, not of libdbus, which has no glib dependency at all. The client 
 **Every green CI run publishes the binary.** `./gradlew :app:cli:dist` strips the release
 executable with konan's own `strip` — the toolchain that linked it, so a checkout that can
 build at all can package — into `app/cli/build/dist/photos-cli`, and the workflow uploads that
-as `photos-cli-linux-x64`, kept 7 days. The strip is what makes the artifact the 37.1 MiB above
+as `photos-cli-linux-x64`, kept 7 days. The strip is what makes the artifact the 38.0 MiB above
 rather than the linker's much larger output; the cost is that a crash in a downloaded binary
 prints addresses instead of Kotlin frames, which is the right trade for a build fetched to try
 by hand. It strips to a *copy*: the `.kexe` is left alone, so `:tests:cli` still forks an
@@ -2671,22 +2671,43 @@ backfill or a labelling session since the last run.
 ### Pre-labelling
 
 **Nothing is learned; every confirmation is one more reference photograph.** A face is compared
-with each person's confirmed faces directly — the best cosine similarity per person, nearest
-neighbour, so a child is matched against the photographs of the same child at the nearest age
-rather than an average of every age. The top person is suggested when that is at least 0.40, at
-least 0.05 ahead of the next person, and the face has not been rejected as them. Rejections count
-against their neighbours too: a face at least as close to a face rejected as someone as to any of
-their confirmed faces is not suggested as them.
+with each person's confirmed faces directly, and scored by the mean similarity of the five it is
+closest to — not the single closest, which rewards one near-identical shot: a profile scored 0.71
+beside one confirmed near-twin, while a plain frontal face scored 0.61. A person's references are
+their sharp confirmed faces, with near-copies (cosine ≥ 0.9, a burst of one moment) kept once, so
+five references are five moments. Nearest few rather than a centre, so a child is still matched
+against the photographs of the same child at the nearest age. The top person is suggested when the
+score is at least 0.52, at least 0.05 ahead of the next person, and the face has not been rejected
+as them; a face at least as close to a face rejected as someone as to their references is not
+suggested as them.
 
-**Cold start is groups, not single faces.** Faces nobody is suggested for are grouped — greedily
-around group centres at 0.45, best-detected first, then groups with alike centres merged — and a
-group of three or more is listed, largest first; the rest are "Other". Naming a group confirms the
-faces selected in it. Average-linkage agglomeration was the first choice and is rejected on
-memory: it holds every pair, and a first run's unknown faces run to tens of thousands.
+**Cold start is groups, not single faces.** Faces nobody is suggested for are grouped by density,
+as DBSCAN has it: a face with at least five faces within cosine 0.74 is a core, cores within reach
+of each other are one group, and a face near a core joins without extending it — so a lone
+look-alike cannot chain two people together. Groups of three or more are listed, largest first;
+the rest are "Other", which suggestions still reach. The comparison of every unknown face with
+every other is spread over the workers. A greedy pass around centres at 0.45 came first, and
+average linkage before it was rejected on memory.
 
-**Every threshold is a starting point.** SFace's own "same person" threshold is 0.363; the
-suggestion threshold sits above it because a wrong suggestion costs a click, and the grouping one
-above that because a mixed group costs several. Tuning them is the evaluation below.
+**A face that is not good enough is set aside.** Two gates, both measured on the library's own
+verdicts. The detector's confidence must be at least 0.8: under it many detections are not faces
+at all, and 5% of confirmed faces scored under it against 78% of ignored ones. And the aligned
+crop the embedding came from must be sharp enough — the variance of its Laplacian, as digiKam uses,
+which is low for a blurred face and for a small one upscaled to the crop's size. That floor is
+measured afresh at every sync: the sharpness 5% of confirmed faces fall under, once there are fifty
+to measure. A set-aside face without a verdict is never suggested, never grouped and never a
+reference; `sync` records the decision in the index, so the viewer only reads it, and the face
+keeps its box on the photo, where it can still be named by hand.
+
+**The thresholds are measured.** On the library's verdicts once there were enough — every
+confirmed face against its person's *other* faces, every rejected face against the person it was
+rejected as. The five-closest score separates the two better than the closest alone (AUC 0.955
+against 0.940); at 0.52 it suggests 89% of real matches and 9% of the kind that gets rejected,
+where the first guess, 0.40 on the closest face, suggested 56% of those. Grouping, simulated on
+the confirmed faces whose people are known: at 0.74 the groups are 96% one person and hold 40% of
+the faces; at the first guess, 0.45, every face chained into one group. PhotoPrism, calibrated on
+another large library with the same models, arrived at the same two values. A size floor on top of
+either moved nothing by more than a point or two.
 
 ### Inference
 
@@ -2694,10 +2715,12 @@ above that because a mixed group costs several. Tuning them is the evaluation be
 — in `:native` like everything else, with its own protobuf and zlib and nothing fetched during the
 build. It reads ONNX directly, and `FaceDetectorYN`, `FaceRecognizerSF` and their five-point
 `alignCrop` mean the shim's own share is one C++ unit, `pi_face.cpp`, behind the same flat C
-header. 10.4 MiB of the shipped binary, measured stripped. Only the Linux CLI runs inference;
-the viewer and the phone never do.
+header. With the faces code around it, 11.3 MiB of the shipped binary, measured stripped. Only
+the Linux CLI runs inference; the viewer and the phone never do.
 
-**Models: YuNet and SFace first, and the final choice by measurement.** Both are from OpenCV's
+**Models: YuNet and SFace first, and the final choice by measurement.** The model version also
+names what is measured with them — the crop's sharpness, since the second version, which is why
+adding it rescanned the library once. Both are from OpenCV's
 model zoo, MIT and Apache licensed, pinned by zoo commit and SHA-256 in `FaceModels`. The
 candidate to beat is InsightFace's SCRFD with ArcFace, whose weights are licensed for
 non-commercial research only. Confirmed verdicts are model-independent boxes, so the faces a person
@@ -2766,6 +2789,15 @@ most confident confirmed face; there is no cover choice in the first version.
 faint for an unknown one — inside the viewer's zoom, so they stay on the faces. A click on a box
 offers what the grids do: confirm the suggestion, not this person, someone else by name, or
 ignore.
+
+**A face the detector missed is drawn.** D in the viewer, and a drag over the photograph draws a
+box; the naming menu opens over it, and the name is a confirmation like any other — shown at once
+under that person, with a crop cut from the box, and taken back by Ctrl+Z. A verdict already is a
+photo and a box, so nothing new is stored. At the next sync each such box with no detected face
+under it gets a second, more sensitive look at its photo — the detector at 2560 px and a floor of
+0.3 — and the face found inside the box is kept *under the drawn box*, so the verdict attaches to
+it as to any face and it becomes one of that person's references. A box with no face in it — the
+back of a head — keeps its name, and is looked at again on later syncs.
 
 **Crops are cut on demand** from the original, decoded to 2048 px by the viewer's own shim, and
 kept in the viewer's cache named by photo and box. An original never changes (§7), so a crop never

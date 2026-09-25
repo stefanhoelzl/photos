@@ -1,0 +1,4 @@
+import kotlin.Boolean;
+
+-- Rebuilt at the next sync (its inputs name the index format), so the default is never read.
+ALTER TABLE indexed_face ADD COLUMN set_aside INTEGER AS Boolean NOT NULL DEFAULT 0;
